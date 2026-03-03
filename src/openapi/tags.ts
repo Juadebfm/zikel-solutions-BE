@@ -10,7 +10,12 @@ export const TAGS = [
   {
     name: 'Auth',
     description:
-      'Authentication and session management — register, login, OTP verification, token refresh, logout, and current-user.',
+      'Authentication and session management — 4-step register, OTP verification, login, logout, and current-user.',
+  },
+  {
+    name: 'Summary',
+    description:
+      'My Summary page — personal KPI stats, to-do list, approval queue, and today\'s provisions grouped by home.',
   },
   {
     name: 'Care Groups',

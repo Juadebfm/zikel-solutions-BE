@@ -23,6 +23,79 @@
 
 ---
 
+## Phase 1 Functional Scope (from UI/UX spec)
+
+### 1) Custom Auth and Signup
+
+- [ ] **4-step signup flow**
+  - [ ] Step 1: Country of residence (UK or Nigeria)
+  - [ ] Step 2: Basic profile — first name, middle name, surname, gender, email, phone
+  - [ ] Step 3: Password setup with full policy enforcement (8+ chars, upper, lower, number, special char, confirm match, accept terms)
+  - [ ] Step 4: OTP verification — 6-digit code, resend with cooldown, paste support, clear error states
+- [ ] Successful OTP verification activates account
+- [ ] Auto-login after successful OTP; fallback to `/login` if auto-login fails
+- [ ] Login: email + password, friendly error states, session restore behaviour
+- [ ] Redirect authenticated users to `/my-summary`; redirect unauthenticated access to `/login`
+- [ ] Session persistence, expiry handling, logout + state clear + redirect
+
+### 2) My Summary Page (`/my-summary`)
+
+- [ ] **Stats overview** — overdue, due today, pending approval, rejected, draft, future, comments, rewards
+- [ ] **To-do list panel** — task ID, title, relation, status, assignee, due date; paginated
+- [ ] **Tasks to approve panel** — approval queue; view, approve (permission-controlled), process batch (permission-controlled)
+- [ ] **Provisions section** — grouped by home; today's events + today's staff shifts per home
+- [ ] **Access-control UX** — view-only banner for users lacking approval permission; block protected actions and show permission modal
+
+### 3) My Dashboard Page (`/my-dashboard`)
+
+- [ ] **Stats overview** — same KPI cards as My Summary
+- [ ] **Widgets area** — list saved widgets, empty state, remove widget
+- [ ] **Add widget flow** — type selection → configure (title, period, reports-on) → save → return to dashboard
+- [ ] **Widget persistence** — stored in DB, loaded on page load (replacing local-storage approach)
+
+### 4) Backend API Contracts (Phase 1)
+
+#### Auth endpoints
+
+- [ ] `POST /api/v1/auth/register`
+- [ ] `POST /api/v1/auth/verify-otp`
+- [ ] `POST /api/v1/auth/resend-otp`
+- [ ] `POST /api/v1/auth/login`
+- [ ] `POST /api/v1/auth/logout`
+- [ ] `GET  /api/v1/auth/me`
+
+#### Summary endpoints
+
+- [ ] `GET  /api/v1/summary/stats`
+- [ ] `GET  /api/v1/summary/todos`
+- [ ] `GET  /api/v1/summary/tasks-to-approve`
+- [ ] `POST /api/v1/summary/:id/approve`
+- [ ] `POST /api/v1/summary/process-batch`
+- [ ] `GET  /api/v1/summary/provisions`
+
+#### Dashboard endpoints
+
+- [ ] `GET    /api/v1/dashboard/stats`
+- [ ] `GET    /api/v1/dashboard/widgets`
+- [ ] `POST   /api/v1/dashboard/widgets`
+- [ ] `DELETE /api/v1/dashboard/widgets/:id`
+
+### 5) Access Control Rules
+
+- [ ] Server-side RBAC enforcement for all protected actions
+- [ ] Consistent 401/403 error shapes for UI handling
+- [ ] Permission-controlled: approvals, batch processing, exports, settings, user management
+
+### 6) Phase 1 Acceptance Criteria
+
+- [ ] User can complete 4-step signup, verify OTP, and land in authenticated session
+- [ ] User can login/logout reliably with valid session and token lifecycle
+- [ ] My Summary loads user-specific stats, tasks, and provisions
+- [ ] Restricted users cannot execute approval actions (403 returned + UI blocked)
+- [ ] My Dashboard can create, list, and delete widgets via backend APIs
+
+---
+
 ## Target Architecture
 
 - [ ] Node.js + TypeScript backend service.

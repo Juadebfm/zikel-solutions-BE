@@ -1,18 +1,38 @@
 import type { FastifyPluginAsync } from 'fastify';
 import healthRoutes from './health.js';
+import authRoutes from '../modules/auth/auth.routes.js';
+import summaryRoutes from '../modules/summary/summary.routes.js';
+import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
 
-// Import feature route modules as they are implemented, e.g.:
-// import authRoutes from '../modules/auth/auth.routes.js';
+// Future modules — uncomment as they are implemented:
+// import careGroupRoutes from '../modules/care-groups/care-groups.routes.js';
+// import homeRoutes from '../modules/homes/homes.routes.js';
+// import employeeRoutes from '../modules/employees/employees.routes.js';
+// import youngPeopleRoutes from '../modules/young-people/young-people.routes.js';
+// import vehicleRoutes from '../modules/vehicles/vehicles.routes.js';
+// import taskRoutes from '../modules/tasks/tasks.routes.js';
+// import announcementRoutes from '../modules/announcements/announcements.routes.js';
+// import auditRoutes from '../modules/audit/audit.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
+  // Infrastructure probes — no auth, no /api/v1 prefix
   await fastify.register(healthRoutes);
 
-  // v1 API prefix
+  // v1 API
   await fastify.register(
     async (v1) => {
-      // await v1.register(authRoutes, { prefix: '/auth' });
+      await v1.register(authRoutes, { prefix: '/auth' });
+      await v1.register(summaryRoutes, { prefix: '/summary' });
+      await v1.register(dashboardRoutes, { prefix: '/dashboard' });
+
       // await v1.register(careGroupRoutes, { prefix: '/care-groups' });
-      // ... additional modules registered here as built
+      // await v1.register(homeRoutes, { prefix: '/homes' });
+      // await v1.register(employeeRoutes, { prefix: '/employees' });
+      // await v1.register(youngPeopleRoutes, { prefix: '/young-people' });
+      // await v1.register(vehicleRoutes, { prefix: '/vehicles' });
+      // await v1.register(taskRoutes, { prefix: '/tasks' });
+      // await v1.register(announcementRoutes, { prefix: '/announcements' });
+      // await v1.register(auditRoutes, { prefix: '/audit' });
     },
     { prefix: '/api/v1' },
   );

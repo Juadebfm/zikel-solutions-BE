@@ -75,16 +75,20 @@ export const UserRoleSchema = {
 export const UserSchema = {
   $id: 'User',
   type: 'object',
-  required: ['id', 'email', 'role', 'firstName', 'lastName', 'emailVerified', 'isActive', 'createdAt'],
+  required: ['id', 'email', 'role', 'firstName', 'lastName', 'country', 'emailVerified', 'isActive', 'createdAt'],
   properties: {
     id: { type: 'string' },
     email: { type: 'string', format: 'email' },
     role: { $ref: 'UserRole#' },
     firstName: { type: 'string' },
+    middleName: { type: 'string', nullable: true },
     lastName: { type: 'string' },
+    gender: { type: 'string', enum: ['male', 'female', 'other'], nullable: true },
+    country: { type: 'string', enum: ['UK', 'Nigeria'] },
     phoneNumber: { type: 'string', nullable: true },
     avatarUrl: { type: 'string', format: 'uri', nullable: true },
     emailVerified: { type: 'boolean' },
+    acceptedTerms: { type: 'boolean' },
     isActive: { type: 'boolean' },
     lastLoginAt: { type: 'string', format: 'date-time', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
@@ -98,6 +102,23 @@ export const TokenPairSchema = {
   properties: {
     accessToken: { type: 'string' },
     refreshToken: { type: 'string' },
+  },
+} as const;
+
+export const AuthResponseSchema = {
+  $id: 'AuthResponse',
+  type: 'object',
+  required: ['success', 'data'],
+  properties: {
+    success: { type: 'boolean', enum: [true] },
+    data: {
+      type: 'object',
+      required: ['user', 'tokens'],
+      properties: {
+        user: { $ref: 'User#' },
+        tokens: { $ref: 'TokenPair#' },
+      },
+    },
   },
 } as const;
 
@@ -198,16 +219,23 @@ export const VehicleSchema = {
 export const TaskSchema = {
   $id: 'Task',
   type: 'object',
-  required: ['id', 'title', 'status', 'priority', 'createdAt', 'updatedAt'],
+  required: ['id', 'title', 'status', 'approvalStatus', 'priority', 'createdAt', 'updatedAt'],
   properties: {
     id: { type: 'string' },
     title: { type: 'string' },
     description: { type: 'string', nullable: true },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    approvalStatus: {
+      type: 'string',
+      enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
+    },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     dueDate: { type: 'string', format: 'date-time', nullable: true },
     completedAt: { type: 'string', format: 'date-time', nullable: true },
+    approvedAt: { type: 'string', format: 'date-time', nullable: true },
+    rejectionReason: { type: 'string', nullable: true },
     assigneeId: { type: 'string', nullable: true },
+    approvedById: { type: 'string', nullable: true },
     youngPersonId: { type: 'string', nullable: true },
     createdById: { type: 'string', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
@@ -234,7 +262,53 @@ export const AnnouncementSchema = {
   },
 } as const;
 
-// ─── Audit ────────────────────────────────────────────────────────────────────
+// ─── Dashboard Widgets ────────────────────────────────────────────────────────
+
+export const WidgetSchema = {
+  $id: 'Widget',
+  type: 'object',
+  required: ['id', 'userId', 'title', 'period', 'reportsOn', 'createdAt', 'updatedAt'],
+  properties: {
+    id: { type: 'string' },
+    userId: { type: 'string' },
+    title: { type: 'string', example: 'My Tasks This Month' },
+    period: {
+      type: 'string',
+      example: 'this_month',
+      description: 'Time window: last_7_days | last_30_days | this_month | this_year | all_time',
+    },
+    reportsOn: {
+      type: 'string',
+      example: 'tasks',
+      description: 'Data source: tasks | approvals | young_people | employees',
+    },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+// ─── Summary Stats ────────────────────────────────────────────────────────────
+
+export const SummaryStatsSchema = {
+  $id: 'SummaryStats',
+  type: 'object',
+  required: [
+    'overdue', 'dueToday', 'pendingApproval', 'rejected',
+    'draft', 'future', 'comments', 'rewards',
+  ],
+  properties: {
+    overdue: { type: 'integer', description: 'Tasks past their due date', example: 3 },
+    dueToday: { type: 'integer', description: 'Tasks due today', example: 5 },
+    pendingApproval: { type: 'integer', description: 'Tasks awaiting approval', example: 2 },
+    rejected: { type: 'integer', description: 'Tasks rejected in review', example: 1 },
+    draft: { type: 'integer', description: 'Tasks in draft state', example: 4 },
+    future: { type: 'integer', description: 'Tasks scheduled in the future', example: 12 },
+    comments: { type: 'integer', description: 'Unread comments on tasks', example: 7 },
+    rewards: { type: 'integer', description: 'Reward points accumulated', example: 120 },
+  },
+} as const;
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
 
 export const AuditLogSchema = {
   $id: 'AuditLog',
@@ -259,7 +333,6 @@ export const AuditLogSchema = {
 } as const;
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
-// Export as an array for easy iteration in the swagger plugin
 
 export const ALL_SHARED_SCHEMAS = [
   ApiErrorSchema,
@@ -269,6 +342,7 @@ export const ALL_SHARED_SCHEMAS = [
   UserRoleSchema,
   UserSchema,
   TokenPairSchema,
+  AuthResponseSchema,
   CareGroupSchema,
   HomeSchema,
   EmployeeSchema,
@@ -276,5 +350,7 @@ export const ALL_SHARED_SCHEMAS = [
   VehicleSchema,
   TaskSchema,
   AnnouncementSchema,
+  WidgetSchema,
+  SummaryStatsSchema,
   AuditLogSchema,
 ];

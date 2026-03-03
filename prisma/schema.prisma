@@ -14,6 +14,17 @@ datasource db {
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
+enum Country {
+  UK
+  Nigeria
+}
+
+enum Gender {
+  male
+  female
+  other
+}
+
 enum UserRole {
   staff
   manager
@@ -37,6 +48,28 @@ enum AuditAction {
   permission_changed
 }
 
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+  cancelled
+}
+
+enum TaskApprovalStatus {
+  not_required
+  pending_approval
+  approved
+  rejected
+  processing
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  urgent
+}
+
 // ─── Auth / Users ─────────────────────────────────────────────────────────────
 
 model User {
@@ -45,10 +78,14 @@ model User {
   passwordHash   String
   role           UserRole  @default(staff)
   firstName      String
+  middleName     String?
   lastName       String
+  gender         Gender?
+  country        Country   @default(UK)
   phoneNumber    String?
   avatarUrl      String?
   emailVerified  Boolean   @default(false)
+  acceptedTerms  Boolean   @default(false)
   isActive       Boolean   @default(true)
   lastLoginAt    DateTime?
   failedAttempts Int       @default(0)
@@ -60,20 +97,21 @@ model User {
   otpCodes       OtpCode[]
   auditLogs      AuditLog[]
   employee       Employee?
+  widgets        Widget[]
 
   @@index([email])
   @@index([role])
 }
 
 model RefreshToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  token     String   @unique
+  token     String    @unique
   expiresAt DateTime
   revokedAt DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([token])
@@ -118,7 +156,7 @@ model Home {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  careGroup   CareGroup @relation(fields: [careGroupId], references: [id])
+  careGroup   CareGroup   @relation(fields: [careGroupId], references: [id])
   employees   Employee[]
   youngPeople YoungPerson[]
 
@@ -128,18 +166,19 @@ model Home {
 // ─── Employees ────────────────────────────────────────────────────────────────
 
 model Employee {
-  id          String   @id @default(cuid())
-  userId      String   @unique
+  id          String    @id @default(cuid())
+  userId      String    @unique
   homeId      String?
   jobTitle    String?
   startDate   DateTime?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  user        User     @relation(fields: [userId], references: [id])
-  home        Home?    @relation(fields: [homeId], references: [id])
-  tasks       Task[]
+  user        User      @relation(fields: [userId], references: [id])
+  home        Home?     @relation(fields: [homeId], references: [id])
+  tasks       Task[]    @relation("TaskAssignee")
+  approvedTasks Task[]  @relation("TaskApprover")
 
   @@index([homeId])
 }
@@ -147,17 +186,17 @@ model Employee {
 // ─── Young People ─────────────────────────────────────────────────────────────
 
 model YoungPerson {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   homeId      String
   firstName   String
   lastName    String
   dateOfBirth DateTime?
-  referenceNo String?  @unique
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  referenceNo String?   @unique
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  home        Home     @relation(fields: [homeId], references: [id])
+  home        Home      @relation(fields: [homeId], references: [id])
   tasks       Task[]
 
   @@index([homeId])
@@ -167,74 +206,83 @@ model YoungPerson {
 // ─── Vehicles ─────────────────────────────────────────────────────────────────
 
 model Vehicle {
-  id             String   @id @default(cuid())
-  registration   String   @unique
+  id             String    @id @default(cuid())
+  registration   String    @unique
   make           String?
   model          String?
   year           Int?
   colour         String?
-  isActive       Boolean  @default(true)
+  isActive       Boolean   @default(true)
   nextServiceDue DateTime?
   motDue         DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([registration])
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
-enum TaskStatus {
-  pending
-  in_progress
-  completed
-  cancelled
-}
-
-enum TaskPriority {
-  low
-  medium
-  high
-  urgent
-}
-
 model Task {
-  id            String       @id @default(cuid())
-  title         String
-  description   String?
-  status        TaskStatus   @default(pending)
-  priority      TaskPriority @default(medium)
-  dueDate       DateTime?
-  completedAt   DateTime?
-  assigneeId    String?
-  youngPersonId String?
-  createdById   String?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id               String             @id @default(cuid())
+  title            String
+  description      String?
+  status           TaskStatus         @default(pending)
+  approvalStatus   TaskApprovalStatus @default(not_required)
+  priority         TaskPriority       @default(medium)
+  dueDate          DateTime?
+  completedAt      DateTime?
+  rejectionReason  String?
+  approvedAt       DateTime?
+  assigneeId       String?
+  approvedById     String?
+  youngPersonId    String?
+  createdById      String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
 
-  assignee      Employee?    @relation(fields: [assigneeId], references: [id])
-  youngPerson   YoungPerson? @relation(fields: [youngPersonId], references: [id])
+  assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
+  youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
 
   @@index([status, priority])
+  @@index([approvalStatus])
   @@index([assigneeId])
   @@index([dueDate])
+  @@index([createdById])
 }
 
 // ─── Announcements ────────────────────────────────────────────────────────────
 
 model Announcement {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
   body        String
-  publishedAt DateTime @default(now())
+  publishedAt DateTime  @default(now())
   expiresAt   DateTime?
   authorId    String?
-  isPinned    Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isPinned    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([publishedAt])
   @@index([isPinned])
+}
+
+// ─── Dashboard Widgets ────────────────────────────────────────────────────────
+
+model Widget {
+  id         String   @id @default(cuid())
+  userId     String
+  title      String
+  period     String   // e.g. "last_7_days", "last_30_days", "this_month", "this_year"
+  reportsOn  String   // e.g. "tasks", "approvals", "young_people"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ─── Audit Logs ───────────────────────────────────────────────────────────────
