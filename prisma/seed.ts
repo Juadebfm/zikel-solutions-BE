@@ -3,9 +3,14 @@
  * Run with: npx tsx prisma/seed.ts
  */
 import { PrismaClient, UserRole } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Pool } from 'pg';
 import { createHash } from 'crypto';
+import 'dotenv/config';
 
-const prisma = new PrismaClient();
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 
 // Simple placeholder hash — replace with bcrypt in real seeding
 const fakeHash = (plain: string) => createHash('sha256').update(plain).digest('hex');
