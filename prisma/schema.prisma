@@ -1,0 +1,259 @@
+// This is the Prisma schema for Zikel Solutions BE.
+// Run `npx prisma migrate dev` to apply changes.
+// Run `npx prisma generate` to regenerate the client.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  staff
+  manager
+  admin
+}
+
+enum OtpPurpose {
+  email_verification
+  password_reset
+}
+
+enum AuditAction {
+  login
+  logout
+  register
+  password_change
+  otp_verified
+  record_created
+  record_updated
+  record_deleted
+  permission_changed
+}
+
+// ─── Auth / Users ─────────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String
+  role           UserRole  @default(staff)
+  firstName      String
+  lastName       String
+  phoneNumber    String?
+  avatarUrl      String?
+  emailVerified  Boolean   @default(false)
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  refreshTokens  RefreshToken[]
+  otpCodes       OtpCode[]
+  auditLogs      AuditLog[]
+  employee       Employee?
+
+  @@index([email])
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model OtpCode {
+  id        String     @id @default(cuid())
+  userId    String
+  code      String
+  purpose   OtpPurpose
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime   @default(now())
+
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+}
+
+// ─── Care Groups & Homes ──────────────────────────────────────────────────────
+
+model CareGroup {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  homes       Home[]
+
+  @@index([name])
+}
+
+model Home {
+  id          String    @id @default(cuid())
+  careGroupId String
+  name        String
+  address     String?
+  capacity    Int?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  careGroup   CareGroup @relation(fields: [careGroupId], references: [id])
+  employees   Employee[]
+  youngPeople YoungPerson[]
+
+  @@index([careGroupId])
+}
+
+// ─── Employees ────────────────────────────────────────────────────────────────
+
+model Employee {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  homeId      String?
+  jobTitle    String?
+  startDate   DateTime?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id])
+  home        Home?    @relation(fields: [homeId], references: [id])
+  tasks       Task[]
+
+  @@index([homeId])
+}
+
+// ─── Young People ─────────────────────────────────────────────────────────────
+
+model YoungPerson {
+  id          String   @id @default(cuid())
+  homeId      String
+  firstName   String
+  lastName    String
+  dateOfBirth DateTime?
+  referenceNo String?  @unique
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  home        Home     @relation(fields: [homeId], references: [id])
+  tasks       Task[]
+
+  @@index([homeId])
+  @@index([lastName, firstName])
+}
+
+// ─── Vehicles ─────────────────────────────────────────────────────────────────
+
+model Vehicle {
+  id             String   @id @default(cuid())
+  registration   String   @unique
+  make           String?
+  model          String?
+  year           Int?
+  colour         String?
+  isActive       Boolean  @default(true)
+  nextServiceDue DateTime?
+  motDue         DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([registration])
+}
+
+// ─── Tasks ────────────────────────────────────────────────────────────────────
+
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+  cancelled
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+model Task {
+  id            String       @id @default(cuid())
+  title         String
+  description   String?
+  status        TaskStatus   @default(pending)
+  priority      TaskPriority @default(medium)
+  dueDate       DateTime?
+  completedAt   DateTime?
+  assigneeId    String?
+  youngPersonId String?
+  createdById   String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  assignee      Employee?    @relation(fields: [assigneeId], references: [id])
+  youngPerson   YoungPerson? @relation(fields: [youngPersonId], references: [id])
+
+  @@index([status, priority])
+  @@index([assigneeId])
+  @@index([dueDate])
+}
+
+// ─── Announcements ────────────────────────────────────────────────────────────
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  body        String
+  publishedAt DateTime @default(now())
+  expiresAt   DateTime?
+  authorId    String?
+  isPinned    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([publishedAt])
+  @@index([isPinned])
+}
+
+// ─── Audit Logs ───────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  userId     String?
+  action     AuditAction
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
