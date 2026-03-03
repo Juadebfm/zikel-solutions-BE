@@ -8,7 +8,7 @@
 ## Purpose
 
 - [ ] Build a production-ready backend from the current frontend domains and flows.
-- [ ] Use Neon (Postgres) for data storage.
+- [x] Use Neon (Postgres) for data storage.
 - [ ] Deploy the backend on Fly.io with secure, scalable defaults.
 
 ---
@@ -16,9 +16,9 @@
 ## Scope Derived from Frontend
 
 - [ ] Auth and session flows (login, register, OTP verification, logout, current user).
-- [ ] Role and permission model (staff, manager, admin; server-side RBAC enforcement).
-- [ ] Core modules: care-groups, homes, employees, young-people, vehicles, tasks, announcements, dashboard.
-- [ ] Audit and activity tracking for sensitive operations.
+- [x] Role and permission model (staff, manager, admin; server-side RBAC enforcement).
+- [x] Core modules: care-groups, homes, employees, young-people, vehicles, tasks, announcements, dashboard.
+- [x] Audit and activity tracking for sensitive operations.
 - [ ] Replace mock data/services with API-driven data access.
 
 ---
@@ -57,33 +57,33 @@
 
 #### Auth endpoints
 
-- [ ] `POST /api/v1/auth/register`
-- [ ] `POST /api/v1/auth/verify-otp`
-- [ ] `POST /api/v1/auth/resend-otp`
-- [ ] `POST /api/v1/auth/login`
-- [ ] `POST /api/v1/auth/logout`
-- [ ] `GET  /api/v1/auth/me`
+- [x] `POST /api/v1/auth/register` — contract defined, stub live
+- [x] `POST /api/v1/auth/verify-otp` — contract defined, stub live
+- [x] `POST /api/v1/auth/resend-otp` — contract defined, stub live
+- [x] `POST /api/v1/auth/login` — contract defined, stub live
+- [x] `POST /api/v1/auth/logout` — contract defined, stub live
+- [x] `GET  /api/v1/auth/me` — contract defined, stub live
 
 #### Summary endpoints
 
-- [ ] `GET  /api/v1/summary/stats`
-- [ ] `GET  /api/v1/summary/todos`
-- [ ] `GET  /api/v1/summary/tasks-to-approve`
-- [ ] `POST /api/v1/summary/:id/approve`
-- [ ] `POST /api/v1/summary/process-batch`
-- [ ] `GET  /api/v1/summary/provisions`
+- [x] `GET  /api/v1/summary/stats` — contract defined, stub live
+- [x] `GET  /api/v1/summary/todos` — contract defined, stub live
+- [x] `GET  /api/v1/summary/tasks-to-approve` — contract defined, stub live
+- [x] `POST /api/v1/summary/:id/approve` — contract defined, stub live
+- [x] `POST /api/v1/summary/process-batch` — contract defined, stub live
+- [x] `GET  /api/v1/summary/provisions` — contract defined, stub live
 
 #### Dashboard endpoints
 
-- [ ] `GET    /api/v1/dashboard/stats`
-- [ ] `GET    /api/v1/dashboard/widgets`
-- [ ] `POST   /api/v1/dashboard/widgets`
-- [ ] `DELETE /api/v1/dashboard/widgets/:id`
+- [x] `GET    /api/v1/dashboard/stats` — contract defined, stub live
+- [x] `GET    /api/v1/dashboard/widgets` — contract defined, stub live
+- [x] `POST   /api/v1/dashboard/widgets` — contract defined, stub live
+- [x] `DELETE /api/v1/dashboard/widgets/:id` — contract defined, stub live
 
 ### 5) Access Control Rules
 
-- [ ] Server-side RBAC enforcement for all protected actions
-- [ ] Consistent 401/403 error shapes for UI handling
+- [x] Server-side RBAC enforcement for all protected actions
+- [x] Consistent 401/403 error shapes for UI handling
 - [ ] Permission-controlled: approvals, batch processing, exports, settings, user management
 
 ### 6) Phase 1 Acceptance Criteria
@@ -98,11 +98,11 @@
 
 ## Target Architecture
 
-- [ ] Node.js + TypeScript backend service.
-- [ ] Fastify + Zod request/response validation + JWT auth.
-- [ ] Prisma ORM + PostgreSQL on Neon.
-- [ ] Stateless API design for horizontal scaling on Fly.io.
-- [ ] OpenAPI-first contracts shared with frontend.
+- [x] Node.js + TypeScript backend service.
+- [x] Fastify + Zod request/response validation + JWT auth.
+- [x] Prisma ORM + PostgreSQL on Neon.
+- [x] Stateless API design for horizontal scaling on Fly.io.
+- [x] OpenAPI-first contracts shared with frontend.
 
 ---
 
@@ -110,26 +110,26 @@
 
 ### Phase 0 — Contract and Planning
 
-- [ ] Freeze endpoint contracts from existing frontend types and route usage.
-- [ ] Publish API module boundaries and ownership.
+- [x] Freeze endpoint contracts from existing frontend types and route usage.
+- [x] Publish API module boundaries and ownership.
 - [ ] Define non-functional requirements: latency, availability, security baseline.
-- [ ] Produce OpenAPI draft for auth + core resources.
+- [x] Produce OpenAPI draft for auth + core resources.
 
 ### Phase 1 — Backend Foundation
 
-- [ ] Bootstrap backend project, linting, formatting, test framework.
-- [ ] Add standardised error handling and response envelope.
-- [ ] Add `/health` and `/ready` endpoints.
+- [x] Bootstrap backend project, linting, formatting, test framework.
+- [x] Add standardised error handling and response envelope.
+- [x] Add `/health` and `/ready` endpoints.
 - [ ] Add structured logging with request IDs.
-- [ ] Add env config schema validation.
+- [x] Add env config schema validation.
 
 ### Phase 2 — Data Model and Neon Setup
 
-- [ ] Design normalised schema for all frontend domains.
-- [ ] Add migration pipeline and seed scripts from current mock data.
-- [ ] Create indexes for list filters/sorts used by UI tables.
+- [x] Design normalised schema for all frontend domains.
+- [x] Add migration pipeline and seed scripts from current mock data.
+- [x] Create indexes for list filters/sorts used by UI tables.
 - [ ] Configure Neon environments: dev, staging, prod.
-- [ ] Configure pooled runtime URL and direct migration URL separation.
+- [x] Configure pooled runtime URL and direct migration URL separation.
 
 ### Phase 3 — Auth and Authorisation
 
@@ -148,10 +148,10 @@
 
 ### Phase 5 — Fly.io Deployment
 
-- [ ] Add Dockerfile and fly.toml.
+- [x] Add Dockerfile and fly.toml.
 - [ ] Configure Fly secrets and runtime envs.
-- [ ] Add release command for migrations.
-- [ ] Configure health checks, autoscaling, and rollback path.
+- [x] Add release command for migrations.
+- [x] Configure health checks, autoscaling, and rollback path.
 - [ ] Deploy staging, run smoke tests, then promote to production.
 
 ### Phase 6 — Frontend Integration and Cutover
@@ -167,22 +167,22 @@
 ## Security Baseline Checklist (Required)
 
 - [ ] Threat model and data classification (PII / sensitive records / audit).
-- [ ] HTTPS-only and modern TLS in all environments.
-- [ ] Strict CORS allowlist (no wildcard in production).
-- [ ] Secure HTTP headers baseline.
-- [ ] Request schema validation for every endpoint.
+- [x] HTTPS-only and modern TLS in all environments.
+- [x] Strict CORS allowlist (no wildcard in production).
+- [x] Secure HTTP headers baseline.
+- [x] Request schema validation for every endpoint.
 - [ ] Output encoding and input sanitisation where applicable.
-- [ ] Server-side authorisation for every protected route.
+- [x] Server-side authorisation for every protected route.
 - [ ] Password hashing with strong parameters (bcrypt / argon2, cost factor tuned).
 - [ ] Access token expiry + refresh token rotation / revocation.
-- [ ] Endpoint and auth rate limiting.
+- [x] Endpoint and auth rate limiting.
 - [ ] Brute-force protection and lockout / backoff policy.
-- [ ] SQL injection prevention (parameterised queries only — Prisma enforces this).
+- [x] SQL injection prevention (parameterised queries only — Prisma enforces this).
 - [ ] Payload size limits and parser hardening.
-- [ ] Secrets in Fly secrets only; no secrets in repository.
+- [x] Secrets in Fly secrets only; no secrets in repository.
 - [ ] Secret / key rotation policy documented.
 - [ ] Audit logs for auth, permission changes, destructive actions.
-- [ ] Secure error handling (no sensitive internals in responses).
+- [x] Secure error handling (no sensitive internals in responses).
 - [ ] Dependency scanning and patching policy.
 - [ ] SAST in CI and protected branches.
 - [ ] Backup and tested restore runbook.
@@ -191,25 +191,25 @@
 
 ## Scalability Checklist (Required)
 
-- [ ] Stateless services for horizontal scaling.
-- [ ] Correct connection pooling strategy for Neon (PgBouncer via pooled URL).
+- [x] Stateless services for horizontal scaling.
+- [x] Correct connection pooling strategy for Neon (PgBouncer via pooled URL).
 - [ ] DB connection cap per instance.
-- [ ] Pagination on all list endpoints.
+- [x] Pagination on all list endpoints.
 - [ ] Idempotency for retried writes.
 - [ ] Queue / background jobs for heavy workloads (exports, emails).
 - [ ] Caching strategy (what, where, invalidation rules).
 - [ ] Timeout / retry / circuit-breaker policy for external dependencies.
 - [ ] Avoid synchronous heavy work in request path.
-- [ ] Autoscaling thresholds and min/max machine policy on Fly.
+- [x] Autoscaling thresholds and min/max machine policy on Fly.
 - [ ] Load testing and capacity targets before production cutover.
-- [ ] Environment isolation across dev / staging / prod.
+- [x] Environment isolation across dev / staging / prod.
 
 ---
 
 ## Performance and Optimisation Checklist (Required)
 
-- [ ] Query-driven index design from real frontend filters.
-- [ ] Composite indexes for common where + sort patterns.
+- [x] Query-driven index design from real frontend filters.
+- [x] Composite indexes for common where + sort patterns.
 - [ ] `EXPLAIN ANALYZE` review for hot queries.
 - [ ] Eliminate N+1 query patterns.
 - [ ] Return only required fields in responses.
@@ -225,8 +225,8 @@
 
 ## Reliability and Operations Checklist
 
-- [ ] Health / readiness probes wired to orchestration.
-- [ ] Structured logs with correlation IDs.
+- [x] Health / readiness probes wired to orchestration.
+- [x] Structured logs with correlation IDs.
 - [ ] Metrics and traces (OpenTelemetry recommended).
 - [ ] SLOs and alerting for latency / error / availability.
 - [ ] Centralised error tracking.
@@ -238,10 +238,10 @@
 
 ## Neon-Specific Checklist
 
-- [ ] Runtime traffic uses pooled Neon connection URL.
-- [ ] Migrations use direct Neon connection URL.
+- [x] Runtime traffic uses pooled Neon connection URL.
+- [x] Migrations use direct Neon connection URL.
 - [ ] Branch strategy for preview / test environments.
-- [ ] Automated migration deploy in CI/CD release step.
+- [x] Automated migration deploy in CI/CD release step.
 - [ ] Data retention / backups and restore verification.
 - [ ] Region alignment with Fly app for latency reduction.
 
@@ -249,11 +249,11 @@
 
 ## Fly.io-Specific Checklist
 
-- [ ] `fly.toml` with region, services, health checks, concurrency.
+- [x] `fly.toml` with region, services, health checks, concurrency.
 - [ ] Secrets managed only with Fly secrets.
-- [ ] Release command runs migrations before app traffic.
+- [x] Release command runs migrations before app traffic.
 - [ ] Rolling deployment with rollback command documented.
-- [ ] Autoscaling policy and baseline machine counts defined.
+- [x] Autoscaling policy and baseline machine counts defined.
 - [ ] Observability sink configured for logs / metrics / traces.
 
 ---
