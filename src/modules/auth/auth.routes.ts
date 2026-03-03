@@ -1,16 +1,18 @@
 import type { FastifyPluginAsync } from 'fastify';
 import {
+  RegisterBodySchema,
+  VerifyOtpBodySchema,
+  ResendOtpBodySchema,
+  LoginBodySchema,
+  LogoutBodySchema,
   registerBodyJson,
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
   logoutBodyJson,
 } from './auth.schema.js';
-
-const NOT_IMPLEMENTED = {
-  success: false as const,
-  error: { code: 'NOT_IMPLEMENTED', message: 'This endpoint is not yet implemented — Phase 3.' },
-};
+import type { JwtPayload } from '../../types/index.js';
+import * as authService from './auth.service.js';
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/register ────────────────────────────────────────────────────
@@ -45,7 +47,18 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         422: { description: 'Validation error (password policy, terms, etc.).', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const parse = RegisterBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+      const data = await authService.register(parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
   });
 
   // ── POST /auth/verify-otp ──────────────────────────────────────────────────
@@ -67,7 +80,15 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         404: { description: 'User not found.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const body = VerifyOtpBodySchema.parse(request.body);
+      const { user, refreshToken } = await authService.verifyOtp(body);
+      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      return reply.send({
+        success: true,
+        data: { user, tokens: { accessToken, refreshToken } },
+      });
+    },
   });
 
   // ── POST /auth/resend-otp ──────────────────────────────────────────────────
@@ -105,7 +126,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         429: { description: 'Cooldown in effect — too many resend requests.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const body = ResendOtpBodySchema.parse(request.body);
+      const data = await authService.resendOtp(body);
+      return reply.send({ success: true, data });
+    },
   });
 
   // ── POST /auth/login ───────────────────────────────────────────────────────
@@ -130,7 +155,15 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const body = LoginBodySchema.parse(request.body);
+      const { user, refreshToken } = await authService.login(body);
+      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      return reply.send({
+        success: true,
+        data: { user, tokens: { accessToken, refreshToken } },
+      });
+    },
   });
 
   // ── POST /auth/logout ──────────────────────────────────────────────────────
@@ -160,7 +193,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     preHandler: [fastify.authenticate],
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const body = LogoutBodySchema.parse(request.body);
+      await authService.logout(body.refreshToken);
+      return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
+    },
   });
 
   // ── GET /auth/me ───────────────────────────────────────────────────────────
@@ -183,7 +220,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     preHandler: [fastify.authenticate],
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (request, reply) => {
+      const user = await authService.getMe((request.user as JwtPayload).sub);
+      return reply.send({ success: true, data: user });
+    },
   });
 };
 

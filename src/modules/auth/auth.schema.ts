@@ -29,9 +29,7 @@ export const RegisterBodySchema = z
     phoneNumber: z.string().min(7).max(20).optional(),
     password: passwordSchema,
     confirmPassword: z.string(),
-    acceptTerms: z.literal(true, {
-      errorMap: () => ({ message: 'You must accept the terms and conditions.' }),
-    }),
+    acceptTerms: z.literal(true, { error: 'You must accept the terms and conditions.' }),
   })
   .refine((d) => d.password === d.confirmPassword, {
     message: 'Passwords do not match.',

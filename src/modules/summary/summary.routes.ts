@@ -35,7 +35,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── GET /summary/todos ─────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── GET /summary/tasks-to-approve ─────────────────────────────────────────
@@ -84,7 +84,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── POST /summary/tasks-to-approve/:id/approve ────────────────────────────
@@ -113,7 +113,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         409: { description: 'Task is not in pending_approval state.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── POST /summary/tasks-to-approve/process-batch ──────────────────────────
@@ -155,7 +155,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── GET /summary/provisions ───────────────────────────────────────────────
@@ -177,7 +177,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 };
 

@@ -1,0 +1,291 @@
+import { randomInt } from 'crypto';
+import bcrypt from 'bcryptjs';
+import { OtpPurpose, AuditAction } from '@prisma/client';
+import { prisma } from '../../lib/prisma.js';
+import { sendOtpEmail } from '../../lib/email.js';
+import { generateRefreshToken, refreshExpiresAt } from '../../lib/tokens.js';
+import { httpError } from '../../lib/errors.js';
+import type {
+  RegisterBody,
+  VerifyOtpBody,
+  ResendOtpBody,
+  LoginBody,
+} from './auth.schema.js';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const BCRYPT_COST = 12;
+const OTP_EXPIRY_MS = 10 * 60 * 1_000; // 10 minutes
+const OTP_COOLDOWN_MS = 60 * 1_000;    // 60 seconds between resends
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_MS = 30 * 60 * 1_000;   // 30 minutes
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Returns a random 6-digit string (100000–999999). */
+function generateOtpCode(): string {
+  return randomInt(100_000, 1_000_000).toString();
+}
+
+/**
+ * Strips sensitive fields from a Prisma User before sending it over the wire.
+ * Returns a plain object so it serialises cleanly to JSON.
+ */
+function safeUser(user: {
+  id: string;
+  email: string;
+  role: string;
+  firstName: string;
+  middleName: string | null;
+  lastName: string;
+  gender: string | null;
+  country: string;
+  phoneNumber: string | null;
+  avatarUrl: string | null;
+  emailVerified: boolean;
+  acceptedTerms: boolean;
+  isActive: boolean;
+  lastLoginAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    firstName: user.firstName,
+    middleName: user.middleName,
+    lastName: user.lastName,
+    gender: user.gender,
+    country: user.country,
+    phoneNumber: user.phoneNumber,
+    avatarUrl: user.avatarUrl,
+    emailVerified: user.emailVerified,
+    acceptedTerms: user.acceptedTerms,
+    isActive: user.isActive,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+// ─── Service functions ────────────────────────────────────────────────────────
+
+/**
+ * Step 1–3 of the signup flow.
+ * Creates a pending user (emailVerified: false) and sends a 6-digit OTP.
+ */
+export async function register(body: RegisterBody) {
+  const existing = await prisma.user.findUnique({ where: { email: body.email } });
+  if (existing) {
+    throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
+  }
+
+  const passwordHash = await bcrypt.hash(body.password, BCRYPT_COST);
+
+  const user = await prisma.user.create({
+    data: {
+      email: body.email,
+      passwordHash,
+      firstName: body.firstName,
+      middleName: body.middleName ?? null,
+      lastName: body.lastName,
+      gender: (body.gender ?? null) as 'male' | 'female' | 'other' | null,
+      country: body.country as 'UK' | 'Nigeria',
+      phoneNumber: body.phoneNumber ?? null,
+      acceptedTerms: body.acceptTerms as boolean,
+      emailVerified: false,
+    },
+  });
+
+  const code = generateOtpCode();
+  await prisma.otpCode.create({
+    data: {
+      userId: user.id,
+      code,
+      purpose: OtpPurpose.email_verification,
+      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+    },
+  });
+
+  await sendOtpEmail(body.email, code, OtpPurpose.email_verification);
+
+  await prisma.auditLog.create({
+    data: { userId: user.id, action: AuditAction.register },
+  });
+
+  return { userId: user.id, message: 'OTP sent to your email address.' };
+}
+
+/**
+ * Validates the 6-digit OTP, activates the account (for email_verification),
+ * and returns the safe user + a raw refresh token for the caller to use.
+ *
+ * The caller (route handler) is responsible for signing the JWT access token.
+ */
+export async function verifyOtp(body: VerifyOtpBody) {
+  const user = await prisma.user.findUnique({ where: { id: body.userId } });
+  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+
+  const otp = await prisma.otpCode.findFirst({
+    where: {
+      userId: body.userId,
+      code: body.code,
+      purpose: body.purpose as OtpPurpose,
+      usedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+  });
+
+  if (!otp) {
+    throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
+  }
+
+  // Mark OTP consumed
+  await prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+
+  // Activate account on email verification
+  let updatedUser = user;
+  if (body.purpose === 'email_verification') {
+    updatedUser = await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true },
+    });
+  }
+
+  const refreshToken = generateRefreshToken();
+  await prisma.refreshToken.create({
+    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
+  });
+
+  await prisma.auditLog.create({
+    data: { userId: user.id, action: AuditAction.otp_verified },
+  });
+
+  return { user: safeUser(updatedUser), refreshToken };
+}
+
+/**
+ * Issues a fresh OTP, invalidating any previous unused ones.
+ * Enforces a 60-second cooldown between requests.
+ */
+export async function resendOtp(body: ResendOtpBody) {
+  const user = await prisma.user.findUnique({ where: { id: body.userId } });
+  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+
+  const recent = await prisma.otpCode.findFirst({
+    where: { userId: body.userId, purpose: body.purpose as OtpPurpose },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (recent) {
+    const elapsedMs = Date.now() - recent.createdAt.getTime();
+    if (elapsedMs < OTP_COOLDOWN_MS) {
+      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - elapsedMs) / 1_000);
+      throw httpError(
+        429,
+        'OTP_COOLDOWN',
+        `Please wait ${remainingSec} seconds before requesting a new OTP.`,
+      );
+    }
+    // Invalidate all previous unused OTPs for this user + purpose
+    await prisma.otpCode.updateMany({
+      where: { userId: body.userId, purpose: body.purpose as OtpPurpose, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  const code = generateOtpCode();
+  await prisma.otpCode.create({
+    data: {
+      userId: user.id,
+      code,
+      purpose: body.purpose as OtpPurpose,
+      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+    },
+  });
+
+  await sendOtpEmail(user.email, code, body.purpose as OtpPurpose);
+
+  return { message: 'A new OTP has been sent to your email.', cooldownSeconds: OTP_COOLDOWN_MS / 1_000 };
+}
+
+/**
+ * Authenticates a user by email + password.
+ * Enforces account lockout after 5 consecutive failures (30-minute window).
+ * Returns the safe user + a raw refresh token for the caller to use.
+ */
+export async function login(body: LoginBody) {
+  const user = await prisma.user.findUnique({ where: { email: body.email } });
+
+  if (!user) {
+    // Constant-time dummy compare to prevent user-enumeration via timing
+    await bcrypt.compare(body.password, '$2a$12$invalidhashfortimingnormalisati');
+    throw httpError(401, 'INVALID_CREDENTIALS', 'Invalid email or password.');
+  }
+
+  if (user.lockedUntil && user.lockedUntil > new Date()) {
+    throw httpError(403, 'ACCOUNT_LOCKED', 'Account is temporarily locked. Please try again later.');
+  }
+
+  const passwordMatch = await bcrypt.compare(body.password, user.passwordHash);
+  if (!passwordMatch) {
+    const newFailed = user.failedAttempts + 1;
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedAttempts: newFailed,
+        ...(newFailed >= MAX_FAILED_ATTEMPTS
+          ? { lockedUntil: new Date(Date.now() + LOCKOUT_MS) }
+          : {}),
+      },
+    });
+    throw httpError(401, 'INVALID_CREDENTIALS', 'Invalid email or password.');
+  }
+
+  if (!user.emailVerified) {
+    throw httpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email address before logging in.');
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { failedAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
+  });
+
+  const refreshToken = generateRefreshToken();
+  await prisma.refreshToken.create({
+    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
+  });
+
+  await prisma.auditLog.create({
+    data: { userId: user.id, action: AuditAction.login },
+  });
+
+  return { user: safeUser(user), refreshToken };
+}
+
+/**
+ * Revokes the provided refresh token.
+ * Idempotent — silently succeeds if the token is not found.
+ */
+export async function logout(refreshToken: string) {
+  const stored = await prisma.refreshToken.findUnique({ where: { token: refreshToken } });
+  if (stored) {
+    await prisma.refreshToken.update({
+      where: { id: stored.id },
+      data: { revokedAt: new Date() },
+    });
+    await prisma.auditLog.create({
+      data: { userId: stored.userId, action: AuditAction.logout },
+    });
+  }
+}
+
+/**
+ * Returns the authenticated user's profile (sensitive fields excluded).
+ */
+export async function getMe(userId: string) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  return safeUser(user);
+}

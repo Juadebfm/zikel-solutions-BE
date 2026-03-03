@@ -1,5 +1,3 @@
-import type { FastifyRequest } from 'fastify';
-
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export type UserRole = 'staff' | 'manager' | 'admin';
@@ -34,14 +32,6 @@ export interface PaginationMeta {
   page: number;
   pageSize: number;
   totalPages: number;
-}
-
-// ─── Augment Fastify ──────────────────────────────────────────────────────────
-
-declare module 'fastify' {
-  interface FastifyRequest {
-    user?: JwtPayload;
-  }
 }
 
 // ─── Shared Query Params ──────────────────────────────────────────────────────

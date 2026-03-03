@@ -29,7 +29,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── GET /dashboard/widgets ────────────────────────────────────────────────
@@ -52,7 +52,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── POST /dashboard/widgets ───────────────────────────────────────────────
@@ -78,7 +78,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── DELETE /dashboard/widgets/:id ─────────────────────────────────────────
@@ -107,7 +107,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         404: { description: 'Widget not found.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => reply.status(501).send(NOT_IMPLEMENTED),
+    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 };
 

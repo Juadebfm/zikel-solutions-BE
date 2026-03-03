@@ -1,5 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
-import type { UserRole } from '../types/index.js';
+import type { UserRole, JwtPayload } from '../types/index.js';
 
 /**
  * Returns a preHandler hook that enforces role-based access control.
@@ -10,7 +10,7 @@ import type { UserRole } from '../types/index.js';
  */
 export function requireRole(...roles: UserRole[]) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const user = request.user;
+    const user = request.user as JwtPayload | undefined;
     if (!user || !roles.includes(user.role)) {
       return reply.status(403).send({
         success: false,

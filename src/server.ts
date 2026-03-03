@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import Fastify from 'fastify';
+import Fastify, { type FastifyError } from 'fastify';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import swaggerPlugin from './plugins/swagger.js';
@@ -24,7 +24,9 @@ export async function buildApp() {
     },
     trustProxy: true,
     ajv: {
-      customOptions: { removeAdditional: 'all', coerceTypes: 'array', useDefaults: true },
+      // strict: false lets AJV ignore OpenAPI-only keywords (e.g. `example`, `nullable`)
+      // that appear in shared schemas used for both validation and Swagger docs.
+      customOptions: { strict: false, removeAdditional: 'all', coerceTypes: 'array', useDefaults: true },
     },
   });
 
@@ -36,7 +38,7 @@ export async function buildApp() {
   await fastify.register(authPlugin);
 
   // Error handler
-  fastify.setErrorHandler((error, _req, reply) => {
+  fastify.setErrorHandler((error: FastifyError, _req, reply) => {
     const statusCode = error.statusCode ?? 500;
     const isServerError = statusCode >= 500;
 
