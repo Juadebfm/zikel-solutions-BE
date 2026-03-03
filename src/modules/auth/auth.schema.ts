@@ -120,6 +120,19 @@ export const logoutBodyJson = {
   },
 } as const;
 
+export const RefreshBodySchema = z.object({
+  refreshToken: z.string().min(1),
+});
+
+export const refreshBodyJson = {
+  type: 'object',
+  required: ['refreshToken'],
+  additionalProperties: false,
+  properties: {
+    refreshToken: { type: 'string' },
+  },
+} as const;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
@@ -127,3 +140,4 @@ export type VerifyOtpBody = z.infer<typeof VerifyOtpBodySchema>;
 export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
+export type RefreshBody = z.infer<typeof RefreshBodySchema>;

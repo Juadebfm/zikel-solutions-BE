@@ -5,11 +5,13 @@ import {
   ResendOtpBodySchema,
   LoginBodySchema,
   LogoutBodySchema,
+  RefreshBodySchema,
   registerBodyJson,
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
   logoutBodyJson,
+  refreshBodyJson,
 } from './auth.schema.js';
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
@@ -17,6 +19,7 @@ import * as authService from './auth.service.js';
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/register ────────────────────────────────────────────────────
   fastify.post('/register', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
     schema: {
       tags: ['Auth'],
       summary: 'Register a new user (steps 1–3)',
@@ -63,6 +66,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── POST /auth/verify-otp ──────────────────────────────────────────────────
   fastify.post('/verify-otp', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     schema: {
       tags: ['Auth'],
       summary: 'Verify OTP and activate account',
@@ -93,6 +97,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── POST /auth/resend-otp ──────────────────────────────────────────────────
   fastify.post('/resend-otp', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
     schema: {
       tags: ['Auth'],
       summary: 'Resend OTP',
@@ -135,6 +140,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
   // ── POST /auth/login ───────────────────────────────────────────────────────
   fastify.post('/login', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     schema: {
       tags: ['Auth'],
       summary: 'Login with email and password',
@@ -162,6 +168,42 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         success: true,
         data: { user, tokens: { accessToken, refreshToken } },
+      });
+    },
+  });
+
+  // ── POST /auth/refresh ─────────────────────────────────────────────────────
+  fastify.post('/refresh', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Rotate refresh token and issue a new access token',
+      description:
+        'Validates the provided refresh token. On success, atomically revokes the old token and ' +
+        'issues a new access token + rotated refresh token. ' +
+        'Implements single-use token rotation — a token can only be used once. ' +
+        'This endpoint does NOT require an Authorization header.',
+      security: [],
+      body: refreshBodyJson,
+      response: {
+        200: {
+          description: 'Tokens refreshed.',
+          $ref: 'AuthResponse#',
+        },
+        401: {
+          description: 'Refresh token is invalid, expired, or already revoked.',
+          $ref: 'ApiError#',
+        },
+        403: { description: 'Account is disabled.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const body = RefreshBodySchema.parse(request.body);
+      const { user, newRefreshToken } = await authService.refreshAccessToken(body);
+      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      return reply.send({
+        success: true,
+        data: { user, tokens: { accessToken, refreshToken: newRefreshToken } },
       });
     },
   });

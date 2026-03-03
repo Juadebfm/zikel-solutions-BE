@@ -10,6 +10,7 @@ import type {
   VerifyOtpBody,
   ResendOtpBody,
   LoginBody,
+  RefreshBody,
 } from './auth.schema.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -288,4 +289,57 @@ export async function getMe(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   return safeUser(user);
+}
+
+/**
+ * Validates an existing refresh token, revokes it, and issues a new token pair
+ * (access token + rotated refresh token).
+ *
+ * Implements single-use token rotation: each refresh token can only be used once.
+ * A revoked token arriving here indicates a possible replay attack — the 401 response
+ * signals the client to force a full re-login.
+ *
+ * The caller (route handler) is responsible for signing the JWT access token.
+ */
+export async function refreshAccessToken(body: RefreshBody) {
+  const stored = await prisma.refreshToken.findUnique({
+    where: { token: body.refreshToken },
+    include: { user: true },
+  });
+
+  if (!stored || stored.revokedAt !== null || stored.expiresAt < new Date()) {
+    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid or expired.');
+  }
+
+  if (!stored.user.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
+  }
+
+  const newRawToken = generateRefreshToken();
+
+  // Atomic rotation: revoke the old token and create the new one in a single transaction.
+  await prisma.$transaction([
+    prisma.refreshToken.update({
+      where: { id: stored.id },
+      data: { revokedAt: new Date() },
+    }),
+    prisma.refreshToken.create({
+      data: {
+        userId: stored.userId,
+        token: newRawToken,
+        expiresAt: refreshExpiresAt(),
+      },
+    }),
+  ]);
+
+  // Audit log — reuse 'login' action with metadata to distinguish token refreshes.
+  await prisma.auditLog.create({
+    data: {
+      userId: stored.userId,
+      action: AuditAction.login,
+      metadata: { type: 'token_refreshed' },
+    },
+  });
+
+  return { user: safeUser(stored.user), newRefreshToken: newRawToken };
 }

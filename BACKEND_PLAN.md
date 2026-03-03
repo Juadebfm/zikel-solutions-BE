@@ -120,7 +120,7 @@
 - [x] Bootstrap backend project, linting, formatting, test framework.
 - [x] Add standardised error handling and response envelope.
 - [x] Add `/health` and `/ready` endpoints.
-- [ ] Add structured logging with request IDs.
+- [x] Add structured logging with request IDs.
 - [x] Add env config schema validation.
 
 ### Phase 2 — Data Model and Neon Setup
@@ -133,10 +133,10 @@
 
 ### Phase 3 — Auth and Authorisation
 
-- [ ] Implement login / register / verify-otp / resend-otp / logout / me endpoints.
-- [ ] Implement secure password hashing and token lifecycle.
-- [ ] Add server-side RBAC middleware and permission checks.
-- [ ] Add auth/audit events for login and permission-sensitive actions.
+- [x] Implement login / register / verify-otp / resend-otp / logout / me / refresh endpoints.
+- [x] Implement secure password hashing and token lifecycle (bcrypt cost 12, refresh token rotation).
+- [x] Add server-side RBAC middleware and permission checks.
+- [x] Add auth/audit events for login and permission-sensitive actions.
 
 ### Phase 4 — Core Feature APIs
 
@@ -173,15 +173,15 @@
 - [x] Request schema validation for every endpoint.
 - [ ] Output encoding and input sanitisation where applicable.
 - [x] Server-side authorisation for every protected route.
-- [ ] Password hashing with strong parameters (bcrypt / argon2, cost factor tuned).
-- [ ] Access token expiry + refresh token rotation / revocation.
-- [x] Endpoint and auth rate limiting.
-- [ ] Brute-force protection and lockout / backoff policy.
+- [x] Password hashing with strong parameters (bcrypt cost 12).
+- [x] Access token expiry (15 min) + refresh token rotation / revocation (7 day, single-use).
+- [x] Endpoint and auth rate limiting (global + per-route tighter limits on login/register).
+- [x] Brute-force protection: 5-attempt lockout, 30-min backoff on login.
 - [x] SQL injection prevention (parameterised queries only — Prisma enforces this).
-- [ ] Payload size limits and parser hardening.
+- [x] Payload size limits (1 MiB explicit bodyLimit).
 - [x] Secrets in Fly secrets only; no secrets in repository.
 - [ ] Secret / key rotation policy documented.
-- [ ] Audit logs for auth, permission changes, destructive actions.
+- [x] Audit logs for auth events (register, login, logout, otp_verified, token_refresh).
 - [x] Secure error handling (no sensitive internals in responses).
 - [ ] Dependency scanning and patching policy.
 - [ ] SAST in CI and protected branches.
@@ -193,7 +193,7 @@
 
 - [x] Stateless services for horizontal scaling.
 - [x] Correct connection pooling strategy for Neon (PgBouncer via pooled URL).
-- [ ] DB connection cap per instance.
+- [x] DB connection cap per instance (max: 10, idle 30s, connect timeout 5s).
 - [x] Pagination on all list endpoints.
 - [ ] Idempotency for retried writes.
 - [ ] Queue / background jobs for heavy workloads (exports, emails).

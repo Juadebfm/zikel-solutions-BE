@@ -8,7 +8,14 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 function createPrismaClient() {
   // Runtime uses the pooled DATABASE_URL (PgBouncer on Neon).
   // Migrations use DIRECT_URL via prisma.config.ts instead.
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    // Cap connections per instance so we never exhaust Neon's pool.
+    // Fly.io machines are single-threaded Node; 10 concurrent DB connections is ample.
+    max: 10,
+    idleTimeoutMillis: 30_000,   // release idle connections after 30 s
+    connectionTimeoutMillis: 5_000, // fail fast rather than queue indefinitely
+  });
   const adapter = new PrismaPg(pool);
 
   const client = new PrismaClient({

@@ -6,8 +6,8 @@ const envSchema = z.object({
   HOST: z.string().default('0.0.0.0'),
 
   // Database
-  DATABASE_URL: z.string().url({ message: 'DATABASE_URL must be a valid URL' }),
-  DIRECT_URL: z.string().url({ message: 'DIRECT_URL must be a valid URL' }).optional(),
+  DATABASE_URL: z.url({ error: 'DATABASE_URL must be a valid URL' }),
+  DIRECT_URL: z.url({ error: 'DIRECT_URL must be a valid URL' }).optional(),
 
   // JWT
   JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
@@ -29,6 +29,12 @@ const envSchema = z.object({
   SWAGGER_ENABLED: z
     .enum(['true', 'false'])
     .transform((v) => v === 'true'),
+
+  // Email — Resend (https://resend.com)
+  // Optional in development (email.ts logs OTPs to console instead).
+  // Required in production: set via `fly secrets set`.
+  RESEND_API_KEY: z.string().min(1).optional(),
+  RESEND_FROM_EMAIL: z.email({ error: 'RESEND_FROM_EMAIL must be a valid email address' }).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

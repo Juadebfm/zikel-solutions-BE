@@ -1,7 +1,9 @@
 import 'dotenv/config';
+import { randomUUID } from 'crypto';
 import Fastify, { type FastifyError } from 'fastify';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
+import { prisma } from './lib/prisma.js';
 import swaggerPlugin from './plugins/swagger.js';
 import corsPlugin from './plugins/cors.js';
 import helmetPlugin from './plugins/helmet.js';
@@ -23,11 +25,23 @@ export async function buildApp() {
         : {}),
     },
     trustProxy: true,
+    // Explicit 1 MiB body limit — protects against large-payload DoS.
+    bodyLimit: 1_048_576,
+    // Attach a correlation ID to every request for log traceability.
+    // Accepts X-Request-ID from a load balancer; generates UUID v4 otherwise.
+    requestIdHeader: 'x-request-id',
+    requestIdLogLabel: 'reqId',
+    genReqId: (req) => (req.headers['x-request-id'] as string | undefined) ?? randomUUID(),
     ajv: {
       // strict: false lets AJV ignore OpenAPI-only keywords (e.g. `example`, `nullable`)
       // that appear in shared schemas used for both validation and Swagger docs.
       customOptions: { strict: false, removeAdditional: 'all', coerceTypes: 'array', useDefaults: true },
     },
+  });
+
+  // Disconnect Prisma cleanly when the server closes (graceful shutdown / tests).
+  fastify.addHook('onClose', async () => {
+    await prisma.$disconnect();
   });
 
   // Plugins (order matters — swagger must come first to capture all route schemas)
@@ -38,12 +52,13 @@ export async function buildApp() {
   await fastify.register(authPlugin);
 
   // Error handler
-  fastify.setErrorHandler((error: FastifyError, _req, reply) => {
+  fastify.setErrorHandler((error: FastifyError, req, reply) => {
     const statusCode = error.statusCode ?? 500;
     const isServerError = statusCode >= 500;
 
     if (isServerError) {
-      fastify.log.error(error);
+      // req.log carries the reqId so this error line is traceable.
+      req.log.error(error);
     }
 
     return reply.status(statusCode).send({
@@ -79,6 +94,23 @@ async function start() {
     logger.error(err);
     process.exit(1);
   }
+
+  // Graceful shutdown — Fly.io sends SIGTERM before stopping a machine.
+  // app.close() drains in-flight requests and fires all onClose hooks.
+  const shutdown = async (signal: string) => {
+    logger.info(`Received ${signal}. Shutting down...`);
+    try {
+      await app.close();
+      logger.info('Server closed cleanly.');
+      process.exit(0);
+    } catch (err) {
+      logger.error(err, 'Error during shutdown');
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
+  process.on('SIGINT',  () => { void shutdown('SIGINT'); });
 }
 
 start();
