@@ -25,7 +25,7 @@ export const RegisterBodySchema = z
     middleName: z.string().max(100).optional(),
     lastName: z.string().min(1).max(100),
     gender: z.enum(['male', 'female', 'other']).optional(),
-    email: z.string().email(),
+    email: z.email(),
     phoneNumber: z.string().min(7).max(20).optional(),
     password: passwordSchema,
     confirmPassword: z.string(),
@@ -39,8 +39,25 @@ export const RegisterBodySchema = z
 export const VerifyOtpBodySchema = z.object({
   userId: z.string().min(1),
   code: z.string().length(6, 'OTP must be exactly 6 digits'),
-  purpose: z.enum(['email_verification', 'password_reset']),
+  // Restricted to email_verification only — password_reset OTPs are consumed by /reset-password
+  purpose: z.literal('email_verification'),
 });
+
+export const ForgotPasswordBodySchema = z.object({
+  email: z.email(),
+});
+
+export const ResetPasswordBodySchema = z
+  .object({
+    userId: z.string().min(1),
+    code: z.string().length(6, 'OTP must be exactly 6 digits'),
+    newPassword: passwordSchema,
+    confirmPassword: z.string(),
+  })
+  .refine((d) => d.newPassword === d.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  });
 
 export const ResendOtpBodySchema = z.object({
   userId: z.string().min(1),
@@ -48,7 +65,7 @@ export const ResendOtpBodySchema = z.object({
 });
 
 export const LoginBodySchema = z.object({
-  email: z.string().email(),
+  email: z.email(),
   password: z.string().min(1),
 });
 
@@ -87,7 +104,32 @@ export const verifyOtpBodyJson = {
   properties: {
     userId: { type: 'string' },
     code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP sent to email' },
-    purpose: { type: 'string', enum: ['email_verification', 'password_reset'] },
+    purpose: { type: 'string', enum: ['email_verification'] },
+  },
+} as const;
+
+export const forgotPasswordBodyJson = {
+  type: 'object',
+  required: ['email'],
+  additionalProperties: false,
+  properties: {
+    email: { type: 'string', format: 'email' },
+  },
+} as const;
+
+export const resetPasswordBodyJson = {
+  type: 'object',
+  required: ['userId', 'code', 'newPassword', 'confirmPassword'],
+  additionalProperties: false,
+  properties: {
+    userId: { type: 'string' },
+    code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP from forgot-password email' },
+    newPassword: {
+      type: 'string',
+      minLength: 8,
+      description: 'Min 8 chars, must include uppercase, lowercase, number, and special character.',
+    },
+    confirmPassword: { type: 'string', minLength: 8 },
   },
 } as const;
 
@@ -141,3 +183,5 @@ export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
+export type ForgotPasswordBody = z.infer<typeof ForgotPasswordBodySchema>;
+export type ResetPasswordBody = z.infer<typeof ResetPasswordBodySchema>;

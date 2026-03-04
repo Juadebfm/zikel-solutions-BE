@@ -68,6 +68,47 @@ enum TaskPriority {
   urgent
 }
 
+// ─── Public / Marketing ───────────────────────────────────────────────────────
+
+enum ServiceOfInterest {
+  digital_filing_cabinet
+  ai_staff_guidance
+  training_development
+  healthcare_workflow
+  general_enquiry
+}
+
+model DemoRequest {
+  id                     String            @id @default(cuid())
+  fullName               String
+  organisationName       String?
+  rolePosition           String?
+  email                  String
+  phoneNumber            String?
+  numberOfStaffChildren  String?
+  serviceOfInterest      ServiceOfInterest
+  keyChallenges          String?
+  message                String?
+  source                 String?
+  createdAt              DateTime          @default(now())
+
+  @@index([email])
+  @@index([createdAt])
+}
+
+model WaitlistEntry {
+  id                String            @id @default(cuid())
+  fullName          String
+  email             String
+  organisation      String?
+  serviceOfInterest ServiceOfInterest
+  source            String?
+  createdAt         DateTime          @default(now())
+
+  @@index([email])
+  @@index([createdAt])
+}
+
 // ─── Auth / Users ─────────────────────────────────────────────────────────────
 
 model User {

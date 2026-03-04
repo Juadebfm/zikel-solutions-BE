@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import healthRoutes from './health.js';
 import authRoutes from '../modules/auth/auth.routes.js';
+import publicRoutes from '../modules/public/public.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
 
@@ -22,6 +23,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
   await fastify.register(
     async (v1) => {
       await v1.register(authRoutes, { prefix: '/auth' });
+      await v1.register(publicRoutes, { prefix: '/public' });
       await v1.register(summaryRoutes, { prefix: '/summary' });
       await v1.register(dashboardRoutes, { prefix: '/dashboard' });
 

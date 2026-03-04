@@ -6,12 +6,16 @@ import {
   LoginBodySchema,
   LogoutBodySchema,
   RefreshBodySchema,
+  ForgotPasswordBodySchema,
+  ResetPasswordBodySchema,
   registerBodyJson,
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
   logoutBodyJson,
   refreshBodyJson,
+  forgotPasswordBodyJson,
+  resetPasswordBodyJson,
 } from './auth.schema.js';
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
@@ -239,6 +243,91 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       const body = LogoutBodySchema.parse(request.body);
       await authService.logout(body.refreshToken);
       return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
+    },
+  });
+
+  // ── POST /auth/forgot-password ─────────────────────────────────────────────
+  fastify.post('/forgot-password', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Request a password reset OTP',
+      description:
+        'Sends a 6-digit password-reset OTP to the given email address. ' +
+        'Always returns the same response regardless of whether the email is registered, ' +
+        'to prevent user enumeration. Enforces a 60-second cooldown between requests.',
+      security: [],
+      body: forgotPasswordBodyJson,
+      response: {
+        200: {
+          description: 'OTP dispatched (or silently skipped if email is unregistered).',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['message'],
+              properties: {
+                message: { type: 'string', example: 'If that email is registered, an OTP has been sent.' },
+              },
+            },
+          },
+        },
+        429: { description: 'Cooldown in effect.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const body = ForgotPasswordBodySchema.parse(request.body);
+      const data = await authService.forgotPassword(body);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /auth/reset-password ───────────────────────────────────────────────
+  fastify.post('/reset-password', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Reset password using OTP',
+      description:
+        'Verifies the 6-digit password-reset OTP issued by /forgot-password. ' +
+        'On success, updates the password and revokes all active refresh tokens, ' +
+        'forcing re-authentication on all devices.',
+      security: [],
+      body: resetPasswordBodyJson,
+      response: {
+        200: {
+          description: 'Password reset successfully.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['message'],
+              properties: {
+                message: { type: 'string', example: 'Password reset successfully. Please log in with your new password.' },
+              },
+            },
+          },
+        },
+        400: { description: 'Invalid, expired, or already-used OTP.', $ref: 'ApiError#' },
+        404: { description: 'User not found.', $ref: 'ApiError#' },
+        422: { description: 'Validation error (password policy, passwords do not match).', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ResetPasswordBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+      const data = await authService.resetPassword(parse.data);
+      return reply.send({ success: true, data });
     },
   });
 

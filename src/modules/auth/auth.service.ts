@@ -11,6 +11,8 @@ import type {
   ResendOtpBody,
   LoginBody,
   RefreshBody,
+  ForgotPasswordBody,
+  ResetPasswordBody,
 } from './auth.schema.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -342,4 +344,104 @@ export async function refreshAccessToken(body: RefreshBody) {
   });
 
   return { user: safeUser(stored.user), newRefreshToken: newRawToken };
+}
+
+/**
+ * Initiates the password reset flow.
+ * Generates a password_reset OTP and sends it to the given email.
+ *
+ * Always returns the same response regardless of whether the email is registered,
+ * to prevent user enumeration.
+ */
+export async function forgotPassword(body: ForgotPasswordBody) {
+  const user = await prisma.user.findUnique({ where: { email: body.email } });
+
+  // Silent early-return — do not reveal whether the email exists
+  if (!user) {
+    return { message: 'If that email is registered, an OTP has been sent.' };
+  }
+
+  // Enforce the same cooldown as resend-otp to prevent flooding
+  const recent = await prisma.otpCode.findFirst({
+    where: { userId: user.id, purpose: OtpPurpose.password_reset },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (recent) {
+    const elapsedMs = Date.now() - recent.createdAt.getTime();
+    if (elapsedMs < OTP_COOLDOWN_MS) {
+      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - elapsedMs) / 1_000);
+      throw httpError(
+        429,
+        'OTP_COOLDOWN',
+        `Please wait ${remainingSec} seconds before requesting a new OTP.`,
+      );
+    }
+    // Invalidate all previous unused password_reset OTPs
+    await prisma.otpCode.updateMany({
+      where: { userId: user.id, purpose: OtpPurpose.password_reset, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  const code = generateOtpCode();
+  await prisma.otpCode.create({
+    data: {
+      userId: user.id,
+      code,
+      purpose: OtpPurpose.password_reset,
+      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+    },
+  });
+
+  await sendOtpEmail(user.email, code, OtpPurpose.password_reset);
+
+  return { message: 'If that email is registered, an OTP has been sent.' };
+}
+
+/**
+ * Completes the password reset flow.
+ * Verifies the password_reset OTP, hashes the new password, and atomically:
+ *   1. Updates the user's passwordHash.
+ *   2. Revokes all existing refresh tokens (forces re-login on all devices).
+ * Audit logs the password_change action.
+ */
+export async function resetPassword(body: ResetPasswordBody) {
+  const user = await prisma.user.findUnique({ where: { id: body.userId } });
+  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+
+  const otp = await prisma.otpCode.findFirst({
+    where: {
+      userId: body.userId,
+      code: body.code,
+      purpose: OtpPurpose.password_reset,
+      usedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+  });
+
+  if (!otp) {
+    throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
+  }
+
+  const newPasswordHash = await bcrypt.hash(body.newPassword, BCRYPT_COST);
+
+  // Atomic: mark OTP used + update password + revoke all refresh tokens
+  await prisma.$transaction([
+    prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }),
+    prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash: newPasswordHash, failedAttempts: 0, lockedUntil: null },
+    }),
+    prisma.refreshToken.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
+
+  await prisma.auditLog.create({
+    data: { userId: user.id, action: AuditAction.password_change },
+  });
+
+  return { message: 'Password reset successfully. Please log in with your new password.' };
 }
