@@ -96,6 +96,20 @@ model DemoRequest {
   @@index([createdAt])
 }
 
+model ContactMessage {
+  id                String             @id @default(cuid())
+  fullName          String
+  email             String
+  phoneNumber       String
+  serviceOfInterest ServiceOfInterest
+  message           String?
+  source            String?
+  createdAt         DateTime           @default(now())
+
+  @@index([email])
+  @@index([createdAt])
+}
+
 model WaitlistEntry {
   id                String            @id @default(cuid())
   fullName          String

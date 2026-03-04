@@ -69,3 +69,30 @@ export const joinWaitlistBodyJson = {
     source: { type: 'string', maxLength: 100 },
   },
 } as const;
+
+// ─── Contact Us ───────────────────────────────────────────────────────────────
+
+export const ContactUsBodySchema = z.object({
+  fullName: z.string().min(1).max(150),
+  email: z.email(),
+  phoneNumber: z.string().min(7).max(30),
+  serviceOfInterest: z.enum(SERVICE_OPTIONS),
+  message: z.string().max(2000).optional(),
+  source: z.string().max(100).optional(),
+});
+
+export type ContactUsBody = z.infer<typeof ContactUsBodySchema>;
+
+export const contactUsBodyJson = {
+  type: 'object',
+  required: ['fullName', 'email', 'phoneNumber', 'serviceOfInterest'],
+  additionalProperties: false,
+  properties: {
+    fullName: { type: 'string', minLength: 1, maxLength: 150 },
+    email: { type: 'string', format: 'email' },
+    phoneNumber: { type: 'string', minLength: 7, maxLength: 30 },
+    serviceOfInterest: { type: 'string', enum: SERVICE_OPTIONS },
+    message: { type: 'string', maxLength: 2000 },
+    source: { type: 'string', maxLength: 100 },
+  },
+} as const;

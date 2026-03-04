@@ -5,6 +5,8 @@ import {
   bookDemoBodyJson,
   JoinWaitlistBodySchema,
   joinWaitlistBodyJson,
+  ContactUsBodySchema,
+  contactUsBodyJson,
 } from './public.schema.js';
 
 const publicRoutes: FastifyPluginAsync = async (fastify) => {
@@ -98,6 +100,52 @@ const publicRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
       const data = await publicService.joinWaitlist(parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
+  });
+  // ── POST /public/contact-us ────────────────────────────────────────────────
+  fastify.post('/contact-us', {
+    config: { rateLimit: { max: 10, timeWindow: '10 minutes' } },
+    schema: {
+      tags: ['Public'],
+      summary: 'Send a contact-us message',
+      description:
+        'Public endpoint — no authentication required. ' +
+        'Accepts a contact message from the website and stores it for the team. ' +
+        'Rate-limited to 10 submissions per IP per 10 minutes.',
+      security: [],
+      body: contactUsBodyJson,
+      response: {
+        201: {
+          description: 'Message received.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['id', 'message'],
+              properties: {
+                id: { type: 'string' },
+                message: { type: 'string' },
+              },
+            },
+          },
+        },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+        429: { description: 'Too many requests.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ContactUsBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+      const data = await publicService.contactUs(parse.data);
       return reply.status(201).send({ success: true, data });
     },
   });

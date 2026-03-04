@@ -217,6 +217,46 @@ export async function sendBookDemoConfirmationEmail(
   await sendEmail(email, 'We received your demo request — Zikel Solutions', html);
 }
 
+// ─── Contact-Us confirmation ──────────────────────────────────────────────────
+
+export async function sendContactConfirmationEmail(
+  email: string,
+  fullName: string,
+  serviceOfInterest: string,
+): Promise<void> {
+  const serviceLabel = SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest;
+  const firstName = fullName.split(' ')[0];
+
+  const html = buildEmailHtml(`
+    <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
+      We've received your message, ${firstName}!
+    </h2>
+    <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
+      Thank you for reaching out to Zikel Solutions. A member of our team will
+      review your message and get back to you as soon as possible.
+    </p>
+
+    <!-- Service highlight -->
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0;border-radius:6px;overflow:hidden">
+      <tr>
+        <td style="background:#fef9f7;border-left:4px solid #F94D00;padding:16px 20px;border-radius:0 6px 6px 0">
+          <p style="margin:0 0 4px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Area of Interest</p>
+          <p style="margin:0;font-size:15px;color:#02060A;font-weight:600">${serviceLabel}</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
+      If your query is urgent, feel free to reply directly to this email.
+    </p>
+    <p style="margin:0;font-size:15px;color:#02060A;font-weight:600">
+      The Zikel Solutions Team
+    </p>
+  `);
+
+  await sendEmail(email, "We've received your message — Zikel Solutions", html);
+}
+
 // ─── Join-Waitlist confirmation ───────────────────────────────────────────────
 
 export async function sendWaitlistConfirmationEmail(
