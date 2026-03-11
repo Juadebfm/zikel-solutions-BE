@@ -36,12 +36,20 @@ export const RegisterBodySchema = z
     path: ['confirmPassword'],
   });
 
-export const VerifyOtpBodySchema = z.object({
+const VerifyOtpEmailBodySchema = z.object({
+  email: z.email(),
+  code: z.string().length(6, 'OTP must be exactly 6 digits'),
+});
+
+const VerifyOtpLegacyBodySchema = z.object({
   userId: z.string().min(1),
   code: z.string().length(6, 'OTP must be exactly 6 digits'),
   // Restricted to email_verification only — password_reset OTPs are consumed by /reset-password
-  purpose: z.literal('email_verification'),
+  purpose: z.literal('email_verification').optional(),
 });
+
+export const VerifyOtpBodySchema = z
+  .union([VerifyOtpEmailBodySchema, VerifyOtpLegacyBodySchema]);
 
 export const ForgotPasswordBodySchema = z.object({
   email: z.email(),
@@ -49,7 +57,7 @@ export const ForgotPasswordBodySchema = z.object({
 
 export const ResetPasswordBodySchema = z
   .object({
-    userId: z.string().min(1),
+    email: z.email(),
     code: z.string().length(6, 'OTP must be exactly 6 digits'),
     newPassword: passwordSchema,
     confirmPassword: z.string(),
@@ -59,14 +67,26 @@ export const ResetPasswordBodySchema = z
     path: ['confirmPassword'],
   });
 
-export const ResendOtpBodySchema = z.object({
+const ResendOtpEmailBodySchema = z.object({
+  email: z.email(),
+  purpose: z.literal('email_verification').optional(),
+});
+
+const ResendOtpLegacyBodySchema = z.object({
   userId: z.string().min(1),
   purpose: z.enum(['email_verification', 'password_reset']),
 });
 
+export const ResendOtpBodySchema = z
+  .union([ResendOtpEmailBodySchema, ResendOtpLegacyBodySchema]);
+
 export const LoginBodySchema = z.object({
   email: z.email(),
   password: z.string().min(1),
+});
+
+export const CheckEmailQuerySchema = z.object({
+  email: z.email(),
 });
 
 export const LogoutBodySchema = z.object({
@@ -98,14 +118,27 @@ export const registerBodyJson = {
 } as const;
 
 export const verifyOtpBodyJson = {
-  type: 'object',
-  required: ['userId', 'code', 'purpose'],
-  additionalProperties: false,
-  properties: {
-    userId: { type: 'string' },
-    code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP sent to email' },
-    purpose: { type: 'string', enum: ['email_verification'] },
-  },
+  anyOf: [
+    {
+      type: 'object',
+      required: ['email', 'code'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email' },
+        code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP sent to email' },
+      },
+    },
+    {
+      type: 'object',
+      required: ['userId', 'code'],
+      additionalProperties: false,
+      properties: {
+        userId: { type: 'string' },
+        code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP sent to email' },
+        purpose: { type: 'string', enum: ['email_verification'] },
+      },
+    },
+  ],
 } as const;
 
 export const forgotPasswordBodyJson = {
@@ -119,10 +152,10 @@ export const forgotPasswordBodyJson = {
 
 export const resetPasswordBodyJson = {
   type: 'object',
-  required: ['userId', 'code', 'newPassword', 'confirmPassword'],
+  required: ['email', 'code', 'newPassword', 'confirmPassword'],
   additionalProperties: false,
   properties: {
-    userId: { type: 'string' },
+    email: { type: 'string', format: 'email' },
     code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP from forgot-password email' },
     newPassword: {
       type: 'string',
@@ -134,13 +167,26 @@ export const resetPasswordBodyJson = {
 } as const;
 
 export const resendOtpBodyJson = {
-  type: 'object',
-  required: ['userId', 'purpose'],
-  additionalProperties: false,
-  properties: {
-    userId: { type: 'string' },
-    purpose: { type: 'string', enum: ['email_verification', 'password_reset'] },
-  },
+  anyOf: [
+    {
+      type: 'object',
+      required: ['email'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email' },
+        purpose: { type: 'string', enum: ['email_verification'] },
+      },
+    },
+    {
+      type: 'object',
+      required: ['userId', 'purpose'],
+      additionalProperties: false,
+      properties: {
+        userId: { type: 'string' },
+        purpose: { type: 'string', enum: ['email_verification', 'password_reset'] },
+      },
+    },
+  ],
 } as const;
 
 export const loginBodyJson = {
@@ -150,6 +196,15 @@ export const loginBodyJson = {
   properties: {
     email: { type: 'string', format: 'email' },
     password: { type: 'string', minLength: 1 },
+  },
+} as const;
+
+export const checkEmailQueryJson = {
+  type: 'object',
+  required: ['email'],
+  additionalProperties: false,
+  properties: {
+    email: { type: 'string', format: 'email' },
   },
 } as const;
 
@@ -163,16 +218,33 @@ export const logoutBodyJson = {
 } as const;
 
 export const RefreshBodySchema = z.object({
-  refreshToken: z.string().min(1),
-});
+  refreshToken: z.string().min(1).optional(),
+  token: z.string().min(1).optional(),
+}).refine((v) => Boolean(v.refreshToken || v.token), {
+  message: 'Either refreshToken or token is required.',
+}).transform((v) => ({
+  refreshToken: v.refreshToken ?? v.token!,
+}));
 
 export const refreshBodyJson = {
-  type: 'object',
-  required: ['refreshToken'],
-  additionalProperties: false,
-  properties: {
-    refreshToken: { type: 'string' },
-  },
+  anyOf: [
+    {
+      type: 'object',
+      required: ['refreshToken'],
+      additionalProperties: false,
+      properties: {
+        refreshToken: { type: 'string' },
+      },
+    },
+    {
+      type: 'object',
+      required: ['token'],
+      additionalProperties: false,
+      properties: {
+        token: { type: 'string' },
+      },
+    },
+  ],
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -181,6 +253,7 @@ export type RegisterBody = z.infer<typeof RegisterBodySchema>;
 export type VerifyOtpBody = z.infer<typeof VerifyOtpBodySchema>;
 export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
+export type CheckEmailQuery = z.infer<typeof CheckEmailQuerySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 export type ForgotPasswordBody = z.infer<typeof ForgotPasswordBodySchema>;

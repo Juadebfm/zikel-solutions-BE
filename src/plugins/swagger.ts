@@ -58,11 +58,11 @@ List endpoints accept \`page\`, \`pageSize\` (max 100), \`sortBy\`, \`sortOrder\
           description: 'Local development',
         },
         {
-          url: 'https://zikel-solutions-be-staging.fly.dev',
+          url: 'https://zikel-solutions-staging.fly.dev',
           description: 'Staging (Fly.io)',
         },
         {
-          url: 'https://zikel-solutions-be.fly.dev',
+          url: 'https://zikel-solutions.fly.dev',
           description: 'Production (Fly.io)',
         },
       ],

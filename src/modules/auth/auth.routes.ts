@@ -4,6 +4,7 @@ import {
   VerifyOtpBodySchema,
   ResendOtpBodySchema,
   LoginBodySchema,
+  CheckEmailQuerySchema,
   LogoutBodySchema,
   RefreshBodySchema,
   ForgotPasswordBodySchema,
@@ -12,6 +13,7 @@ import {
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
+  checkEmailQueryJson,
   logoutBodyJson,
   refreshBodyJson,
   forgotPasswordBodyJson,
@@ -65,6 +67,39 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const data = await authService.register(parse.data);
       return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  // ── GET /auth/check-email ─────────────────────────────────────────────────
+  fastify.get('/check-email', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Check email availability',
+      description: 'Returns whether an email is available before continuing signup.',
+      security: [],
+      querystring: checkEmailQueryJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['available'],
+              properties: {
+                available: { type: 'boolean' },
+              },
+            },
+          },
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const query = CheckEmailQuerySchema.parse(request.query);
+      const data = await authService.checkEmailAvailability(query.email);
+      return reply.send({ success: true, data });
     },
   });
 
@@ -241,7 +276,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     preHandler: [fastify.authenticate],
     handler: async (request, reply) => {
       const body = LogoutBodySchema.parse(request.body);
-      await authService.logout(body.refreshToken);
+      const userId = (request.user as JwtPayload).sub;
+      await authService.logout(body.refreshToken, userId);
       return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
     },
   });
@@ -255,7 +291,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       description:
         'Sends a 6-digit password-reset OTP to the given email address. ' +
         'Always returns the same response regardless of whether the email is registered, ' +
-        'to prevent user enumeration. Enforces a 60-second cooldown between requests.',
+        'to prevent user enumeration.',
       security: [],
       body: forgotPasswordBodyJson,
       response: {
@@ -274,7 +310,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
-        429: { description: 'Cooldown in effect.', $ref: 'ApiError#' },
+        429: { description: 'Too many requests.', $ref: 'ApiError#' },
       },
     },
     handler: async (request, reply) => {
@@ -291,7 +327,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       tags: ['Auth'],
       summary: 'Reset password using OTP',
       description:
-        'Verifies the 6-digit password-reset OTP issued by /forgot-password. ' +
+        'Verifies the 6-digit password-reset OTP issued by /forgot-password for the submitted email. ' +
         'On success, updates the password and revokes all active refresh tokens, ' +
         'forcing re-authentication on all devices.',
       security: [],
@@ -313,7 +349,6 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         400: { description: 'Invalid, expired, or already-used OTP.', $ref: 'ApiError#' },
-        404: { description: 'User not found.', $ref: 'ApiError#' },
         422: { description: 'Validation error (password policy, passwords do not match).', $ref: 'ApiError#' },
       },
     },

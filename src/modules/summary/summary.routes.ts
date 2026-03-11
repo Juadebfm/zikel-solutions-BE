@@ -1,15 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
+import type { JwtPayload } from '../../types/index.js';
+import * as summaryService from './summary.service.js';
 import {
+  ApproveTaskBodySchema,
+  BatchApproveBodySchema,
+  SummaryListQuerySchema,
   approveTaskBodyJson,
   batchApproveBodyJson,
   todoItemJson,
   provisionHomeJson,
+  provisionsResponseExample,
 } from './summary.schema.js';
-
-const NOT_IMPLEMENTED = {
-  success: false as const,
-  error: { code: 'NOT_IMPLEMENTED', message: 'This endpoint is not yet implemented — Phase 4.' },
-};
 
 const summaryRoutes: FastifyPluginAsync = async (fastify) => {
   // All summary routes require authentication
@@ -35,7 +36,11 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const data = await summaryService.getSummaryStats(userId);
+      return reply.send({ success: true, data });
+    },
   });
 
   // ── GET /summary/todos ─────────────────────────────────────────────────────
@@ -56,9 +61,23 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         401: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const parse = SummaryListQuerySchema.safeParse(request.query);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { data, meta } = await summaryService.listTodos(userId, parse.data);
+      return reply.send({ success: true, data, meta });
+    },
   });
 
   // ── GET /summary/tasks-to-approve ─────────────────────────────────────────
@@ -82,42 +101,27 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         },
         401: { $ref: 'ApiError#' },
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
-  });
+    handler: async (request, reply) => {
+      const parse = SummaryListQuerySchema.safeParse(request.query);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
 
-  // ── POST /summary/tasks-to-approve/:id/approve ────────────────────────────
-  fastify.post('/:id/approve', {
-    schema: {
-      tags: ['Summary'],
-      summary: 'Approve a single task',
-      description:
-        'Approves the specified task. Requires approval permission. ' +
-        'Stores approver ID, timestamp, and optional comment.',
-      params: { $ref: 'CuidParam#' },
-      body: approveTaskBodyJson,
-      response: {
-        200: {
-          description: 'Task approved.',
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: { $ref: 'Task#' },
-          },
-        },
-        401: { $ref: 'ApiError#' },
-        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
-        404: { description: 'Task not found.', $ref: 'ApiError#' },
-        409: { description: 'Task is not in pending_approval state.', $ref: 'ApiError#' },
-      },
+      const userId = (request.user as JwtPayload).sub;
+      const { data, meta } = await summaryService.listTasksToApprove(userId, parse.data);
+      return reply.send({ success: true, data, meta });
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
   });
 
   // ── POST /summary/tasks-to-approve/process-batch ──────────────────────────
-  fastify.post('/process-batch', {
+  fastify.post('/tasks-to-approve/process-batch', {
     schema: {
       tags: ['Summary'],
       summary: 'Batch approve or reject tasks',
@@ -153,9 +157,67 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         },
         401: { $ref: 'ApiError#' },
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const parse = BatchApproveBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const data = await summaryService.processTaskBatch(userId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /summary/tasks-to-approve/:id/approve ────────────────────────────
+  fastify.post('/tasks-to-approve/:id/approve', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Approve a single task',
+      description:
+        'Approves the specified task. Requires approval permission. ' +
+        'Stores approver ID, timestamp, and optional comment.',
+      params: { $ref: 'CuidParam#' },
+      body: approveTaskBodyJson,
+      response: {
+        200: {
+          description: 'Task approved.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { $ref: 'Task#' },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        404: { description: 'Task not found.', $ref: 'ApiError#' },
+        409: { description: 'Task is not in pending_approval state.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ApproveTaskBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await summaryService.approveTask(userId, id, parse.data.comment);
+      return reply.send({ success: true, data });
+    },
   });
 
   // ── GET /summary/provisions ───────────────────────────────────────────────
@@ -171,13 +233,21 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'array', items: provisionHomeJson },
+            data: {
+              type: 'array',
+              items: provisionHomeJson,
+              example: provisionsResponseExample,
+            },
           },
         },
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const data = await summaryService.getTodayProvisions(userId);
+      return reply.send({ success: true, data });
+    },
   });
 };
 

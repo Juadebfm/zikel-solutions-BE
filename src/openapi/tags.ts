@@ -13,6 +13,11 @@ export const TAGS = [
       'Authentication and session management — 4-step register, OTP verification, login, logout, and current-user.',
   },
   {
+    name: 'Public',
+    description:
+      'Public website endpoints for demo booking, waitlist signup, and contact messages.',
+  },
+  {
     name: 'Summary',
     description:
       'My Summary page — personal KPI stats, to-do list, approval queue, and today\'s provisions grouped by home.',

@@ -30,6 +30,22 @@ function generateOtpCode(): string {
   return randomInt(100_000, 1_000_000).toString();
 }
 
+type OtpIdentifier = { userId: string } | { email: string };
+
+async function findUserByOtpIdentifier(identifier: OtpIdentifier) {
+  if ('userId' in identifier) {
+    return prisma.user.findUnique({ where: { id: identifier.userId } });
+  }
+  return prisma.user.findUnique({ where: { email: identifier.email } });
+}
+
+function resolveOtpPurpose(body: VerifyOtpBody | ResendOtpBody): OtpPurpose {
+  if ('purpose' in body && body.purpose) {
+    return body.purpose as OtpPurpose;
+  }
+  return OtpPurpose.email_verification;
+}
+
 /**
  * Strips sensitive fields from a Prisma User before sending it over the wire.
  * Returns a plain object so it serialises cleanly to JSON.
@@ -45,6 +61,8 @@ function safeUser(user: {
   country: string;
   phoneNumber: string | null;
   avatarUrl: string | null;
+  language: string;
+  timezone: string;
   emailVerified: boolean;
   acceptedTerms: boolean;
   isActive: boolean;
@@ -63,6 +81,8 @@ function safeUser(user: {
     country: user.country,
     phoneNumber: user.phoneNumber,
     avatarUrl: user.avatarUrl,
+    language: user.language,
+    timezone: user.timezone,
     emailVerified: user.emailVerified,
     acceptedTerms: user.acceptedTerms,
     isActive: user.isActive,
@@ -120,6 +140,14 @@ export async function register(body: RegisterBody) {
   return { userId: user.id, message: 'OTP sent to your email address.' };
 }
 
+export async function checkEmailAvailability(email: string) {
+  const existing = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  return { available: !existing };
+}
+
 /**
  * Validates the 6-digit OTP, activates the account (for email_verification),
  * and returns the safe user + a raw refresh token for the caller to use.
@@ -127,14 +155,15 @@ export async function register(body: RegisterBody) {
  * The caller (route handler) is responsible for signing the JWT access token.
  */
 export async function verifyOtp(body: VerifyOtpBody) {
-  const user = await prisma.user.findUnique({ where: { id: body.userId } });
+  const user = await findUserByOtpIdentifier(body);
   if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  const purpose = resolveOtpPurpose(body);
 
   const otp = await prisma.otpCode.findFirst({
     where: {
-      userId: body.userId,
+      userId: user.id,
       code: body.code,
-      purpose: body.purpose as OtpPurpose,
+      purpose,
       usedAt: null,
       expiresAt: { gt: new Date() },
     },
@@ -149,7 +178,7 @@ export async function verifyOtp(body: VerifyOtpBody) {
 
   // Activate account on email verification
   let updatedUser = user;
-  if (body.purpose === 'email_verification') {
+  if (purpose === OtpPurpose.email_verification) {
     updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: { emailVerified: true },
@@ -173,11 +202,12 @@ export async function verifyOtp(body: VerifyOtpBody) {
  * Enforces a 60-second cooldown between requests.
  */
 export async function resendOtp(body: ResendOtpBody) {
-  const user = await prisma.user.findUnique({ where: { id: body.userId } });
+  const user = await findUserByOtpIdentifier(body);
   if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  const purpose = resolveOtpPurpose(body);
 
   const recent = await prisma.otpCode.findFirst({
-    where: { userId: body.userId, purpose: body.purpose as OtpPurpose },
+    where: { userId: user.id, purpose },
     orderBy: { createdAt: 'desc' },
   });
 
@@ -193,7 +223,7 @@ export async function resendOtp(body: ResendOtpBody) {
     }
     // Invalidate all previous unused OTPs for this user + purpose
     await prisma.otpCode.updateMany({
-      where: { userId: body.userId, purpose: body.purpose as OtpPurpose, usedAt: null },
+      where: { userId: user.id, purpose, usedAt: null },
       data: { usedAt: new Date() },
     });
   }
@@ -203,12 +233,12 @@ export async function resendOtp(body: ResendOtpBody) {
     data: {
       userId: user.id,
       code,
-      purpose: body.purpose as OtpPurpose,
+      purpose,
       expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
     },
   });
 
-  await sendOtpEmail(user.email, code, body.purpose as OtpPurpose);
+  await sendOtpEmail(user.email, code, purpose);
 
   return { message: 'A new OTP has been sent to your email.', cooldownSeconds: OTP_COOLDOWN_MS / 1_000 };
 }
@@ -229,6 +259,10 @@ export async function login(body: LoginBody) {
 
   if (user.lockedUntil && user.lockedUntil > new Date()) {
     throw httpError(403, 'ACCOUNT_LOCKED', 'Account is temporarily locked. Please try again later.');
+  }
+
+  if (!user.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
   }
 
   const passwordMatch = await bcrypt.compare(body.password, user.passwordHash);
@@ -268,18 +302,18 @@ export async function login(body: LoginBody) {
 }
 
 /**
- * Revokes the provided refresh token.
+ * Revokes the provided refresh token for the authenticated user.
  * Idempotent — silently succeeds if the token is not found.
  */
-export async function logout(refreshToken: string) {
-  const stored = await prisma.refreshToken.findUnique({ where: { token: refreshToken } });
-  if (stored) {
-    await prisma.refreshToken.update({
-      where: { id: stored.id },
-      data: { revokedAt: new Date() },
-    });
+export async function logout(refreshToken: string, actorUserId: string) {
+  const result = await prisma.refreshToken.updateMany({
+    where: { token: refreshToken, userId: actorUserId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  if (result.count > 0) {
     await prisma.auditLog.create({
-      data: { userId: stored.userId, action: AuditAction.logout },
+      data: { userId: actorUserId, action: AuditAction.logout },
     });
   }
 }
@@ -351,7 +385,7 @@ export async function refreshAccessToken(body: RefreshBody) {
  * Generates a password_reset OTP and sends it to the given email.
  *
  * Always returns the same response regardless of whether the email is registered,
- * to prevent user enumeration.
+ * and never reveals cooldown state for existing accounts.
  */
 export async function forgotPassword(body: ForgotPasswordBody) {
   const user = await prisma.user.findUnique({ where: { email: body.email } });
@@ -370,12 +404,8 @@ export async function forgotPassword(body: ForgotPasswordBody) {
   if (recent) {
     const elapsedMs = Date.now() - recent.createdAt.getTime();
     if (elapsedMs < OTP_COOLDOWN_MS) {
-      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - elapsedMs) / 1_000);
-      throw httpError(
-        429,
-        'OTP_COOLDOWN',
-        `Please wait ${remainingSec} seconds before requesting a new OTP.`,
-      );
+      // Return the same generic response to avoid account enumeration via cooldown signals.
+      return { message: 'If that email is registered, an OTP has been sent.' };
     }
     // Invalidate all previous unused password_reset OTPs
     await prisma.otpCode.updateMany({
@@ -407,12 +437,12 @@ export async function forgotPassword(body: ForgotPasswordBody) {
  * Audit logs the password_change action.
  */
 export async function resetPassword(body: ResetPasswordBody) {
-  const user = await prisma.user.findUnique({ where: { id: body.userId } });
-  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  if (!user) throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
 
   const otp = await prisma.otpCode.findFirst({
     where: {
-      userId: body.userId,
+      userId: user.id,
       code: body.code,
       purpose: OtpPurpose.password_reset,
       usedAt: null,

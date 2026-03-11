@@ -1,10 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { createWidgetBodyJson } from './dashboard.schema.js';
-
-const NOT_IMPLEMENTED = {
-  success: false as const,
-  error: { code: 'NOT_IMPLEMENTED', message: 'This endpoint is not yet implemented — Phase 4.' },
-};
+import type { JwtPayload } from '../../types/index.js';
+import * as dashboardService from './dashboard.service.js';
+import { CreateWidgetBodySchema, createWidgetBodyJson } from './dashboard.schema.js';
 
 const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   // All dashboard routes require authentication
@@ -29,7 +26,11 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const data = await dashboardService.getDashboardStats(userId);
+      return reply.send({ success: true, data });
+    },
   });
 
   // ── GET /dashboard/widgets ────────────────────────────────────────────────
@@ -52,7 +53,11 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const data = await dashboardService.listWidgets(userId);
+      return reply.send({ success: true, data });
+    },
   });
 
   // ── POST /dashboard/widgets ───────────────────────────────────────────────
@@ -78,7 +83,20 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const parse = CreateWidgetBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const data = await dashboardService.createWidget(userId, parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
   });
 
   // ── DELETE /dashboard/widgets/:id ─────────────────────────────────────────
@@ -107,7 +125,12 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
         404: { description: 'Widget not found.', $ref: 'ApiError#' },
       },
     },
-    handler: async (_req, reply) => { reply.statusCode = 501; return reply.send(NOT_IMPLEMENTED as never); },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await dashboardService.deleteWidget(userId, id);
+      return reply.send({ success: true, data });
+    },
   });
 };
 

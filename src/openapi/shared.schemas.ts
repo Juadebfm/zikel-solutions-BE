@@ -87,6 +87,8 @@ export const UserSchema = {
     country: { type: 'string', enum: ['UK', 'Nigeria'] },
     phoneNumber: { type: 'string', nullable: true },
     avatarUrl: { type: 'string', format: 'uri', nullable: true },
+    language: { type: 'string', example: 'en' },
+    timezone: { type: 'string', example: 'Europe/London' },
     emailVerified: { type: 'boolean' },
     acceptedTerms: { type: 'boolean' },
     isActive: { type: 'boolean' },

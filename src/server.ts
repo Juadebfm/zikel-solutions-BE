@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
+import { fileURLToPath } from 'url';
 import Fastify, { type FastifyError } from 'fastify';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
@@ -113,4 +114,8 @@ async function start() {
   process.on('SIGINT',  () => { void shutdown('SIGINT'); });
 }
 
-start();
+const isDirectRun = process.argv[1] !== undefined && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isDirectRun) {
+  void start();
+}

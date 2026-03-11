@@ -1,8 +1,8 @@
-# fly.toml — Fly.io deployment configuration for Zikel Solutions BE
+# fly.toml — Fly.io deployment configuration for zikel-solutions
 # Deploy: fly deploy
 # Rollback: fly releases && fly deploy --image <image-id>
 
-app = "zikel-solutions-be"
+app = "zikel-solutions"
 primary_region = "lhr"  # London — align with Neon region
 
 [build]

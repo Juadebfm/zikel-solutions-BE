@@ -137,6 +137,8 @@ model User {
   country        Country   @default(UK)
   phoneNumber    String?
   avatarUrl      String?
+  language       String    @default("en")
+  timezone       String    @default("Europe/London")
   emailVerified  Boolean   @default(false)
   acceptedTerms  Boolean   @default(false)
   isActive       Boolean   @default(true)
@@ -151,6 +153,7 @@ model User {
   auditLogs      AuditLog[]
   employee       Employee?
   widgets        Widget[]
+  announcementReads AnnouncementRead[]
 
   @@index([email])
   @@index([role])
@@ -212,6 +215,8 @@ model Home {
   careGroup   CareGroup   @relation(fields: [careGroupId], references: [id])
   employees   Employee[]
   youngPeople YoungPerson[]
+  events      HomeEvent[]
+  shifts      EmployeeShift[]
 
   @@index([careGroupId])
 }
@@ -232,8 +237,42 @@ model Employee {
   home        Home?     @relation(fields: [homeId], references: [id])
   tasks       Task[]    @relation("TaskAssignee")
   approvedTasks Task[]  @relation("TaskApprover")
+  shifts      EmployeeShift[]
 
   @@index([homeId])
+}
+
+// ─── Home Events & Shifts ────────────────────────────────────────────────────
+
+model HomeEvent {
+  id          String    @id @default(cuid())
+  homeId      String
+  title       String
+  description String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@index([homeId, startsAt])
+}
+
+model EmployeeShift {
+  id          String    @id @default(cuid())
+  homeId      String
+  employeeId  String
+  startTime   DateTime
+  endTime     DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([homeId, startTime])
+  @@index([employeeId, startTime])
 }
 
 // ─── Young People ─────────────────────────────────────────────────────────────
@@ -311,15 +350,33 @@ model Announcement {
   id          String    @id @default(cuid())
   title       String
   body        String
+  images      String[]  @default([])
   publishedAt DateTime  @default(now())
   expiresAt   DateTime?
   authorId    String?
   isPinned    Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  reads       AnnouncementRead[]
 
   @@index([publishedAt])
   @@index([isPinned])
+}
+
+model AnnouncementRead {
+  id             String        @id @default(cuid())
+  announcementId String
+  userId         String
+  readAt         DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+
+  announcement   Announcement  @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([announcementId])
+  @@index([userId])
+  @@index([readAt])
 }
 
 // ─── Dashboard Widgets ────────────────────────────────────────────────────────
