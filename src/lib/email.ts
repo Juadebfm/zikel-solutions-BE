@@ -26,7 +26,7 @@ const WHITE_LOGO_URL = 'https://zikel-solutions.fly.dev/assets/white-logo.svg';
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const SERVICE_LABELS: Record<string, string> = {
-  digital_filing_cabinet: "Digital Filing Cabinet for Children's Homes",
+  care_documentation_platform: "Care Documentation Platform for Children's Homes",
   ai_staff_guidance: 'AI Staff Guidance & Support System',
   training_development: 'Training & Professional Development Intelligence',
   healthcare_workflow: 'Healthcare Workflow Support Software',

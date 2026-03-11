@@ -3,7 +3,7 @@ import { z } from 'zod';
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
 export const SERVICE_OPTIONS = [
-  'digital_filing_cabinet',
+  'care_documentation_platform',
   'ai_staff_guidance',
   'training_development',
   'healthcare_workflow',
