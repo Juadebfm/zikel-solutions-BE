@@ -344,6 +344,10 @@ Response `200`: same as get preferences.
 
 All three endpoints are rate limited (`10 requests / 10 minutes / IP`).
 
+Important enum update:
+- `serviceOfInterest` now uses `care_documentation_platform`.
+- Deprecated legacy values are removed and will return `422 VALIDATION_ERROR` if sent.
+
 #### POST `/public/book-demo`
 Body:
 ```json
@@ -891,6 +895,7 @@ Response `200`:
 - Use `pageSize` on most list endpoints.
 - Use `limit` (not `pageSize`) on `/announcements`.
 - Send ISO date-time where required (e.g. employee `startDate`), and `YYYY-MM-DD` for young person `dateOfBirth`.
+- Send `serviceOfInterest: "care_documentation_platform"` for digital documentation/demo use cases.
 - Treat `403` as authorization (role/permission), not token expiry.
 - Handle `422` by displaying backend validation message to user.
 - Expect some "delete" endpoints to be soft-delete (record becomes inactive).
@@ -900,6 +905,7 @@ Response `200`:
 - Do not send extra unexpected fields (`additionalProperties: false` is enforced on many bodies).
 - Do not keep using an old refresh token after `/auth/refresh` success.
 - Do not assume `/announcements/:id` is read-only; it marks as read by design.
+- Do not send deprecated `serviceOfInterest` values.
 - Do not rely on public endpoint email delivery status for success; DB persistence is the success signal.
 
 ## 8) Quick FE Types (optional)
