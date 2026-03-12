@@ -48,6 +48,7 @@ export async function listAnnouncements(userId: string, query: ListAnnouncements
 
   const where: Prisma.AnnouncementWhereInput = {
     tenantId: tenant.tenantId,
+    deletedAt: null,
     publishedAt: { lte: now },
     OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
     ...(query.status === 'read'
@@ -87,8 +88,15 @@ export async function listAnnouncements(userId: string, query: ListAnnouncements
 
 export async function getAnnouncement(userId: string, id: string, markAsRead = true) {
   const tenant = await requireTenantContext(userId);
+  const now = new Date();
   const announcement = await prisma.announcement.findFirst({
-    where: { id, tenantId: tenant.tenantId },
+    where: {
+      id,
+      tenantId: tenant.tenantId,
+      deletedAt: null,
+      publishedAt: { lte: now },
+      OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+    },
     include: {
       reads: {
         where: { userId },
@@ -125,8 +133,15 @@ export async function getAnnouncement(userId: string, id: string, markAsRead = t
 
 export async function markAnnouncementRead(userId: string, id: string) {
   const tenant = await requireTenantContext(userId);
+  const now = new Date();
   const exists = await prisma.announcement.findFirst({
-    where: { id, tenantId: tenant.tenantId },
+    where: {
+      id,
+      tenantId: tenant.tenantId,
+      deletedAt: null,
+      publishedAt: { lte: now },
+      OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+    },
     select: { id: true },
   });
 
@@ -185,7 +200,7 @@ export async function createAnnouncement(actorId: string, body: CreateAnnounceme
 export async function updateAnnouncement(actorId: string, id: string, body: UpdateAnnouncementBody) {
   const tenant = await requireTenantContext(actorId);
   const existing = await prisma.announcement.findFirst({
-    where: { id, tenantId: tenant.tenantId },
+    where: { id, tenantId: tenant.tenantId, deletedAt: null },
     select: { id: true },
   });
 
@@ -226,7 +241,7 @@ export async function updateAnnouncement(actorId: string, id: string, body: Upda
 export async function deleteAnnouncement(actorId: string, id: string) {
   const tenant = await requireTenantContext(actorId);
   const existing = await prisma.announcement.findFirst({
-    where: { id, tenantId: tenant.tenantId },
+    where: { id, tenantId: tenant.tenantId, deletedAt: null },
     select: { id: true },
   });
 
@@ -234,7 +249,15 @@ export async function deleteAnnouncement(actorId: string, id: string) {
     throw httpError(404, 'ANNOUNCEMENT_NOT_FOUND', 'Announcement not found.');
   }
 
-  await prisma.announcement.delete({ where: { id } });
+  const deletedAt = new Date();
+  await prisma.announcement.update({
+    where: { id },
+    data: {
+      deletedAt,
+      isPinned: false,
+      expiresAt: deletedAt,
+    },
+  });
 
   await prisma.auditLog.create({
     data: {
@@ -243,8 +266,12 @@ export async function deleteAnnouncement(actorId: string, id: string) {
       action: AuditAction.record_deleted,
       entityType: 'announcement',
       entityId: id,
+      metadata: {
+        softDelete: true,
+        deletedAt: deletedAt.toISOString(),
+      },
     },
   });
 
-  return { message: 'Announcement deleted.' };
+  return { message: 'Announcement archived.' };
 }

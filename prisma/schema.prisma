@@ -46,6 +46,7 @@ enum MembershipStatus {
 enum OtpPurpose {
   email_verification
   password_reset
+  mfa_challenge
 }
 
 enum AuditAction {
@@ -55,9 +56,28 @@ enum AuditAction {
   password_change
   otp_verified
   record_created
+  record_accessed
   record_updated
   record_deleted
   permission_changed
+}
+
+enum SecurityAlertType {
+  repeated_auth_failures
+  cross_tenant_attempts
+  admin_changes
+  break_glass_access
+}
+
+enum SecurityAlertSeverity {
+  medium
+  high
+}
+
+enum SecurityAlertDeliveryStatus {
+  pending
+  delivered
+  failed
 }
 
 enum TaskStatus {
@@ -168,6 +188,7 @@ model User {
   refreshTokens  RefreshToken[]
   otpCodes       OtpCode[]
   auditLogs      AuditLog[]
+  securityAlertDeliveries SecurityAlertDelivery[]
   tenantMemberships TenantMembership[] @relation("UserTenantMemberships")
   sentTenantInvites TenantMembership[] @relation("UserTenantInvites")
   tenantInvitationsSent TenantInvite[] @relation("UserSentTenantInvites")
@@ -204,6 +225,7 @@ model Tenant {
   announcements Announcement[]
   widgets     Widget[]
   auditLogs   AuditLog[]
+  securityAlertDeliveries SecurityAlertDelivery[]
 
   @@index([name])
   @@index([isActive])
@@ -451,6 +473,7 @@ model Task {
   approvedById     String?
   youngPersonId    String?
   createdById      String?
+  deletedAt        DateTime?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
@@ -465,6 +488,7 @@ model Task {
   @@index([assigneeId])
   @@index([dueDate])
   @@index([createdById])
+  @@index([deletedAt])
 }
 
 // ─── Announcements ────────────────────────────────────────────────────────────
@@ -479,6 +503,7 @@ model Announcement {
   expiresAt   DateTime?
   authorId    String?
   isPinned    Boolean   @default(false)
+  deletedAt   DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -487,6 +512,7 @@ model Announcement {
   @@index([tenantId])
   @@index([publishedAt])
   @@index([isPinned])
+  @@index([deletedAt])
 }
 
 model AnnouncementRead {
@@ -540,10 +566,36 @@ model AuditLog {
 
   tenant     Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  securityAlertDelivery SecurityAlertDelivery?
 
   @@index([tenantId])
   @@index([userId])
   @@index([action])
   @@index([entityType, entityId])
   @@index([createdAt])
+}
+
+model SecurityAlertDelivery {
+  id          String                      @id @default(cuid())
+  auditLogId  String                      @unique
+  tenantId    String?
+  userId      String?
+  type        SecurityAlertType
+  severity    SecurityAlertSeverity
+  status      SecurityAlertDeliveryStatus @default(pending)
+  attemptCount Int                        @default(0)
+  lastError   String?
+  payload     Json
+  webhookUrl  String?
+  dispatchedAt DateTime?
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
+
+  auditLog    AuditLog                    @relation(fields: [auditLogId], references: [id], onDelete: Cascade)
+  tenant      Tenant?                     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user        User?                       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([tenantId, type, createdAt])
+  @@index([userId, type, createdAt])
 }

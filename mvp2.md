@@ -158,6 +158,22 @@ Phase 1 goal: establish secure tenant foundation, not full product parity.
 - [x] Apply migration to target database(s): `npx prisma migrate deploy`.
 - [x] Code quality checks passed locally (`typecheck`, `lint`, `test`).
 
+### Current Product Gaps (Implement ASAP)
+
+- [x] Add real-time security alert pipeline (webhook/queue/notifications) instead of on-demand aggregation only.
+- [x] Enforce automatic break-glass expiry rollback to previous tenant context when `expiresAt` passes.
+- [x] Send tenant invite emails automatically on invite creation (instead of manual token sharing only).
+- [x] Resolve authorization model mismatch: align route-level global-role guards with tenant-role permissions.
+- [x] Add tenant-admin membership management endpoints (list/update members) without requiring super-admin for all actions.
+- [x] Add self-serve organization onboarding path (optional controlled flow) or explicit admin-operated onboarding UX.
+- [x] Implement and enforce MFA challenge flow for privileged sessions (`super_admin`, `tenant_admin`) instead of metadata-only flags.
+- [x] Expand audit coverage to include sensitive read/access events (not only writes/permission changes).
+- [x] Standardize audit metadata capture (ip/userAgent/requestId/source) across all privileged actions.
+- [x] Add explicit break-glass release/reset endpoint and clearer super-admin cross-tenant audit scope lifecycle.
+- [x] Unify password hashing path so all password changes use Argon2id consistently.
+- [x] Implement real data sources for summary `comments` and `rewards` metrics (currently placeholders).
+- [x] Harmonize deletion/retention strategy across modules (soft-delete vs hard-delete) based on compliance/audit requirements.
+
 ---
 
 ## Implementation Checklist (Use During Development)

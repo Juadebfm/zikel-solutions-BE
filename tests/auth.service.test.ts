@@ -144,6 +144,61 @@ describe('auth.service', () => {
     expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
   });
 
+  it('issues MFA challenge OTP for privileged sessions', async () => {
+    const superAdmin = makeUser({
+      id: 'super_1',
+      role: 'super_admin',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(superAdmin);
+    mockPrisma.otpCode.findFirst.mockResolvedValueOnce(null);
+    mockPrisma.otpCode.create.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    sendOtpEmail.mockResolvedValueOnce(undefined);
+
+    const result = await authService.requestMfaChallenge('super_1');
+
+    expect(mockPrisma.otpCode.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'super_1',
+        purpose: 'mfa_challenge',
+      }),
+    });
+    expect(result).toMatchObject({
+      otpDeliveryStatus: 'sent',
+      message: 'MFA code sent to your email.',
+      cooldownSeconds: 60,
+    });
+  });
+
+  it('verifies MFA challenge and returns session with mfaVerified=true', async () => {
+    const superAdmin = makeUser({
+      id: 'super_1',
+      role: 'super_admin',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(superAdmin);
+    mockPrisma.otpCode.findFirst.mockResolvedValueOnce({ id: 'otp_mfa_1' });
+    mockPrisma.otpCode.update.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const result = await authService.verifyMfaChallenge('super_1', { code: '123456' });
+
+    expect(result).toMatchObject({
+      user: { id: 'super_1' },
+      session: {
+        mfaRequired: true,
+        mfaVerified: true,
+      },
+    });
+    expect(mockPrisma.otpCode.update).toHaveBeenCalledWith({
+      where: { id: 'otp_mfa_1' },
+      data: { usedAt: expect.any(Date) },
+    });
+  });
+
   it('verifies OTP using email identifier and issues tokens', async () => {
     const user = makeUser();
     mockPrisma.user.findUnique.mockResolvedValueOnce(user);

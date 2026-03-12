@@ -1,6 +1,7 @@
 import { AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { httpError } from './errors.js';
+import { reconcileExpiredBreakGlassAccess } from './break-glass.js';
 
 export interface TenantContext {
   tenantId: string;
@@ -46,7 +47,13 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  if (!user.activeTenantId) {
+  const activeTenantId = await reconcileExpiredBreakGlassAccess({
+    userId: user.id,
+    userRole: user.role,
+    activeTenantId: user.activeTenantId,
+  });
+
+  if (!activeTenantId) {
     await logCrossTenantBlock({
       userId,
       tenantId: null,
@@ -60,14 +67,14 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
   }
 
   const tenant = await prisma.tenant.findUnique({
-    where: { id: user.activeTenantId },
+    where: { id: activeTenantId },
     select: { id: true, isActive: true },
   });
 
   if (!tenant || !tenant.isActive) {
     await logCrossTenantBlock({
       userId,
-      tenantId: user.activeTenantId,
+      tenantId: activeTenantId,
       reason: 'inactive_or_missing_tenant',
     });
     throw httpError(403, 'TENANT_INACTIVE', 'Active tenant is not available.');
@@ -75,7 +82,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
 
   if (user.role === UserRole.super_admin) {
     return {
-      tenantId: user.activeTenantId,
+      tenantId: activeTenantId,
       userRole: user.role,
       tenantRole: null,
     };
@@ -84,7 +91,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
   const membership = await prisma.tenantMembership.findUnique({
     where: {
       tenantId_userId: {
-        tenantId: user.activeTenantId,
+        tenantId: activeTenantId,
         userId,
       },
     },
@@ -97,7 +104,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
   if (!membership || membership.status !== MembershipStatus.active) {
     await logCrossTenantBlock({
       userId,
-      tenantId: user.activeTenantId,
+      tenantId: activeTenantId,
       reason: 'inactive_membership',
     });
     throw httpError(
@@ -108,7 +115,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
   }
 
   return {
-    tenantId: user.activeTenantId,
+    tenantId: activeTenantId,
     userRole: user.role,
     tenantRole: membership.role,
   };

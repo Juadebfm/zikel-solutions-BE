@@ -6,6 +6,8 @@ import bcrypt from 'bcryptjs';
 import {
   PrismaClient,
   UserRole,
+  TenantRole,
+  MembershipStatus,
   TaskStatus,
   TaskApprovalStatus,
   TaskPriority,
@@ -135,19 +137,76 @@ async function main() {
     },
   });
 
+  const tenant = await prisma.tenant.upsert({
+    where: { slug: 'zikel-dev' },
+    update: {
+      name: 'Zikel Dev Tenant',
+      country: Country.UK,
+      isActive: true,
+    },
+    create: {
+      name: 'Zikel Dev Tenant',
+      slug: 'zikel-dev',
+      country: Country.UK,
+      isActive: true,
+    },
+  });
+
+  await prisma.user.updateMany({
+    where: { id: { in: [adminUser.id, managerUser.id, staffNorthUser.id, staffSouthUser.id] } },
+    data: { activeTenantId: tenant.id },
+  });
+
+  const ensureMembership = async (userId: string, role: TenantRole) => {
+    await prisma.tenantMembership.upsert({
+      where: {
+        tenantId_userId: {
+          tenantId: tenant.id,
+          userId,
+        },
+      },
+      update: {
+        role,
+        status: MembershipStatus.active,
+      },
+      create: {
+        tenantId: tenant.id,
+        userId,
+        role,
+        status: MembershipStatus.active,
+        invitedById: adminUser.id,
+      },
+    });
+  };
+
+  await ensureMembership(adminUser.id, TenantRole.tenant_admin);
+  await ensureMembership(managerUser.id, TenantRole.sub_admin);
+  await ensureMembership(staffNorthUser.id, TenantRole.staff);
+  await ensureMembership(staffSouthUser.id, TenantRole.staff);
+
   const careGroup = await prisma.careGroup.upsert({
-    where: { name: 'Northern Region' },
+    where: {
+      tenantId_name: {
+        tenantId: tenant.id,
+        name: 'Northern Region',
+      },
+    },
     update: {},
-    create: { name: 'Northern Region', description: 'Care homes in the northern region' },
+    create: {
+      tenantId: tenant.id,
+      name: 'Northern Region',
+      description: 'Care homes in the northern region',
+    },
   });
 
   const existingNorthHome = await prisma.home.findFirst({
-    where: { careGroupId: careGroup.id, name: 'Sunrise House' },
+    where: { tenantId: tenant.id, careGroupId: careGroup.id, name: 'Sunrise House' },
   });
   const northHome =
     existingNorthHome ??
     (await prisma.home.create({
       data: {
+        tenantId: tenant.id,
         careGroupId: careGroup.id,
         name: 'Sunrise House',
         address: '1 Sunrise Road, Leeds, LS1 1AA',
@@ -156,12 +215,13 @@ async function main() {
     }));
 
   const existingSouthHome = await prisma.home.findFirst({
-    where: { careGroupId: careGroup.id, name: 'Oakview House' },
+    where: { tenantId: tenant.id, careGroupId: careGroup.id, name: 'Oakview House' },
   });
   const southHome =
     existingSouthHome ??
     (await prisma.home.create({
       data: {
+        tenantId: tenant.id,
         careGroupId: careGroup.id,
         name: 'Oakview House',
         address: '2 Oakview Lane, Manchester, M1 2AA',
@@ -170,13 +230,19 @@ async function main() {
     }));
 
   const managerEmployee = await prisma.employee.upsert({
-    where: { userId: managerUser.id },
+    where: {
+      tenantId_userId: {
+        tenantId: tenant.id,
+        userId: managerUser.id,
+      },
+    },
     update: {
       homeId: northHome.id,
       jobTitle: 'Home Manager',
       startDate: new Date('2025-11-01T09:00:00.000Z'),
     },
     create: {
+      tenantId: tenant.id,
       userId: managerUser.id,
       homeId: northHome.id,
       jobTitle: 'Home Manager',
@@ -185,13 +251,19 @@ async function main() {
   });
 
   const northEmployee = await prisma.employee.upsert({
-    where: { userId: staffNorthUser.id },
+    where: {
+      tenantId_userId: {
+        tenantId: tenant.id,
+        userId: staffNorthUser.id,
+      },
+    },
     update: {
       homeId: northHome.id,
       jobTitle: 'Support Worker',
       startDate: new Date('2026-01-15T09:00:00.000Z'),
     },
     create: {
+      tenantId: tenant.id,
       userId: staffNorthUser.id,
       homeId: northHome.id,
       jobTitle: 'Support Worker',
@@ -200,13 +272,19 @@ async function main() {
   });
 
   const southEmployee = await prisma.employee.upsert({
-    where: { userId: staffSouthUser.id },
+    where: {
+      tenantId_userId: {
+        tenantId: tenant.id,
+        userId: staffSouthUser.id,
+      },
+    },
     update: {
       homeId: southHome.id,
       jobTitle: 'Support Worker',
       startDate: new Date('2026-01-20T09:00:00.000Z'),
     },
     create: {
+      tenantId: tenant.id,
       userId: staffSouthUser.id,
       homeId: southHome.id,
       jobTitle: 'Support Worker',
@@ -215,7 +293,12 @@ async function main() {
   });
 
   const ypNorth = await prisma.youngPerson.upsert({
-    where: { referenceNo: 'YP-NORTH-001' },
+    where: {
+      tenantId_referenceNo: {
+        tenantId: tenant.id,
+        referenceNo: 'YP-NORTH-001',
+      },
+    },
     update: {
       homeId: northHome.id,
       firstName: 'Liam',
@@ -223,6 +306,7 @@ async function main() {
       isActive: true,
     },
     create: {
+      tenantId: tenant.id,
       homeId: northHome.id,
       firstName: 'Liam',
       lastName: 'Carter',
@@ -232,7 +316,12 @@ async function main() {
   });
 
   const ypSouth = await prisma.youngPerson.upsert({
-    where: { referenceNo: 'YP-SOUTH-001' },
+    where: {
+      tenantId_referenceNo: {
+        tenantId: tenant.id,
+        referenceNo: 'YP-SOUTH-001',
+      },
+    },
     update: {
       homeId: southHome.id,
       firstName: 'Ava',
@@ -240,6 +329,7 @@ async function main() {
       isActive: true,
     },
     create: {
+      tenantId: tenant.id,
       homeId: southHome.id,
       firstName: 'Ava',
       lastName: 'Morris',
@@ -251,24 +341,28 @@ async function main() {
   // Reset previous timeline seed data for a deterministic rerun.
   await prisma.employeeShift.deleteMany({
     where: {
+      tenantId: tenant.id,
       startTime: { gte: seedStart, lte: now },
       homeId: { in: [northHome.id, southHome.id] },
     },
   });
   await prisma.homeEvent.deleteMany({
     where: {
+      tenantId: tenant.id,
       startsAt: { gte: seedStart, lte: now },
       homeId: { in: [northHome.id, southHome.id] },
     },
   });
   await prisma.task.deleteMany({
     where: {
+      tenantId: tenant.id,
       createdById: adminUser.id,
       dueDate: { gte: seedStart, lte: now },
     },
   });
 
   const eventsData: Array<{
+    tenantId: string;
     homeId: string;
     title: string;
     description: string;
@@ -279,6 +373,7 @@ async function main() {
   }> = [];
 
   const shiftsData: Array<{
+    tenantId: string;
     homeId: string;
     employeeId: string;
     startTime: Date;
@@ -288,6 +383,7 @@ async function main() {
   }> = [];
 
   const tasksData: Array<{
+    tenantId: string;
     title: string;
     description: string;
     status: TaskStatus;
@@ -314,6 +410,7 @@ async function main() {
 
     eventsData.push(
       {
+        tenantId: tenant.id,
         homeId: northHome.id,
         title: isWeekend ? 'Weekend Wellbeing Session' : 'Morning Provision Planning',
         description: 'Daily support planning, risk checks, and priorities review.',
@@ -323,6 +420,7 @@ async function main() {
         updatedAt: northEventStart,
       },
       {
+        tenantId: tenant.id,
         homeId: southHome.id,
         title: isWeekend ? 'Community Activity Briefing' : 'Education & Care Coordination',
         description: 'Cross-team sync for education attendance and care delivery.',
@@ -335,6 +433,7 @@ async function main() {
 
     shiftsData.push(
       {
+        tenantId: tenant.id,
         homeId: northHome.id,
         employeeId: northEmployee.id,
         startTime: atHour(day, 7, 0),
@@ -343,6 +442,7 @@ async function main() {
         updatedAt: atHour(day, 7, 0),
       },
       {
+        tenantId: tenant.id,
         homeId: northHome.id,
         employeeId: managerEmployee.id,
         startTime: atHour(day, 9, 0),
@@ -351,6 +451,7 @@ async function main() {
         updatedAt: atHour(day, 9, 0),
       },
       {
+        tenantId: tenant.id,
         homeId: southHome.id,
         employeeId: southEmployee.id,
         startTime: atHour(day, 8, 0),
@@ -373,6 +474,7 @@ async function main() {
           : TaskApprovalStatus.not_required;
 
     tasksData.push({
+      tenantId: tenant.id,
       title: `North Home Daily Note ${index + 1}`,
       description: 'Update care notes and complete end-of-day summary.',
       status: northStatus,
@@ -404,6 +506,7 @@ async function main() {
           : TaskApprovalStatus.not_required;
 
     tasksData.push({
+      tenantId: tenant.id,
       title: `South Home Daily Task ${index + 1}`,
       description: 'Prepare activity report and safeguarding checklist.',
       status: southStatus,
@@ -441,7 +544,7 @@ async function main() {
     + `with ${eventsData.length} events, ${shiftsData.length} shifts, ${tasksData.length} tasks.`,
   );
   console.log(
-    `Core entities: admin(${adminUser.id}), manager(${managerUser.id}), homes(${northHome.id}, ${southHome.id}).`,
+    `Core entities: tenant(${tenant.id}), admin(${adminUser.id}), manager(${managerUser.id}), homes(${northHome.id}, ${southHome.id}).`,
   );
 }
 

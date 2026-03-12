@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import type { CreateHomeBody, ListHomesQuery, UpdateHomeBody } from './homes.schema.js';
 
@@ -68,6 +69,22 @@ export async function listHomes(actorId: string, query: ListHomesQuery) {
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'home',
+    source: 'homes.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      careGroupId: query.careGroupId ?? null,
+      hasSearch: Boolean(query.search),
+      isActive: query.isActive ?? null,
+    },
+  });
+
   return {
     data: rows.map(mapHome),
     meta: {
@@ -88,6 +105,17 @@ export async function getHome(actorId: string, id: string) {
   if (!home) {
     throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'home',
+    entityId: id,
+    source: 'homes.get',
+    scope: 'detail',
+    resultCount: 1,
+  });
+
   return mapHome(home);
 }
 

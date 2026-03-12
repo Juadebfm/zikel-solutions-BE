@@ -28,6 +28,7 @@ const TODO_SORTABLE_FIELDS = new Set([
   'createdAt',
   'updatedAt',
 ]);
+const REWARD_POINTS_PER_COMPLETED_TASK = 10;
 
 function getTodayBounds() {
   const start = new Date();
@@ -85,7 +86,7 @@ function buildPersonalTaskScope(user: UserContext): Prisma.TaskWhereInput {
   if (user.employee?.id) {
     return {
       AND: [
-        { tenantId: user.tenantId },
+        { tenantId: user.tenantId, deletedAt: null },
         { OR: [{ assigneeId: user.employee.id }, { createdById: user.id }] },
       ],
     };
@@ -93,6 +94,7 @@ function buildPersonalTaskScope(user: UserContext): Prisma.TaskWhereInput {
   return {
     tenantId: user.tenantId,
     createdById: user.id,
+    deletedAt: null,
   };
 }
 
@@ -145,12 +147,13 @@ export async function getSummaryStats(userId: string) {
   const user = await getUserContext(userId);
   const scope = buildPersonalTaskScope(user);
   const { start, end } = getTodayBounds();
+  const now = new Date();
 
   const withScope = (extra: Prisma.TaskWhereInput): Prisma.TaskWhereInput => ({
     AND: [scope, extra],
   });
 
-  const [overdue, dueToday, pendingApproval, rejected, draft, future] =
+  const [overdue, dueToday, pendingApproval, rejected, draft, future, comments, completedTasks] =
     await Promise.all([
       prisma.task.count({
         where: withScope({
@@ -166,7 +169,11 @@ export async function getSummaryStats(userId: string) {
       }),
       prisma.task.count({
         where: canApprove(user)
-          ? { tenantId: user.tenantId, approvalStatus: TaskApprovalStatus.pending_approval }
+          ? {
+              tenantId: user.tenantId,
+              deletedAt: null,
+              approvalStatus: TaskApprovalStatus.pending_approval,
+            }
           : withScope({ approvalStatus: TaskApprovalStatus.pending_approval }),
       }),
       prisma.task.count({
@@ -178,6 +185,18 @@ export async function getSummaryStats(userId: string) {
       prisma.task.count({
         where: withScope({ dueDate: { gt: end } }),
       }),
+      prisma.announcement.count({
+        where: {
+          tenantId: user.tenantId,
+          deletedAt: null,
+          publishedAt: { lte: now },
+          OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
+          reads: { none: { userId: user.id } },
+        },
+      }),
+      prisma.task.count({
+        where: withScope({ status: TaskStatus.completed }),
+      }),
     ]);
 
   return {
@@ -187,8 +206,8 @@ export async function getSummaryStats(userId: string) {
     rejected,
     draft,
     future,
-    comments: 0,
-    rewards: 0,
+    comments,
+    rewards: completedTasks * REWARD_POINTS_PER_COMPLETED_TASK,
   };
 }
 
@@ -244,7 +263,7 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
 
   const skip = (query.page - 1) * query.pageSize;
   const filters: Prisma.TaskWhereInput[] = [
-    { tenantId: user.tenantId, approvalStatus: TaskApprovalStatus.pending_approval },
+    { tenantId: user.tenantId, deletedAt: null, approvalStatus: TaskApprovalStatus.pending_approval },
   ];
 
   if (query.search) {
@@ -280,7 +299,7 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
   }
 
   const existing = await prisma.task.findFirst({
-    where: { id: taskId, tenantId: user.tenantId },
+    where: { id: taskId, tenantId: user.tenantId, deletedAt: null },
   });
   if (!existing) {
     throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
@@ -320,7 +339,7 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
   }
 
   const tasks = await prisma.task.findMany({
-    where: { id: { in: body.taskIds }, tenantId: user.tenantId },
+    where: { id: { in: body.taskIds }, tenantId: user.tenantId, deletedAt: null },
     select: { id: true, approvalStatus: true },
   });
   const taskMap = new Map(tasks.map((task) => [task.id, task]));

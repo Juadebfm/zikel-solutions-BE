@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as careGroupsService from './care-groups.service.js';
 import {
   CreateCareGroupBodySchema,
@@ -13,6 +14,7 @@ import {
 
 const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -74,7 +76,12 @@ const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Care Groups'],
       summary: 'Create care group (admin only)',
@@ -110,7 +117,12 @@ const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Care Groups'],
       summary: 'Update care group (admin only)',
@@ -149,7 +161,12 @@ const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Care Groups'],
       summary: 'Deactivate care group (admin only)',

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as tasksService from './tasks.service.js';
 import {
   CreateTaskBodySchema,
@@ -12,6 +13,7 @@ import {
 
 const taskRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -146,7 +148,7 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete('/:id', {
     schema: {
       tags: ['Tasks'],
-      summary: 'Delete task',
+      summary: 'Archive task',
       params: { $ref: 'CuidParam#' },
       response: {
         200: {
@@ -158,7 +160,7 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
               type: 'object',
               required: ['message'],
               properties: {
-                message: { type: 'string', example: 'Task deleted.' },
+                message: { type: 'string', example: 'Task archived.' },
               },
             },
           },

@@ -9,6 +9,7 @@ import {
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import type { CreateTaskBody, ListTasksQuery, UpdateTaskBody } from './tasks.schema.js';
 
@@ -144,7 +145,7 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const actor = await resolveActorContext(actorUserId);
   const skip = (query.page - 1) * query.pageSize;
 
-  const filters: Prisma.TaskWhereInput[] = [{ tenantId: actor.tenantId }];
+  const filters: Prisma.TaskWhereInput[] = [{ tenantId: actor.tenantId, deletedAt: null }];
   const privileged = isPrivilegedActor(actor);
 
   if (!privileged || query.mine) {
@@ -180,6 +181,26 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: actor.tenantId,
+    entityType: 'task',
+    source: 'tasks.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      hasSearch: Boolean(query.search),
+      status: query.status ?? null,
+      approvalStatus: query.approvalStatus ?? null,
+      priority: query.priority ?? null,
+      assigneeId: query.assigneeId ?? null,
+      youngPersonId: query.youngPersonId ?? null,
+      mine: query.mine ?? null,
+    },
+  });
+
   return {
     data: rows.map(mapTask),
     meta: paginationMeta(total, query.page, query.pageSize),
@@ -189,7 +210,7 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
 export async function getTask(actorUserId: string, taskId: string) {
   const actor = await resolveActorContext(actorUserId);
   const task = await prisma.task.findFirst({
-    where: { id: taskId, tenantId: actor.tenantId },
+    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
   });
 
   if (!task) {
@@ -199,6 +220,16 @@ export async function getTask(actorUserId: string, taskId: string) {
   if (!isPrivilegedActor(actor) && !ownsTask(actor, task)) {
     throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: actor.tenantId,
+    entityType: 'task',
+    entityId: taskId,
+    source: 'tasks.get',
+    scope: 'detail',
+    resultCount: 1,
+  });
 
   return mapTask(task);
 }
@@ -265,7 +296,7 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
 export async function updateTask(actorUserId: string, taskId: string, body: UpdateTaskBody) {
   const actor = await resolveActorContext(actorUserId);
   const existing = await prisma.task.findFirst({
-    where: { id: taskId, tenantId: actor.tenantId },
+    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
     select: {
       id: true,
       createdById: true,
@@ -349,7 +380,7 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
 export async function deleteTask(actorUserId: string, taskId: string) {
   const actor = await resolveActorContext(actorUserId);
   const existing = await prisma.task.findFirst({
-    where: { id: taskId, tenantId: actor.tenantId },
+    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
     select: {
       id: true,
       createdById: true,
@@ -365,8 +396,10 @@ export async function deleteTask(actorUserId: string, taskId: string) {
     throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
   }
 
-  await prisma.task.delete({
+  const deletedAt = new Date();
+  await prisma.task.update({
     where: { id: taskId },
+    data: { deletedAt },
   });
 
   await prisma.auditLog.create({
@@ -376,8 +409,12 @@ export async function deleteTask(actorUserId: string, taskId: string) {
       action: AuditAction.record_deleted,
       entityType: 'task',
       entityId: taskId,
+      metadata: {
+        softDelete: true,
+        deletedAt: deletedAt.toISOString(),
+      },
     },
   });
 
-  return { message: 'Task deleted.' };
+  return { message: 'Task archived.' };
 }

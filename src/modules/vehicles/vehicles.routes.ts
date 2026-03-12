@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as vehiclesService from './vehicles.service.js';
 import {
   CreateVehicleBodySchema,
@@ -13,6 +14,7 @@ import {
 
 const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -74,7 +76,12 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
-    preHandler: [requireRole('super_admin', 'admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['super_admin', 'admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Vehicles'],
       summary: 'Create vehicle (manager/admin)',
@@ -110,7 +117,12 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
-    preHandler: [requireRole('super_admin', 'admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['super_admin', 'admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Vehicles'],
       summary: 'Update vehicle (manager/admin)',
@@ -149,7 +161,12 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
-    preHandler: [requireRole('super_admin', 'admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['super_admin', 'admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Vehicles'],
       summary: 'Deactivate vehicle (manager/admin)',

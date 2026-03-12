@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as announcementsService from './announcements.service.js';
 import {
   CreateAnnouncementBodySchema,
@@ -13,6 +14,7 @@ import {
 
 const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -128,7 +130,12 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Announcements'],
       summary: 'Create announcement (admin only)',
@@ -164,7 +171,12 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Announcements'],
       summary: 'Update announcement (admin only)',
@@ -203,11 +215,16 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
-    preHandler: [requireRole('admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['Announcements'],
-      summary: 'Delete announcement (admin only)',
-      description: 'Deletes an announcement permanently.',
+      summary: 'Archive announcement (admin only)',
+      description: 'Archives an announcement while retaining it for audit/compliance history.',
       params: { $ref: 'CuidParam#' },
       response: {
         200: {
@@ -219,7 +236,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
               type: 'object',
               required: ['message'],
               properties: {
-                message: { type: 'string', example: 'Announcement deleted.' },
+                message: { type: 'string', example: 'Announcement archived.' },
               },
             },
           },

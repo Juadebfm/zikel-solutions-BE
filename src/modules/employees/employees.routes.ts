@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as employeesService from './employees.service.js';
 import {
   CreateEmployeeBodySchema,
@@ -13,6 +14,7 @@ import {
 
 const employeeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -74,7 +76,12 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Employees'],
       summary: 'Create employee',
@@ -111,7 +118,12 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Employees'],
       summary: 'Update employee',
@@ -149,7 +161,12 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Employees'],
       summary: 'Deactivate employee',

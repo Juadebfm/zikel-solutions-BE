@@ -2,13 +2,18 @@ import { createHash, randomBytes } from 'crypto';
 import { AuditAction, MembershipStatus, Prisma, TenantRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { sendTenantInviteEmail } from '../../lib/email.js';
+import { logger } from '../../lib/logger.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import type {
   AcceptTenantInviteBody,
   AddTenantMemberBody,
   CreateTenantInviteBody,
   CreateTenantBody,
+  ListTenantMembershipsQuery,
   ListTenantInvitesQuery,
   ListTenantsQuery,
+  SelfServeCreateTenantBody,
   UpdateTenantMemberBody,
 } from './tenants.schema.js';
 
@@ -150,7 +155,7 @@ async function resolveUserByMemberInput(body: {
 async function ensureTenantExists(tenantId: string) {
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
-    select: { id: true, isActive: true },
+    select: { id: true, isActive: true, name: true },
   });
 
   if (!tenant) {
@@ -161,6 +166,38 @@ async function ensureTenantExists(tenantId: string) {
 }
 
 function manageableInviteRoles(
+  actorGlobalRole: ActorGlobalRole,
+  actorTenantRole: TenantRole | null,
+): TenantRole[] {
+  if (actorGlobalRole === 'super_admin') {
+    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
+  }
+  if (actorTenantRole === TenantRole.tenant_admin) {
+    return [TenantRole.sub_admin, TenantRole.staff];
+  }
+  if (actorTenantRole === TenantRole.sub_admin) {
+    return [TenantRole.staff];
+  }
+  return [];
+}
+
+function viewableMembershipRoles(
+  actorGlobalRole: ActorGlobalRole,
+  actorTenantRole: TenantRole | null,
+): TenantRole[] {
+  if (actorGlobalRole === 'super_admin') {
+    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
+  }
+  if (actorTenantRole === TenantRole.tenant_admin) {
+    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
+  }
+  if (actorTenantRole === TenantRole.sub_admin) {
+    return [TenantRole.sub_admin, TenantRole.staff];
+  }
+  return [];
+}
+
+function manageableMembershipRoles(
   actorGlobalRole: ActorGlobalRole,
   actorTenantRole: TenantRole | null,
 ): TenantRole[] {
@@ -217,6 +254,21 @@ async function assertInvitePermission(
   }
 
   return actorTenantRole;
+}
+
+async function resolveMembershipPermissionContext(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+) {
+  const actorTenantRole = actorGlobalRole === 'super_admin'
+    ? null
+    : await resolveActorTenantRole(actorUserId, tenantId);
+  return {
+    actorTenantRole,
+    viewableRoles: viewableMembershipRoles(actorGlobalRole, actorTenantRole),
+    manageableRoles: manageableMembershipRoles(actorGlobalRole, actorTenantRole),
+  };
 }
 
 function inviteWhereFromStatus(status?: ListTenantInvitesQuery['status']): Prisma.TenantInviteWhereInput {
@@ -293,6 +345,96 @@ export async function getTenantById(id: string) {
   return {
     ...mapTenant(tenant),
     memberships: tenant.memberships.map(mapMembership),
+  };
+}
+
+export async function listTenantMemberships(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+  query: ListTenantMembershipsQuery,
+) {
+  await ensureTenantExists(tenantId);
+
+  const permission = await resolveMembershipPermissionContext(
+    actorUserId,
+    actorGlobalRole,
+    tenantId,
+  );
+  if (permission.viewableRoles.length === 0) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to view tenant memberships.',
+    );
+  }
+
+  if (query.role && !permission.viewableRoles.includes(query.role)) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to view that tenant role.',
+    );
+  }
+
+  const where: Prisma.TenantMembershipWhereInput = {
+    tenantId,
+    role: { in: permission.viewableRoles },
+    ...(query.role ? { role: query.role } : {}),
+    ...(query.status ? { status: query.status } : {}),
+    ...(query.search
+      ? {
+          user: {
+            OR: [
+              { email: { contains: query.search, mode: 'insensitive' } },
+              { firstName: { contains: query.search, mode: 'insensitive' } },
+              { lastName: { contains: query.search, mode: 'insensitive' } },
+            ],
+          },
+        }
+      : {}),
+  };
+
+  const skip = (query.page - 1) * query.pageSize;
+  const [total, memberships] = await Promise.all([
+    prisma.tenantMembership.count({ where }),
+    prisma.tenantMembership.findMany({
+      where,
+      orderBy: { createdAt: 'asc' },
+      skip,
+      take: query.pageSize,
+      include: {
+        user: {
+          select: { email: true, firstName: true, lastName: true },
+        },
+      },
+    }),
+  ]);
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId,
+    entityType: 'tenant_membership',
+    source: 'tenants.memberships.list',
+    scope: 'list',
+    resultCount: memberships.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      role: query.role ?? null,
+      status: query.status ?? null,
+      hasSearch: Boolean(query.search),
+    },
+  });
+
+  return {
+    data: memberships.map(mapMembership),
+    meta: {
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalPages: Math.max(1, Math.ceil(total / query.pageSize)),
+    },
   };
 }
 
@@ -385,12 +527,79 @@ export async function createTenant(actorUserId: string, body: CreateTenantBody) 
   }
 }
 
+export async function selfServeCreateTenant(actorUserId: string, body: SelfServeCreateTenantBody) {
+  const actor = await prisma.user.findUnique({
+    where: { id: actorUserId },
+    select: {
+      id: true,
+      isActive: true,
+      emailVerified: true,
+    },
+  });
+  if (!actor) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+  if (!actor.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
+  }
+  if (!actor.emailVerified) {
+    throw httpError(
+      403,
+      'EMAIL_VERIFICATION_REQUIRED',
+      'Verify your email address before creating an organization.',
+    );
+  }
+
+  const existingActiveMembership = await prisma.tenantMembership.findFirst({
+    where: {
+      userId: actorUserId,
+      status: MembershipStatus.active,
+    },
+    select: { id: true, tenantId: true },
+  });
+  if (existingActiveMembership) {
+    throw httpError(
+      409,
+      'SELF_SERVE_ONBOARDING_NOT_ALLOWED',
+      'You already belong to an active organization.',
+    );
+  }
+
+  const result = await createTenant(actorUserId, {
+    name: body.name,
+    slug: body.slug,
+    country: body.country,
+    adminUserId: actorUserId,
+  });
+
+  await prisma.user.update({
+    where: { id: actorUserId },
+    data: { activeTenantId: result.tenant.id },
+  });
+
+  return result;
+}
+
 export async function addTenantMembership(
   actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
   tenantId: string,
   body: AddTenantMemberBody,
 ) {
   await ensureTenantExists(tenantId);
+
+  const permission = await resolveMembershipPermissionContext(
+    actorUserId,
+    actorGlobalRole,
+    tenantId,
+  );
+  if (!permission.manageableRoles.includes(body.role)) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to assign this tenant role.',
+    );
+  }
 
   const user = await resolveUserByMemberInput({
     userId: body.userId,
@@ -450,19 +659,48 @@ export async function addTenantMembership(
 
 export async function updateTenantMembership(
   actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
   tenantId: string,
   membershipId: string,
   body: UpdateTenantMemberBody,
 ) {
   await ensureTenantExists(tenantId);
 
+  const permission = await resolveMembershipPermissionContext(
+    actorUserId,
+    actorGlobalRole,
+    tenantId,
+  );
+  if (permission.manageableRoles.length === 0) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to update tenant memberships.',
+    );
+  }
+
   const existing = await prisma.tenantMembership.findUnique({
     where: { id: membershipId },
-    select: { id: true, tenantId: true },
+    select: { id: true, tenantId: true, role: true },
   });
 
   if (!existing || existing.tenantId !== tenantId) {
     throw httpError(404, 'TENANT_MEMBERSHIP_NOT_FOUND', 'Tenant membership not found.');
+  }
+
+  if (!permission.manageableRoles.includes(existing.role)) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to update this tenant role.',
+    );
+  }
+  if (body.role && !permission.manageableRoles.includes(body.role)) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to assign this tenant role.',
+    );
   }
 
   const membership = await prisma.tenantMembership.update({
@@ -531,6 +769,20 @@ export async function listTenantInvites(
       take: query.pageSize,
     }),
   ]);
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId,
+    entityType: 'tenant_invite',
+    source: 'tenants.invites.list',
+    scope: 'list',
+    resultCount: invites.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      status: query.status ?? null,
+    },
+  });
 
   return {
     data: invites.map(mapInvite),
@@ -629,6 +881,15 @@ export async function createTenantInvite(
       },
     },
   });
+
+  // Fire-and-forget: invite creation should succeed even if downstream email delivery fails.
+  void sendTenantInviteEmail({
+    email,
+    tenantName: tenant.name,
+    role: body.role,
+    inviteToken,
+    expiresAt,
+  }).catch((err: unknown) => logger.error({ msg: 'Failed to send tenant invite email', err, tenantId, email }));
 
   return {
     invite: mapInvite(invite),

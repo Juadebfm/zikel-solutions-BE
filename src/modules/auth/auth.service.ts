@@ -1,9 +1,10 @@
 import { randomInt } from 'crypto';
-import { OtpPurpose, AuditAction, MembershipStatus, TenantRole } from '@prisma/client';
+import { OtpPurpose, AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { generateRefreshToken, refreshExpiresAt } from '../../lib/tokens.js';
 import { httpError } from '../../lib/errors.js';
+import { reconcileExpiredBreakGlassAccess } from '../../lib/break-glass.js';
 import {
   hashPassword,
   normalizePasswordCheckTiming,
@@ -12,6 +13,7 @@ import {
 import type {
   RegisterBody,
   VerifyOtpBody,
+  VerifyMfaChallengeBody,
   ResendOtpBody,
   LoginBody,
   RefreshBody,
@@ -75,6 +77,17 @@ function resendMessageFor(status: OtpDeliveryStatus): string {
       return "A new OTP has been created and is being sent now.";
     case 'failed':
       return 'A new OTP was created, but delivery failed. Please try resend again shortly.';
+  }
+}
+
+function mfaChallengeMessageFor(status: OtpDeliveryStatus): string {
+  switch (status) {
+    case 'sent':
+      return 'MFA code sent to your email.';
+    case 'queued':
+      return "MFA code generated and being sent now.";
+    case 'failed':
+      return 'MFA code generated, but delivery failed. Please try again.';
   }
 }
 
@@ -175,10 +188,26 @@ export interface AuthSessionContext {
 
 async function resolveAuthSessionContext(args: {
   userId: string;
-  userRole: 'super_admin' | 'staff' | 'manager' | 'admin';
+  userRole: UserRole;
   currentActiveTenantId: string | null;
   preferredTenantId?: string | null;
 }): Promise<AuthSessionContext> {
+  const effectiveActiveTenantId = await reconcileExpiredBreakGlassAccess({
+    userId: args.userId,
+    userRole: args.userRole,
+    activeTenantId: args.currentActiveTenantId,
+  });
+
+  if (args.userRole === UserRole.super_admin) {
+    return {
+      activeTenantId: effectiveActiveTenantId,
+      activeTenantRole: null,
+      memberships: [],
+      mfaRequired: true,
+      mfaVerified: false,
+    };
+  }
+
   const memberships = await prisma.tenantMembership.findMany({
     where: {
       userId: args.userId,
@@ -208,17 +237,15 @@ async function resolveAuthSessionContext(args: {
   const preferredMembership = args.preferredTenantId
     ? mappedMemberships.find((membership) => membership.tenantId === args.preferredTenantId) ?? null
     : null;
-  const currentMembership = args.currentActiveTenantId
-    ? mappedMemberships.find((membership) => membership.tenantId === args.currentActiveTenantId) ?? null
+  const currentMembership = effectiveActiveTenantId
+    ? mappedMemberships.find((membership) => membership.tenantId === effectiveActiveTenantId) ?? null
     : null;
   const selectedMembership = preferredMembership ?? currentMembership ?? mappedMemberships[0] ?? null;
   const resolvedActiveTenantId = selectedMembership?.tenantId ?? null;
-  const mfaRequired =
-    args.userRole === 'super_admin' ||
-    selectedMembership?.tenantRole === TenantRole.tenant_admin;
+  const mfaRequired = selectedMembership?.tenantRole === TenantRole.tenant_admin;
   const mfaVerified = !mfaRequired;
 
-  if (args.currentActiveTenantId !== resolvedActiveTenantId) {
+  if (effectiveActiveTenantId !== resolvedActiveTenantId) {
     await prisma.user.update({
       where: { id: args.userId },
       data: { activeTenantId: resolvedActiveTenantId },
@@ -406,6 +433,164 @@ export async function resendOtp(body: ResendOtpBody) {
     cooldownSeconds: OTP_COOLDOWN_MS / 1_000,
     otpDeliveryStatus,
     resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+  };
+}
+
+/**
+ * Starts a privileged-session MFA challenge by issuing a one-time code.
+ * Only super_admin or tenant_admin sessions can request this challenge.
+ */
+export async function requestMfaChallenge(actorUserId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: actorUserId },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      isActive: true,
+      emailVerified: true,
+      activeTenantId: true,
+    },
+  });
+
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+  if (!user.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
+  }
+  if (!user.emailVerified) {
+    throw httpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email address first.');
+  }
+
+  const session = await resolveAuthSessionContext({
+    userId: user.id,
+    userRole: user.role,
+    currentActiveTenantId: user.activeTenantId,
+  });
+  if (!session.mfaRequired) {
+    throw httpError(400, 'MFA_NOT_REQUIRED', 'MFA challenge is not required for this session.');
+  }
+
+  const recent = await prisma.otpCode.findFirst({
+    where: { userId: user.id, purpose: OtpPurpose.mfa_challenge },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  if (recent) {
+    const elapsedMs = Date.now() - recent.createdAt.getTime();
+    if (elapsedMs < OTP_COOLDOWN_MS) {
+      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - elapsedMs) / 1_000);
+      throw httpError(
+        429,
+        'OTP_COOLDOWN',
+        `Please wait ${remainingSec} seconds before requesting a new MFA code.`,
+      );
+    }
+
+    await prisma.otpCode.updateMany({
+      where: { userId: user.id, purpose: OtpPurpose.mfa_challenge, usedAt: null },
+      data: { usedAt: new Date() },
+    });
+  }
+
+  const code = generateOtpCode();
+  await prisma.otpCode.create({
+    data: {
+      userId: user.id,
+      code,
+      purpose: OtpPurpose.mfa_challenge,
+      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+    },
+  });
+
+  const otpDeliveryStatus = await dispatchOtp(user.email, code, OtpPurpose.mfa_challenge);
+
+  await prisma.auditLog.create({
+    data: {
+      userId: user.id,
+      action: AuditAction.login,
+      entityType: 'auth_mfa',
+      entityId: user.id,
+      metadata: {
+        type: 'mfa_challenge_requested',
+        activeTenantId: session.activeTenantId,
+        activeTenantRole: session.activeTenantRole,
+      },
+    },
+  });
+
+  return {
+    message: mfaChallengeMessageFor(otpDeliveryStatus),
+    cooldownSeconds: OTP_COOLDOWN_MS / 1_000,
+    otpDeliveryStatus,
+    resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+  };
+}
+
+/**
+ * Completes a privileged-session MFA challenge.
+ * Returns refreshed session context and expects the route to sign a new access token.
+ */
+export async function verifyMfaChallenge(actorUserId: string, body: VerifyMfaChallengeBody) {
+  const user = await prisma.user.findUnique({
+    where: { id: actorUserId },
+  });
+
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+  if (!user.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
+  }
+
+  const session = await resolveAuthSessionContext({
+    userId: user.id,
+    userRole: user.role,
+    currentActiveTenantId: user.activeTenantId,
+  });
+  if (!session.mfaRequired) {
+    throw httpError(400, 'MFA_NOT_REQUIRED', 'MFA challenge is not required for this session.');
+  }
+
+  const otp = await prisma.otpCode.findFirst({
+    where: {
+      userId: user.id,
+      purpose: OtpPurpose.mfa_challenge,
+      code: body.code,
+      usedAt: null,
+      expiresAt: { gt: new Date() },
+    },
+    select: { id: true },
+  });
+
+  if (!otp) {
+    throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
+  }
+
+  await prisma.$transaction([
+    prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }),
+    prisma.auditLog.create({
+      data: {
+        userId: user.id,
+        action: AuditAction.otp_verified,
+        entityType: 'auth_mfa',
+        entityId: user.id,
+        metadata: {
+          purpose: OtpPurpose.mfa_challenge,
+          activeTenantId: session.activeTenantId,
+          activeTenantRole: session.activeTenantRole,
+        },
+      },
+    }),
+  ]);
+
+  return {
+    user: { ...safeUser(user), activeTenantId: session.activeTenantId },
+    session: {
+      ...session,
+      mfaVerified: true,
+    },
   };
 }
 

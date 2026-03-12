@@ -99,6 +99,10 @@ export const SwitchTenantBodySchema = z.object({
   tenantId: z.string().min(1),
 });
 
+export const VerifyMfaChallengeBodySchema = z.object({
+  code: z.string().length(6, 'OTP must be exactly 6 digits'),
+});
+
 // ─── JSON Schemas (route validation + OpenAPI) ────────────────────────────────
 
 export const registerBodyJson = {
@@ -234,6 +238,15 @@ export const switchTenantBodyJson = {
   },
 } as const;
 
+export const verifyMfaChallengeBodyJson = {
+  type: 'object',
+  required: ['code'],
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit MFA code sent to email' },
+  },
+} as const;
+
 export const RefreshBodySchema = z.object({
   refreshToken: z.string().min(1).optional(),
   token: z.string().min(1).optional(),
@@ -273,6 +286,7 @@ export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type CheckEmailQuery = z.infer<typeof CheckEmailQuerySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
 export type SwitchTenantBody = z.infer<typeof SwitchTenantBodySchema>;
+export type VerifyMfaChallengeBody = z.infer<typeof VerifyMfaChallengeBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 export type ForgotPasswordBody = z.infer<typeof ForgotPasswordBodySchema>;
 export type ResetPasswordBody = z.infer<typeof ResetPasswordBodySchema>;

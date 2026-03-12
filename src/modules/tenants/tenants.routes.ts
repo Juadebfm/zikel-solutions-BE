@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireRole } from '../../middleware/rbac.js';
 import * as tenantsService from './tenants.service.js';
 import {
@@ -7,6 +8,8 @@ import {
   AddTenantMemberBodySchema,
   CreateTenantInviteBodySchema,
   CreateTenantBodySchema,
+  SelfServeCreateTenantBodySchema,
+  ListTenantMembershipsQuerySchema,
   ListTenantInvitesQuerySchema,
   ListTenantsQuerySchema,
   UpdateTenantMemberBodySchema,
@@ -14,6 +17,8 @@ import {
   addTenantMemberBodyJson,
   createTenantInviteBodyJson,
   createTenantBodyJson,
+  selfServeCreateTenantBodyJson,
+  listTenantMembershipsQueryJson,
   listTenantInvitesQueryJson,
   listTenantsQueryJson,
   updateTenantMemberBodyJson,
@@ -39,6 +44,7 @@ const inviteParamsJson = {
 
 const tenantRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     preHandler: [requireRole('super_admin')],
@@ -164,11 +170,99 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  fastify.post('/:id/memberships', {
-    preHandler: [requireRole('super_admin')],
+  fastify.post('/self-serve', {
+    config: { rateLimit: { max: 3, timeWindow: '10 minutes' } },
     schema: {
       tags: ['Tenants'],
-      summary: 'Add tenant membership (super-admin only)',
+      summary: 'Self-serve organization onboarding',
+      description:
+        'Creates a tenant and assigns the authenticated user as tenant_admin for first-time organization onboarding.',
+      body: selfServeCreateTenantBodyJson,
+      response: {
+        201: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['tenant', 'adminMembership'],
+              properties: {
+                tenant: { $ref: 'Tenant#' },
+                adminMembership: { $ref: 'TenantMembership#' },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        409: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = SelfServeCreateTenantBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await tenantsService.selfServeCreateTenant(actorUserId, parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  fastify.get('/:id/memberships', {
+    schema: {
+      tags: ['Tenants'],
+      summary: 'List tenant memberships (scoped)',
+      params: { $ref: 'CuidParam#' },
+      querystring: listTenantMembershipsQueryJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data', 'meta'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'array', items: { $ref: 'TenantMembership#' } },
+            meta: { $ref: 'PaginationMeta#' },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ListTenantMembershipsQuerySchema.safeParse(request.query);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actor = request.user as JwtPayload;
+      const { id } = request.params as { id: string };
+      const { data, meta } = await tenantsService.listTenantMemberships(
+        actor.sub,
+        actor.role,
+        id,
+        parse.data,
+      );
+      return reply.send({ success: true, data, meta });
+    },
+  });
+
+  fastify.post('/:id/memberships', {
+    schema: {
+      tags: ['Tenants'],
+      summary: 'Add tenant membership (scoped)',
       params: { $ref: 'CuidParam#' },
       body: addTenantMemberBodyJson,
       response: {
@@ -196,18 +290,17 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const actorUserId = (request.user as JwtPayload).sub;
+      const actor = request.user as JwtPayload;
       const { id } = request.params as { id: string };
-      const data = await tenantsService.addTenantMembership(actorUserId, id, parse.data);
+      const data = await tenantsService.addTenantMembership(actor.sub, actor.role, id, parse.data);
       return reply.status(201).send({ success: true, data });
     },
   });
 
   fastify.patch('/:id/memberships/:membershipId', {
-    preHandler: [requireRole('super_admin')],
     schema: {
       tags: ['Tenants'],
-      summary: 'Update tenant membership (super-admin only)',
+      summary: 'Update tenant membership (scoped)',
       params: membershipParamsJson,
       body: updateTenantMemberBodyJson,
       response: {
@@ -234,9 +327,15 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const actorUserId = (request.user as JwtPayload).sub;
+      const actor = request.user as JwtPayload;
       const { id, membershipId } = request.params as { id: string; membershipId: string };
-      const data = await tenantsService.updateTenantMembership(actorUserId, id, membershipId, parse.data);
+      const data = await tenantsService.updateTenantMembership(
+        actor.sub,
+        actor.role,
+        id,
+        membershipId,
+        parse.data,
+      );
       return reply.send({ success: true, data });
     },
   });

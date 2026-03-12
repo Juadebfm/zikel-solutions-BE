@@ -77,6 +77,7 @@ function authHeader(
   userId = 'user_1',
   role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
   tenantRole: 'staff' | 'sub_admin' | 'tenant_admin' = 'sub_admin',
+  mfaVerified?: boolean,
 ) {
   const token = app.jwt.sign({
     sub: userId,
@@ -84,6 +85,8 @@ function authHeader(
     role,
     tenantId: 'tenant_1',
     tenantRole,
+    mfaVerified: mfaVerified
+      ?? (role === 'super_admin' || tenantRole === 'tenant_admin'),
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -136,10 +139,64 @@ describe('New module routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'record_accessed',
+        entityType: 'vehicle',
+      }),
+    });
     expect(res.json()).toMatchObject({
       success: true,
       data: [{ id: 'veh_1', registration: 'ABC 123' }],
       meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+    });
+  });
+
+  it('blocks privileged tenant-admin session when MFA is not verified', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/vehicles',
+      headers: authHeader('admin_1', 'admin', 'tenant_admin', false),
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: { code: 'MFA_REQUIRED' },
+    });
+  });
+
+  it('POST /api/v1/vehicles allows tenant sub-admin even with global staff role', async () => {
+    mockTenantContext('staff_1', 'staff', 'sub_admin');
+    mockPrisma.vehicle.create.mockResolvedValueOnce({
+      id: 'veh_new',
+      tenantId: 'tenant_1',
+      registration: 'ABC 321',
+      make: null,
+      model: null,
+      year: null,
+      colour: null,
+      isActive: true,
+      nextServiceDue: null,
+      motDue: null,
+      createdAt: new Date('2026-03-12T09:00:00.000Z'),
+      updatedAt: new Date('2026-03-12T09:00:00.000Z'),
+    });
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vehicles',
+      headers: authHeader('staff_1', 'staff', 'sub_admin'),
+      payload: {
+        registration: 'abc 321',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: { id: 'veh_new', registration: 'ABC 321' },
     });
   });
 
@@ -208,6 +265,12 @@ describe('New module routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'record_accessed',
+        entityType: 'audit_log',
+      }),
+    });
     expect(res.json()).toMatchObject({
       success: true,
       data: [{ id: 'log_1', entityType: 'task' }],
@@ -246,6 +309,51 @@ describe('New module routes', () => {
       data: {
         activeTenantId: 'tenant_2',
         previousTenantId: 'tenant_1',
+      },
+    });
+  });
+
+  it('POST /api/v1/audit/break-glass/release releases active super-admin tenant context', async () => {
+    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'super_1',
+      role: 'super_admin',
+      activeTenantId: 'tenant_2',
+    });
+    mockPrisma.auditLog.findFirst
+      .mockResolvedValueOnce({
+        metadata: {
+          previousTenantId: 'tenant_1',
+          targetTenantId: 'tenant_2',
+          expiresAt,
+        },
+      })
+      .mockResolvedValueOnce({
+        metadata: {
+          previousTenantId: 'tenant_1',
+          targetTenantId: 'tenant_2',
+          expiresAt,
+        },
+      });
+    mockPrisma.user.update.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/audit/break-glass/release',
+      headers: authHeader('super_1', 'super_admin'),
+      payload: {
+        reason: 'Incident resolved, releasing elevated tenant context.',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        activeTenantId: 'tenant_1',
+        releasedTenantId: 'tenant_2',
       },
     });
   });

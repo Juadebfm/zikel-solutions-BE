@@ -1,6 +1,7 @@
 import { AuditAction, MembershipStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateEmployeeBody,
@@ -120,6 +121,22 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'employee',
+    source: 'employees.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      homeId: query.homeId ?? null,
+      hasSearch: Boolean(query.search),
+      isActive: query.isActive ?? null,
+    },
+  });
+
   return {
     data: rows.map(mapEmployee),
     meta: {
@@ -151,6 +168,17 @@ export async function getEmployee(actorId: string, id: string) {
   if (!employee) {
     throw httpError(404, 'EMPLOYEE_NOT_FOUND', 'Employee not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'employee',
+    entityId: id,
+    source: 'employees.get',
+    scope: 'detail',
+    resultCount: 1,
+  });
+
   return mapEmployee(employee);
 }
 

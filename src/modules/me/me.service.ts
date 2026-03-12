@@ -1,10 +1,8 @@
-import bcrypt from 'bcryptjs';
 import { AuditAction, Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { hashPassword, verifyPassword } from '../../lib/password.js';
 import type { ChangePasswordBody, UpdateMeBody, UpdatePreferencesBody } from './me.schema.js';
-
-const BCRYPT_COST = 12;
 
 const ROLE_PERMISSIONS: Record<
   UserRole,
@@ -183,17 +181,17 @@ export async function changeMyPassword(userId: string, body: ChangePasswordBody)
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  const currentMatch = await bcrypt.compare(body.currentPassword, user.passwordHash);
-  if (!currentMatch) {
+  const currentPasswordCheck = await verifyPassword(body.currentPassword, user.passwordHash);
+  if (!currentPasswordCheck.match) {
     throw httpError(401, 'INVALID_CREDENTIALS', 'Current password is incorrect.');
   }
 
-  const passwordReused = await bcrypt.compare(body.newPassword, user.passwordHash);
-  if (passwordReused) {
+  const passwordReuseCheck = await verifyPassword(body.newPassword, user.passwordHash);
+  if (passwordReuseCheck.match) {
     throw httpError(400, 'PASSWORD_REUSED', 'New password must be different from current password.');
   }
 
-  const newPasswordHash = await bcrypt.hash(body.newPassword, BCRYPT_COST);
+  const newPasswordHash = await hashPassword(body.newPassword);
 
   await prisma.$transaction([
     prisma.user.update({

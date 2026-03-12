@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as aiService from './ai.service.js';
 import {
   AskAiBodySchema,
@@ -11,6 +12,7 @@ import {
 
 const aiRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.post('/ask', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
@@ -73,7 +75,12 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/access/:id', {
-    preHandler: [requireRole('admin', 'super_admin')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'super_admin'],
+        tenantRoles: ['tenant_admin'],
+      }),
+    ],
     schema: {
       tags: ['AI'],
       summary: 'Update AI access for a user (admin only)',

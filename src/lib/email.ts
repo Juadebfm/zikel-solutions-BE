@@ -137,15 +137,20 @@ export async function sendOtpEmail(
   code: string,
   purpose: OtpPurpose,
 ): Promise<void> {
-  const subject =
-    purpose === 'email_verification'
-      ? 'Your Zikel Solutions verification code'
-      : 'Your Zikel Solutions password reset code';
+  const subjectByPurpose: Record<OtpPurpose, string> = {
+    email_verification: 'Your Zikel Solutions verification code',
+    password_reset: 'Your Zikel Solutions password reset code',
+    mfa_challenge: 'Your Zikel Solutions MFA code',
+  };
 
-  const action =
-    purpose === 'email_verification'
-      ? 'verify your email address'
-      : 'reset your password';
+  const actionByPurpose: Record<OtpPurpose, string> = {
+    email_verification: 'verify your email address',
+    password_reset: 'reset your password',
+    mfa_challenge: 'verify your privileged session',
+  };
+
+  const subject = subjectByPurpose[purpose];
+  const action = actionByPurpose[purpose];
 
   const html = buildEmailHtml(`
     <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
@@ -297,4 +302,49 @@ export async function sendWaitlistConfirmationEmail(
   `);
 
   await sendEmail(email, "You're on the Zikel Solutions waitlist", html);
+}
+
+// ─── Tenant invite notification ───────────────────────────────────────────────
+
+export async function sendTenantInviteEmail(args: {
+  email: string;
+  tenantName: string;
+  role: string;
+  inviteToken: string;
+  expiresAt: Date;
+}): Promise<void> {
+  const roleLabel = args.role.replace(/_/g, ' ');
+  const expiry = args.expiresAt.toISOString();
+
+  const html = buildEmailHtml(`
+    <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
+      You're invited to join ${args.tenantName}
+    </h2>
+    <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
+      You have been invited to Zikel Solutions as <strong>${roleLabel}</strong>.
+      This invite expires on <strong>${expiry}</strong>.
+    </p>
+
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:24px 0;border-radius:6px;overflow:hidden">
+      <tr>
+        <td style="background:#fef9f7;border-left:4px solid #F94D00;padding:16px 20px;border-radius:0 6px 6px 0">
+          <p style="margin:0 0 4px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Invite Token</p>
+          <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:14px;color:#02060A;word-break:break-all">${args.inviteToken}</p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
+      Sign in to your account and submit this token in the invite acceptance flow.
+    </p>
+    <p style="margin:0;font-size:15px;color:#02060A;font-weight:600">
+      The Zikel Solutions Team
+    </p>
+  `);
+
+  await sendEmail(
+    args.email,
+    `Invitation to ${args.tenantName} on Zikel Solutions`,
+    html,
+  );
 }

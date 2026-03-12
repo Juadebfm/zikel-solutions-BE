@@ -1,9 +1,10 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type AuditAction, type Prisma } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { logger } from './logger.js';
-
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+import { queueAndDispatchSecurityAlert } from './security-alert-pipeline.js';
+import { getRequestAuditContext } from './request-context.js';
+import { enrichAuditLogCreateData } from './audit-metadata.js';
 
 function createPrismaClient() {
   // Runtime uses the pooled DATABASE_URL (PgBouncer on Neon).
@@ -18,7 +19,7 @@ function createPrismaClient() {
   });
   const adapter = new PrismaPg(pool);
 
-  const client = new PrismaClient({
+  const baseClient = new PrismaClient({
     adapter,
     log: [
       { emit: 'event', level: 'error' },
@@ -26,11 +27,53 @@ function createPrismaClient() {
     ],
   });
 
-  client.$on('error', (e) => logger.error({ msg: 'Prisma error', ...e }));
-  client.$on('warn', (e) => logger.warn({ msg: 'Prisma warning', ...e }));
+  baseClient.$on('error', (e) => logger.error({ msg: 'Prisma error', ...e }));
+  baseClient.$on('warn', (e) => logger.warn({ msg: 'Prisma warning', ...e }));
+
+  const client = baseClient.$extends({
+    query: {
+      auditLog: {
+        async create({ args, query }) {
+          const requestContext = getRequestAuditContext();
+          const enrichedArgs = {
+            ...args,
+            data: enrichAuditLogCreateData(
+              args.data as Prisma.AuditLogCreateInput | Prisma.AuditLogUncheckedCreateInput,
+              requestContext,
+            ),
+          };
+
+          const created = await query(enrichedArgs);
+
+          const auditEvent = created as {
+            id: string;
+            tenantId: string | null;
+            userId: string | null;
+            action: AuditAction;
+            entityType: string | null;
+            entityId: string | null;
+            metadata: Prisma.JsonValue | null;
+            createdAt: Date;
+          };
+
+          void queueAndDispatchSecurityAlert(baseClient, auditEvent).catch((error) => {
+            logger.error({
+              msg: 'Security alert pipeline failed after audit log write.',
+              auditLogId: auditEvent.id,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
+          });
+          return created;
+        },
+      },
+    },
+  });
 
   return client;
 }
+
+type AppPrismaClient = ReturnType<typeof createPrismaClient>;
+const globalForPrisma = globalThis as unknown as { prisma?: AppPrismaClient };
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
 

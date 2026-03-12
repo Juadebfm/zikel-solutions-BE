@@ -1,11 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as dashboardService from './dashboard.service.js';
 import { CreateWidgetBodySchema, createWidgetBodyJson } from './dashboard.schema.js';
 
 const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   // All dashboard routes require authentication
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   // ── GET /dashboard/stats ──────────────────────────────────────────────────
   fastify.get('/stats', {

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as summaryService from './summary.service.js';
 import {
   ApproveTaskBodySchema,
@@ -15,6 +16,7 @@ import {
 const summaryRoutes: FastifyPluginAsync = async (fastify) => {
   // All summary routes require authentication
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   // ── GET /summary/stats ─────────────────────────────────────────────────────
   fastify.get('/stats', {
@@ -23,7 +25,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'My summary stats',
       description:
         'Returns KPI counts for the authenticated user: overdue, due today, pending approval, ' +
-        'rejected, draft, future tasks, unread comments, and reward points.',
+        'rejected, draft, future tasks, unread announcements, and reward points.',
       response: {
         200: {
           type: 'object',

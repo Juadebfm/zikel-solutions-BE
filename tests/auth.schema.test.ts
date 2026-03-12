@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ResetPasswordBodySchema,
   VerifyOtpBodySchema,
+  VerifyMfaChallengeBodySchema,
   ResendOtpBodySchema,
   SwitchTenantBodySchema,
 } from '../src/modules/auth/auth.schema.js';
@@ -60,6 +61,14 @@ describe('auth schema contracts', () => {
   it('requires tenantId for switch-tenant payload', () => {
     const ok = SwitchTenantBodySchema.safeParse({ tenantId: 'tenant_1' });
     const bad = SwitchTenantBodySchema.safeParse({ tenant: 'tenant_1' });
+
+    expect(ok.success).toBe(true);
+    expect(bad.success).toBe(false);
+  });
+
+  it('requires a 6-digit code for MFA verification payload', () => {
+    const ok = VerifyMfaChallengeBodySchema.safeParse({ code: '123456' });
+    const bad = VerifyMfaChallengeBodySchema.safeParse({ code: '12345' });
 
     expect(ok.success).toBe(true);
     expect(bad.success).toBe(false);

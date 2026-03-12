@@ -1,11 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as auditService from './audit.service.js';
 import {
   BreakGlassAccessBodySchema,
+  BreakGlassReleaseBodySchema,
   ListAuditLogsQuerySchema,
   SecurityAlertsQuerySchema,
   breakGlassAccessBodyJson,
+  breakGlassReleaseBodyJson,
   listAuditLogsQueryJson,
   securityAlertsQueryJson,
 } from './audit.schema.js';
@@ -20,6 +23,7 @@ const auditLogParamsJson = {
 
 const auditRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -185,6 +189,54 @@ const auditRoutes: FastifyPluginAsync = async (fastify) => {
 
       const actorUserId = (request.user as JwtPayload).sub;
       const data = await auditService.breakGlassAccess(actorUserId, parse.data, {
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'] as string | undefined,
+      });
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.post('/break-glass/release', {
+    schema: {
+      tags: ['Audit'],
+      summary: 'Release active break-glass tenant context (super-admin only)',
+      body: breakGlassReleaseBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['message', 'activeTenantId', 'releasedTenantId', 'releasedAt'],
+              properties: {
+                message: { type: 'string' },
+                activeTenantId: { type: ['string', 'null'] },
+                releasedTenantId: { type: 'string' },
+                releasedAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        409: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = BreakGlassReleaseBodySchema.safeParse(request.body ?? {});
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await auditService.breakGlassRelease(actorUserId, parse.data, {
         ipAddress: request.ip,
         userAgent: request.headers['user-agent'] as string | undefined,
       });

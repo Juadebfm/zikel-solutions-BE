@@ -49,6 +49,14 @@ const envSchema = z.object({
   // Required in production: set via `fly secrets set`.
   RESEND_API_KEY: z.string().min(1).optional(),
   RESEND_FROM_EMAIL: z.email({ error: 'RESEND_FROM_EMAIL must be a valid email address' }).optional(),
+
+  // Security alert pipeline
+  SECURITY_ALERT_PIPELINE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  SECURITY_ALERT_WEBHOOK_URL: z.url({ error: 'SECURITY_ALERT_WEBHOOK_URL must be a valid URL' }).optional(),
+  SECURITY_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -86,6 +94,12 @@ function parseEnv(): Env {
     }
     if (origins.some((origin) => !origin.startsWith('https://'))) {
       throw new Error('CORS_ORIGINS must be https:// origins only in staging/production.');
+    }
+
+    if (parsed.SECURITY_ALERT_PIPELINE_ENABLED && !parsed.SECURITY_ALERT_WEBHOOK_URL) {
+      throw new Error(
+        'SECURITY_ALERT_WEBHOOK_URL is required in staging/production when SECURITY_ALERT_PIPELINE_ENABLED=true.',
+      );
     }
   }
 

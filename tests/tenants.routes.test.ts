@@ -5,6 +5,8 @@ const {
   listTenants,
   getTenantById,
   createTenant,
+  selfServeCreateTenant,
+  listTenantMemberships,
   addTenantMembership,
   updateTenantMembership,
   listTenantInvites,
@@ -15,6 +17,8 @@ const {
   listTenants: vi.fn(),
   getTenantById: vi.fn(),
   createTenant: vi.fn(),
+  selfServeCreateTenant: vi.fn(),
+  listTenantMemberships: vi.fn(),
   addTenantMembership: vi.fn(),
   updateTenantMembership: vi.fn(),
   listTenantInvites: vi.fn(),
@@ -27,6 +31,8 @@ vi.mock('../src/modules/tenants/tenants.service.js', () => ({
   listTenants,
   getTenantById,
   createTenant,
+  selfServeCreateTenant,
+  listTenantMemberships,
   addTenantMembership,
   updateTenantMembership,
   listTenantInvites,
@@ -58,11 +64,17 @@ beforeEach(() => {
 function authHeader(
   userId = 'user_1',
   role: 'super_admin' | 'staff' | 'manager' | 'admin' = 'super_admin',
+  tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = null,
+  mfaVerified?: boolean,
 ) {
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: tenantRole ? 'tenant_1' : null,
+    tenantRole,
+    mfaVerified: mfaVerified
+      ?? (role === 'super_admin' || tenantRole === 'tenant_admin'),
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -147,6 +159,54 @@ describe('Tenant routes', () => {
     });
   });
 
+  it('creates a tenant via self-serve onboarding for authenticated user', async () => {
+    selfServeCreateTenant.mockResolvedValueOnce({
+      tenant: {
+        id: 'tenant_self_1',
+        name: 'Julius Child Care',
+        slug: 'julius-child-care',
+        country: 'UK',
+        isActive: true,
+        createdAt: '2026-03-12T10:00:00.000Z',
+        updatedAt: '2026-03-12T10:00:00.000Z',
+      },
+      adminMembership: {
+        id: 'membership_self_1',
+        tenantId: 'tenant_self_1',
+        userId: 'staff_1',
+        role: 'tenant_admin',
+        status: 'active',
+        invitedById: 'staff_1',
+        user: null,
+        createdAt: '2026-03-12T10:00:00.000Z',
+        updatedAt: '2026-03-12T10:00:00.000Z',
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenants/self-serve',
+      headers: authHeader('staff_1', 'staff'),
+      payload: {
+        name: 'Julius Child Care',
+        country: 'UK',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(selfServeCreateTenant).toHaveBeenCalledWith('staff_1', {
+      name: 'Julius Child Care',
+      country: 'UK',
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        tenant: { slug: 'julius-child-care' },
+        adminMembership: { role: 'tenant_admin' },
+      },
+    });
+  });
+
   it('validates tenant membership request body', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -163,6 +223,77 @@ describe('Tenant routes', () => {
       error: { code: 'FST_ERR_VALIDATION' },
     });
     expect(addTenantMembership).not.toHaveBeenCalled();
+  });
+
+  it('lists tenant memberships for scoped actor', async () => {
+    listTenantMemberships.mockResolvedValueOnce({
+      data: [
+        {
+          id: 'membership_1',
+          tenantId: 'tenant_1',
+          userId: 'user_1',
+          role: 'staff',
+          status: 'active',
+          invitedById: 'admin_1',
+          user: null,
+          createdAt: '2026-03-12T10:00:00.000Z',
+          updatedAt: '2026-03-12T10:00:00.000Z',
+        },
+      ],
+      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tenants/tenant_1/memberships?page=1&pageSize=20',
+      headers: authHeader('admin_1', 'admin'),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(listTenantMemberships).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
+      page: 1,
+      pageSize: 20,
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [{ id: 'membership_1', role: 'staff' }],
+      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+    });
+  });
+
+  it('adds tenant membership for scoped actor', async () => {
+    addTenantMembership.mockResolvedValueOnce({
+      id: 'membership_new',
+      tenantId: 'tenant_1',
+      userId: 'user_77',
+      role: 'staff',
+      status: 'active',
+      invitedById: 'admin_1',
+      user: null,
+      createdAt: '2026-03-12T10:00:00.000Z',
+      updatedAt: '2026-03-12T10:00:00.000Z',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tenants/tenant_1/memberships',
+      headers: authHeader('admin_1', 'admin'),
+      payload: {
+        email: 'user_77@example.com',
+        role: 'staff',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(addTenantMembership).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
+      email: 'user_77@example.com',
+      role: 'staff',
+      status: 'active',
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: { id: 'membership_new', role: 'staff' },
+    });
   });
 
   it('updates tenant membership status', async () => {
@@ -190,6 +321,7 @@ describe('Tenant routes', () => {
     expect(res.statusCode).toBe(200);
     expect(updateTenantMembership).toHaveBeenCalledWith(
       'super_1',
+      'super_admin',
       'tenant_1',
       'membership_1',
       { status: 'suspended' },

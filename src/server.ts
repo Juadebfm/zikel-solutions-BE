@@ -1,16 +1,28 @@
 import 'dotenv/config';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
-import Fastify, { type FastifyError } from 'fastify';
+import Fastify, { type FastifyError, type FastifyRequest } from 'fastify';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
+import { setRequestAuditContext } from './lib/request-context.js';
 import swaggerPlugin from './plugins/swagger.js';
 import corsPlugin from './plugins/cors.js';
 import helmetPlugin from './plugins/helmet.js';
 import rateLimitPlugin from './plugins/rate-limit.js';
 import authPlugin from './plugins/auth.js';
 import rootRouter from './routes/index.js';
+
+function buildAuditSource(request: FastifyRequest) {
+  const routePath = request.routeOptions?.url ?? request.url.split('?')[0];
+  return `${request.method} ${routePath}`;
+}
+
+function resolveUserAgent(request: FastifyRequest) {
+  const header = request.headers['user-agent'];
+  if (Array.isArray(header)) return header[0] ?? null;
+  return header ?? null;
+}
 
 export async function buildApp() {
   const fastify = Fastify({
@@ -43,6 +55,15 @@ export async function buildApp() {
   // Disconnect Prisma cleanly when the server closes (graceful shutdown / tests).
   fastify.addHook('onClose', async () => {
     await prisma.$disconnect();
+  });
+
+  fastify.addHook('onRequest', async (request) => {
+    setRequestAuditContext({
+      requestId: request.id,
+      ipAddress: request.ip ?? null,
+      userAgent: resolveUserAgent(request),
+      source: buildAuditSource(request),
+    });
   });
 
   // Plugins (order matters — swagger must come first to capture all route schemas)

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireScopedRole } from '../../middleware/rbac.js';
 import * as homesService from './homes.service.js';
 import {
   CreateHomeBodySchema,
@@ -13,6 +14,7 @@ import {
 
 const homeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
+  fastify.addHook('preHandler', requirePrivilegedMfa);
 
   fastify.get('/', {
     schema: {
@@ -91,7 +93,12 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Homes'],
       summary: 'Create home',
@@ -127,7 +134,12 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Homes'],
       summary: 'Update home',
@@ -165,7 +177,12 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
-    preHandler: [requireRole('admin', 'manager')],
+    preHandler: [
+      requireScopedRole({
+        globalRoles: ['admin', 'manager'],
+        tenantRoles: ['tenant_admin', 'sub_admin'],
+      }),
+    ],
     schema: {
       tags: ['Homes'],
       summary: 'Deactivate home',

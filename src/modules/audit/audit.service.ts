@@ -1,8 +1,17 @@
 import { AuditAction, TenantRole, UserRole, type Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import type { BreakGlassAccessBody, ListAuditLogsQuery } from './audit.schema.js';
+import {
+  getActiveBreakGlassSession,
+  reconcileExpiredBreakGlassAccess,
+} from '../../lib/break-glass.js';
+import type {
+  BreakGlassAccessBody,
+  BreakGlassReleaseBody,
+  ListAuditLogsQuery,
+} from './audit.schema.js';
 
 type AuditActorContext = {
   userId: string;
@@ -61,12 +70,18 @@ async function resolveAuditActorContext(actorUserId: string): Promise<AuditActor
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
+  const activeTenantId = await reconcileExpiredBreakGlassAccess({
+    userId: user.id,
+    userRole: user.role,
+    activeTenantId: user.activeTenantId,
+  });
+
   if (user.role === UserRole.super_admin) {
     return {
       userId: user.id,
       userRole: user.role,
       tenantRole: null,
-      tenantId: user.activeTenantId,
+      tenantId: activeTenantId,
     };
   }
 
@@ -139,6 +154,25 @@ export async function listAuditLogs(actorUserId: string, query: ListAuditLogsQue
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: actor.tenantId,
+    entityType: 'audit_log',
+    source: 'audit.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      action: query.action ?? null,
+      entityType: query.entityType ?? null,
+      userId: query.userId ?? null,
+      tenantId: query.tenantId ?? null,
+      hasSearch: Boolean(query.search),
+      hasDateRange: Boolean(query.dateFrom || query.dateTo),
+    },
+  });
+
   return {
     data: rows.map(mapAuditLog),
     meta: paginationMeta(total, query.page, query.pageSize),
@@ -166,6 +200,19 @@ export async function getAuditLog(actorUserId: string, auditLogId: string, reque
   if (!record) {
     throw httpError(404, 'AUDIT_LOG_NOT_FOUND', 'Audit log entry not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: actor.tenantId,
+    entityType: 'audit_log',
+    entityId: auditLogId,
+    source: 'audit.get',
+    scope: 'detail',
+    resultCount: 1,
+    query: {
+      tenantId: requestedTenantId ?? null,
+    },
+  });
 
   return mapAuditLog(record);
 }
@@ -196,7 +243,12 @@ export async function breakGlassAccess(
   }
 
   const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
-  const previousTenantId = actor.activeTenantId ?? null;
+  const reconciledActiveTenantId = await reconcileExpiredBreakGlassAccess({
+    userId: actor.id,
+    userRole: actor.role,
+    activeTenantId: actor.activeTenantId,
+  });
+  const previousTenantId = reconciledActiveTenantId ?? null;
 
   await prisma.$transaction([
     prisma.user.update({
@@ -228,6 +280,81 @@ export async function breakGlassAccess(
     activeTenantId: tenant.id,
     previousTenantId,
     expiresAt,
+  };
+}
+
+export async function breakGlassRelease(
+  actorUserId: string,
+  body: BreakGlassReleaseBody,
+  requestMeta: { ipAddress?: string | undefined; userAgent?: string | undefined },
+) {
+  const actor = await prisma.user.findUnique({
+    where: { id: actorUserId },
+    select: { id: true, role: true, activeTenantId: true },
+  });
+
+  if (!actor) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+  if (actor.role !== UserRole.super_admin) {
+    throw httpError(403, 'FORBIDDEN', 'Only super-admins can release break-glass access.');
+  }
+
+  const reconciledActiveTenantId = await reconcileExpiredBreakGlassAccess({
+    userId: actor.id,
+    userRole: actor.role,
+    activeTenantId: actor.activeTenantId,
+  });
+
+  const activeSession = await getActiveBreakGlassSession({
+    userId: actor.id,
+    userRole: actor.role,
+    activeTenantId: reconciledActiveTenantId,
+  });
+
+  if (!activeSession) {
+    throw httpError(
+      409,
+      'BREAK_GLASS_NOT_ACTIVE',
+      'No active break-glass tenant context to release.',
+    );
+  }
+
+  const releasedAt = new Date();
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: actor.id },
+      data: { activeTenantId: activeSession.previousTenantId },
+    }),
+    prisma.auditLog.create({
+      data: {
+        tenantId: activeSession.targetTenantId,
+        userId: actor.id,
+        action: AuditAction.permission_changed,
+        entityType: 'break_glass_access',
+        entityId: activeSession.targetTenantId,
+        metadata: {
+          type: 'released',
+          reason: body.reason ?? 'Manual break-glass release by super-admin.',
+          previousTenantId: activeSession.previousTenantId,
+          targetTenantId: activeSession.targetTenantId,
+          expiresAt: activeSession.expiresAt.toISOString(),
+          releasedAt: releasedAt.toISOString(),
+          source: 'super_admin',
+          immutable: true,
+        },
+        ipAddress: requestMeta.ipAddress ?? null,
+        userAgent: requestMeta.userAgent ?? null,
+      },
+    }),
+  ]);
+
+  return {
+    message: 'Break-glass access released successfully.',
+    activeTenantId: activeSession.previousTenantId,
+    releasedTenantId: activeSession.targetTenantId,
+    releasedAt,
   };
 }
 
@@ -321,6 +448,18 @@ export async function listSecurityAlerts(actorUserId: string, lookbackHours: num
       details: `${breakGlassEvents.length} break-glass access events occurred.`,
     });
   }
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: actor.tenantId,
+    entityType: 'security_alert',
+    source: 'audit.security-alerts',
+    scope: 'list',
+    resultCount: alerts.length,
+    query: {
+      lookbackHours,
+    },
+  });
 
   return alerts;
 }

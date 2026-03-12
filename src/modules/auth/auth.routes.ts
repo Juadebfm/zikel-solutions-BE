@@ -7,6 +7,7 @@ import {
   CheckEmailQuerySchema,
   LogoutBodySchema,
   SwitchTenantBodySchema,
+  VerifyMfaChallengeBodySchema,
   RefreshBodySchema,
   ForgotPasswordBodySchema,
   ResetPasswordBodySchema,
@@ -17,6 +18,7 @@ import {
   checkEmailQueryJson,
   logoutBodyJson,
   switchTenantBodyJson,
+  verifyMfaChallengeBodyJson,
   refreshBodyJson,
   forgotPasswordBodyJson,
   resetPasswordBodyJson,
@@ -250,6 +252,109 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({
         success: true,
         data: { user, session, tokens: { accessToken, refreshToken } },
+      });
+    },
+  });
+
+  // ── POST /auth/mfa/challenge ───────────────────────────────────────────────
+  fastify.post('/mfa/challenge', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Request MFA code for privileged session',
+      description:
+        'Sends a one-time MFA code to the authenticated user when the active session is privileged.',
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['message', 'cooldownSeconds', 'otpDeliveryStatus', 'resendAvailableAt'],
+              properties: {
+                message: { type: 'string' },
+                cooldownSeconds: { type: 'integer' },
+                otpDeliveryStatus: { type: 'string', enum: ['sent', 'queued', 'failed'] },
+                resendAvailableAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+        400: { $ref: 'ApiError#' },
+        401: { $ref: 'ApiError#' },
+        403: { $ref: 'ApiError#' },
+        429: { $ref: 'ApiError#' },
+      },
+    },
+    preHandler: [fastify.authenticate],
+    handler: async (request, reply) => {
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await authService.requestMfaChallenge(actorUserId);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /auth/mfa/verify ──────────────────────────────────────────────────
+  fastify.post('/mfa/verify', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Verify MFA code for privileged session',
+      description:
+        'Validates the MFA one-time code and returns a new access token with `mfaVerified=true`.',
+      body: verifyMfaChallengeBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['user', 'session', 'tokens'],
+              properties: {
+                user: { $ref: 'User#' },
+                session: { $ref: 'AuthSession#' },
+                tokens: {
+                  type: 'object',
+                  required: ['accessToken'],
+                  properties: {
+                    accessToken: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        400: { $ref: 'ApiError#' },
+        401: { $ref: 'ApiError#' },
+        403: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    preHandler: [fastify.authenticate],
+    handler: async (request, reply) => {
+      const parse = VerifyMfaChallengeBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { user, session } = await authService.verifyMfaChallenge(actorUserId, parse.data);
+      const accessToken = signAccessToken(fastify, user, session);
+      return reply.send({
+        success: true,
+        data: {
+          user,
+          session,
+          tokens: { accessToken },
+        },
       });
     },
   });

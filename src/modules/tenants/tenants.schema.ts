@@ -16,6 +16,14 @@ export const CreateTenantBodySchema = z
     path: ['adminUserId'],
   });
 
+export const SelfServeCreateTenantBodySchema = z
+  .object({
+    name: z.string().min(2).max(120),
+    slug: z.string().min(2).max(120).regex(slugRegex).optional(),
+    country: z.enum(['UK', 'Nigeria']).default('UK'),
+  })
+  .strict();
+
 export const ListTenantsQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -57,6 +65,16 @@ export const CreateTenantInviteBodySchema = z
     email: z.email(),
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']),
     expiresInHours: z.coerce.number().int().min(1).max(24 * 30).default(24 * 7),
+  })
+  .strict();
+
+export const ListTenantMembershipsQuerySchema = z
+  .object({
+    page: z.coerce.number().int().min(1).default(1),
+    pageSize: z.coerce.number().int().min(1).max(100).default(20),
+    role: z.enum(['tenant_admin', 'sub_admin', 'staff']).optional(),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked']).optional(),
+    search: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
 
@@ -110,6 +128,22 @@ export const createTenantBodyJson = {
   ],
 } as const;
 
+export const selfServeCreateTenantBodyJson = {
+  type: 'object',
+  required: ['name'],
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 2, maxLength: 120 },
+    slug: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 120,
+      pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    },
+    country: { type: 'string', enum: ['UK', 'Nigeria'], default: 'UK' },
+  },
+} as const;
+
 export const addTenantMemberBodyJson = {
   type: 'object',
   required: ['role'],
@@ -147,6 +181,18 @@ export const createTenantInviteBodyJson = {
   },
 } as const;
 
+export const listTenantMembershipsQueryJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    page: { type: 'integer', minimum: 1, default: 1 },
+    pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
+    search: { type: 'string', minLength: 1, maxLength: 120 },
+  },
+} as const;
+
 export const acceptTenantInviteBodyJson = {
   type: 'object',
   required: ['token'],
@@ -167,9 +213,11 @@ export const listTenantInvitesQueryJson = {
 } as const;
 
 export type CreateTenantBody = z.infer<typeof CreateTenantBodySchema>;
+export type SelfServeCreateTenantBody = z.infer<typeof SelfServeCreateTenantBodySchema>;
 export type ListTenantsQuery = z.infer<typeof ListTenantsQuerySchema>;
 export type AddTenantMemberBody = z.infer<typeof AddTenantMemberBodySchema>;
 export type UpdateTenantMemberBody = z.infer<typeof UpdateTenantMemberBodySchema>;
 export type CreateTenantInviteBody = z.infer<typeof CreateTenantInviteBodySchema>;
+export type ListTenantMembershipsQuery = z.infer<typeof ListTenantMembershipsQuerySchema>;
 export type AcceptTenantInviteBody = z.infer<typeof AcceptTenantInviteBodySchema>;
 export type ListTenantInvitesQuery = z.infer<typeof ListTenantInvitesQuerySchema>;

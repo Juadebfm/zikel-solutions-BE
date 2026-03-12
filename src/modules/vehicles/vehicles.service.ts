@@ -1,6 +1,7 @@
 import { AuditAction, Prisma, type Vehicle } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateVehicleBody,
@@ -83,6 +84,23 @@ export async function listVehicles(actorUserId: string, query: ListVehiclesQuery
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: tenant.tenantId,
+    entityType: 'vehicle',
+    source: 'vehicles.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      sortBy: query.sortBy ?? null,
+      sortOrder: query.sortOrder ?? null,
+      hasSearch: Boolean(query.search),
+      isActive: query.isActive ?? null,
+    },
+  });
+
   return {
     data: rows.map(mapVehicle),
     meta: paginationMeta(total, query.page, query.pageSize),
@@ -97,6 +115,17 @@ export async function getVehicle(actorUserId: string, vehicleId: string) {
   if (!vehicle) {
     throw httpError(404, 'VEHICLE_NOT_FOUND', 'Vehicle not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId,
+    tenantId: tenant.tenantId,
+    entityType: 'vehicle',
+    entityId: vehicleId,
+    source: 'vehicles.get',
+    scope: 'detail',
+    resultCount: 1,
+  });
+
   return mapVehicle(vehicle);
 }
 

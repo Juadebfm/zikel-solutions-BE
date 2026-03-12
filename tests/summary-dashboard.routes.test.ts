@@ -21,6 +21,9 @@ const { mockPrisma } = vi.hoisted(() => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    announcement: {
+      count: vi.fn(),
+    },
     home: {
       findMany: vi.fn(),
     },
@@ -113,7 +116,9 @@ describe('Summary routes', () => {
       .mockResolvedValueOnce(2) // pendingApproval
       .mockResolvedValueOnce(1) // rejected
       .mockResolvedValueOnce(4) // draft
-      .mockResolvedValueOnce(6); // future
+      .mockResolvedValueOnce(6) // future
+      .mockResolvedValueOnce(9); // completed tasks
+    mockPrisma.announcement.count.mockResolvedValueOnce(7); // unread announcements
 
     const res = await app.inject({
       method: 'GET',
@@ -131,8 +136,8 @@ describe('Summary routes', () => {
         rejected: 1,
         draft: 4,
         future: 6,
-        comments: 0,
-        rewards: 0,
+        comments: 7,
+        rewards: 90,
       },
     });
   });

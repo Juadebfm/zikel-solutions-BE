@@ -408,8 +408,8 @@ export const SummaryStatsSchema = {
     rejected: { type: 'integer', description: 'Tasks rejected in review', example: 1 },
     draft: { type: 'integer', description: 'Tasks in draft state', example: 4 },
     future: { type: 'integer', description: 'Tasks scheduled in the future', example: 12 },
-    comments: { type: 'integer', description: 'Unread comments on tasks', example: 7 },
-    rewards: { type: 'integer', description: 'Reward points accumulated', example: 120 },
+    comments: { type: 'integer', description: 'Unread announcements for the current user', example: 7 },
+    rewards: { type: 'integer', description: 'Reward points derived from completed tasks', example: 120 },
   },
 } as const;
 
@@ -426,7 +426,7 @@ export const AuditLogSchema = {
       type: 'string',
       enum: [
         'login', 'logout', 'register', 'password_change', 'otp_verified',
-        'record_created', 'record_updated', 'record_deleted', 'permission_changed',
+        'record_created', 'record_accessed', 'record_updated', 'record_deleted', 'permission_changed',
       ],
     },
     entityType: { type: 'string', nullable: true },

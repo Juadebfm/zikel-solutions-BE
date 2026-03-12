@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateYoungPersonBody,
@@ -78,6 +79,22 @@ export async function listYoungPeople(actorId: string, query: ListYoungPeopleQue
     }),
   ]);
 
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'young_person',
+    source: 'young-people.list',
+    scope: 'list',
+    resultCount: rows.length,
+    query: {
+      page: query.page,
+      pageSize: query.pageSize,
+      homeId: query.homeId ?? null,
+      hasSearch: Boolean(query.search),
+      isActive: query.isActive ?? null,
+    },
+  });
+
   return {
     data: rows.map(mapYoungPerson),
     meta: {
@@ -98,6 +115,17 @@ export async function getYoungPerson(actorId: string, id: string) {
   if (!youngPerson) {
     throw httpError(404, 'YOUNG_PERSON_NOT_FOUND', 'Young person not found.');
   }
+
+  await logSensitiveReadAccess({
+    actorUserId: actorId,
+    tenantId: tenant.tenantId,
+    entityType: 'young_person',
+    entityId: id,
+    source: 'young-people.get',
+    scope: 'detail',
+    resultCount: 1,
+  });
+
   return mapYoungPerson(youngPerson);
 }
 
