@@ -319,11 +319,10 @@ export async function register(body: RegisterBody) {
 }
 
 export async function checkEmailAvailability(email: string) {
-  const existing = await prisma.user.findUnique({
-    where: { email },
-    select: { id: true },
-  });
-  return { available: !existing };
+  // Deliberately avoid account enumeration via this public endpoint.
+  // Registration is the authoritative uniqueness check.
+  void email;
+  return { available: true };
 }
 
 /**
@@ -334,7 +333,7 @@ export async function checkEmailAvailability(email: string) {
  */
 export async function verifyOtp(body: VerifyOtpBody) {
   const user = await findUserByOtpIdentifier(body);
-  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  if (!user) throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
   const purpose = resolveOtpPurpose(body);
 
   const otp = await prisma.otpCode.findFirst({
@@ -391,7 +390,14 @@ export async function verifyOtp(body: VerifyOtpBody) {
  */
 export async function resendOtp(body: ResendOtpBody) {
   const user = await findUserByOtpIdentifier(body);
-  if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  if (!user) {
+    return {
+      message: 'If that account exists, a new OTP has been created and is being sent now.',
+      cooldownSeconds: OTP_COOLDOWN_MS / 1_000,
+      otpDeliveryStatus: 'queued' as const,
+      resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+    };
+  }
   const purpose = resolveOtpPurpose(body);
 
   const recent = await prisma.otpCode.findFirst({

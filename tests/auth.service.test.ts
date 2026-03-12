@@ -75,6 +75,13 @@ beforeEach(() => {
 });
 
 describe('auth.service', () => {
+  it('returns generic email availability response to avoid enumeration', async () => {
+    const result = await authService.checkEmailAvailability('jane@example.com');
+
+    expect(result).toEqual({ available: true });
+    expect(mockPrisma.user.findUnique).not.toHaveBeenCalled();
+  });
+
   it('register returns sent delivery status when OTP email dispatch succeeds', async () => {
     const createdUser = makeUser({ id: 'user_new' });
     mockPrisma.user.findUnique.mockResolvedValueOnce(null);
@@ -142,6 +149,19 @@ describe('auth.service', () => {
       message: 'A new OTP has been sent to your email.',
     });
     expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
+  });
+
+  it('resend OTP returns generic success for unknown users', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+
+    const result = await authService.resendOtp({ email: 'missing@example.com' });
+
+    expect(result).toMatchObject({
+      otpDeliveryStatus: 'queued',
+      cooldownSeconds: 60,
+      message: 'If that account exists, a new OTP has been created and is being sent now.',
+    });
+    expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
   });
 
   it('issues MFA challenge OTP for privileged sessions', async () => {
@@ -219,6 +239,19 @@ describe('auth.service', () => {
     expect(result).toMatchObject({
       refreshToken: 'refresh-token',
       user: { id: user.id, emailVerified: true },
+    });
+  });
+
+  it('returns OTP_INVALID when verify-otp user does not exist', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+
+    await expect(
+      authService.verifyOtp({
+        email: 'missing@example.com',
+        code: '123456',
+      }),
+    ).rejects.toMatchObject({
+      code: 'OTP_INVALID',
     });
   });
 

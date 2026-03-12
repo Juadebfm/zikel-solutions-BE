@@ -33,6 +33,15 @@ const SERVICE_LABELS: Record<string, string> = {
   general_enquiry: 'General Enquiry / Not Sure Yet',
 };
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function buildEmailHtml(body: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -172,7 +181,7 @@ export async function sendOtpEmail(
   `);
 
   if (process.env.NODE_ENV !== 'production') {
-    logger.info({ msg: 'OTP email (dev — not sent via Resend)', email, subject, code });
+    logger.info({ msg: 'OTP email (dev — not sent via Resend)', email, subject });
     return;
   }
 
@@ -186,8 +195,8 @@ export async function sendBookDemoConfirmationEmail(
   fullName: string,
   serviceOfInterest: string,
 ): Promise<void> {
-  const serviceLabel = SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest;
-  const firstName = fullName.split(' ')[0];
+  const serviceLabel = escapeHtml(SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest);
+  const firstName = escapeHtml(fullName.split(' ')[0] ?? '');
 
   const html = buildEmailHtml(`
     <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
@@ -229,8 +238,8 @@ export async function sendContactConfirmationEmail(
   fullName: string,
   serviceOfInterest: string,
 ): Promise<void> {
-  const serviceLabel = SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest;
-  const firstName = fullName.split(' ')[0];
+  const serviceLabel = escapeHtml(SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest);
+  const firstName = escapeHtml(fullName.split(' ')[0] ?? '');
 
   const html = buildEmailHtml(`
     <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
@@ -269,8 +278,8 @@ export async function sendWaitlistConfirmationEmail(
   fullName: string,
   serviceOfInterest: string,
 ): Promise<void> {
-  const serviceLabel = SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest;
-  const firstName = fullName.split(' ')[0];
+  const serviceLabel = escapeHtml(SERVICE_LABELS[serviceOfInterest] ?? serviceOfInterest);
+  const firstName = escapeHtml(fullName.split(' ')[0] ?? '');
 
   const html = buildEmailHtml(`
     <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
@@ -313,12 +322,15 @@ export async function sendTenantInviteEmail(args: {
   inviteToken: string;
   expiresAt: Date;
 }): Promise<void> {
-  const roleLabel = args.role.replace(/_/g, ' ');
-  const expiry = args.expiresAt.toISOString();
+  const roleLabel = escapeHtml(args.role.replace(/_/g, ' '));
+  const expiry = escapeHtml(args.expiresAt.toISOString());
+  const tenantName = escapeHtml(args.tenantName);
+  const tenantNameForSubject = args.tenantName.replace(/[\r\n]+/g, ' ').trim();
+  const inviteToken = escapeHtml(args.inviteToken);
 
   const html = buildEmailHtml(`
     <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
-      You're invited to join ${args.tenantName}
+      You're invited to join ${tenantName}
     </h2>
     <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
       You have been invited to Zikel Solutions as <strong>${roleLabel}</strong>.
@@ -329,7 +341,7 @@ export async function sendTenantInviteEmail(args: {
       <tr>
         <td style="background:#fef9f7;border-left:4px solid #F94D00;padding:16px 20px;border-radius:0 6px 6px 0">
           <p style="margin:0 0 4px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Invite Token</p>
-          <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:14px;color:#02060A;word-break:break-all">${args.inviteToken}</p>
+          <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:14px;color:#02060A;word-break:break-all">${inviteToken}</p>
         </td>
       </tr>
     </table>
@@ -344,7 +356,7 @@ export async function sendTenantInviteEmail(args: {
 
   await sendEmail(
     args.email,
-    `Invitation to ${args.tenantName} on Zikel Solutions`,
+    `Invitation to ${tenantNameForSubject} on Zikel Solutions`,
     html,
   );
 }

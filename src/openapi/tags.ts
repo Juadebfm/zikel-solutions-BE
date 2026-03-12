@@ -66,6 +66,10 @@ export const TAGS = [
     name: 'Audit',
     description: 'Read-only audit log for auth events, permission changes, and destructive actions.',
   },
+  {
+    name: 'Integrations',
+    description: 'Inbound and outbound integration endpoints (webhooks and connector targets).',
+  },
 ] as const;
 
 export type TagName = (typeof TAGS)[number]['name'];

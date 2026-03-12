@@ -1,11 +1,69 @@
 import fp from 'fastify-plugin';
+import { timingSafeEqual } from 'crypto';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../config/env.js';
 import { TAGS } from '../openapi/tags.js';
 import { ALL_SHARED_SCHEMAS } from '../openapi/shared.schemas.js';
 
 export default fp(async (fastify) => {
+  function unauthorized(reply: FastifyReply) {
+    return reply
+      .header('WWW-Authenticate', 'Basic realm="Zikel API Docs"')
+      .status(401)
+      .send({
+        success: false,
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Swagger authentication required.',
+        },
+      });
+  }
+
+  function secureEquals(expected: string, provided: string) {
+    const expectedBuffer = Buffer.from(expected);
+    const providedBuffer = Buffer.from(provided);
+    if (expectedBuffer.length !== providedBuffer.length) return false;
+    return timingSafeEqual(expectedBuffer, providedBuffer);
+  }
+
+  async function enforceSwaggerBasicAuth(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ) {
+    const authHeader = request.headers.authorization;
+    if (!authHeader?.startsWith('Basic ')) {
+      return unauthorized(reply);
+    }
+
+    const encoded = authHeader.slice('Basic '.length).trim();
+    let decoded: string;
+    try {
+      decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    } catch {
+      return unauthorized(reply);
+    }
+
+    const separatorIndex = decoded.indexOf(':');
+    if (separatorIndex === -1) {
+      return unauthorized(reply);
+    }
+
+    const username = decoded.slice(0, separatorIndex);
+    const password = decoded.slice(separatorIndex + 1);
+
+    const expectedUsername = env.SWAGGER_BASIC_AUTH_USERNAME;
+    const expectedPassword = env.SWAGGER_BASIC_AUTH_PASSWORD;
+    if (!expectedUsername || !expectedPassword) {
+      return unauthorized(reply);
+    }
+
+    if (!secureEquals(expectedUsername, username) || !secureEquals(expectedPassword, password)) {
+      return unauthorized(reply);
+    }
+  }
+
   // ── 1. Register shared schemas so routes can use { $ref: 'SchemaId#' } ──────
   for (const schema of ALL_SHARED_SCHEMAS) {
     fastify.addSchema(schema);
@@ -82,10 +140,17 @@ List endpoints accept \`page\`, \`pageSize\` (max 100), \`sortBy\`, \`sortOrder\
     },
   });
 
-  // ── 3. Swagger UI — dev and staging only ─────────────────────────────────────
+  // ── 3. Swagger UI ─────────────────────────────────────────────────────────────
   if (env.SWAGGER_ENABLED) {
     await fastify.register(swaggerUi, {
       routePrefix: '/docs',
+      ...(env.NODE_ENV === 'development'
+        ? {}
+        : {
+            uiHooks: {
+              onRequest: enforceSwaggerBasicAuth,
+            },
+          }),
       uiConfig: {
         docExpansion: 'list',
         deepLinking: true,

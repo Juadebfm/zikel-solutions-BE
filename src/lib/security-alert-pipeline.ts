@@ -8,6 +8,7 @@ import {
 } from '@prisma/client';
 import { env } from '../config/env.js';
 import { logger } from './logger.js';
+import { buildWebhookSignature, formatWebhookSignature } from './webhook-signature.js';
 
 type AuditLogEvent = Pick<
   AuditLog,
@@ -149,13 +150,26 @@ async function dispatchWebhook(args: {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
+    const payloadBody = JSON.stringify(args.payload);
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'X-Zikel-Alert-Source': 'security-alert-pipeline',
+    };
+    if (env.SECURITY_ALERT_WEBHOOK_SHARED_SECRET) {
+      const timestamp = Math.floor(Date.now() / 1_000).toString();
+      const signature = buildWebhookSignature({
+        payload: payloadBody,
+        timestamp,
+        secret: env.SECURITY_ALERT_WEBHOOK_SHARED_SECRET,
+      });
+      headers['X-Zikel-Webhook-Timestamp'] = timestamp;
+      headers['X-Zikel-Webhook-Signature'] = formatWebhookSignature(signature);
+    }
+
     const response = await fetch(args.webhookUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Zikel-Alert-Source': 'security-alert-pipeline',
-      },
-      body: JSON.stringify(args.payload),
+      headers,
+      body: payloadBody,
       signal: controller.signal,
     });
 

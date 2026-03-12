@@ -25,10 +25,12 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
   // Swagger / OpenAPI docs UI
-  // Auto-enabled in development/staging. Explicitly set false to disable.
+  // Auto-enabled in development only. Explicitly set true to enable elsewhere.
   SWAGGER_ENABLED: z
     .enum(['true', 'false'])
     .transform((v) => v === 'true'),
+  SWAGGER_BASIC_AUTH_USERNAME: z.string().min(1).optional(),
+  SWAGGER_BASIC_AUTH_PASSWORD: z.string().min(12).optional(),
 
   // Public backend URL used for email-safe hosted assets (e.g. logo SVG).
   PUBLIC_BASE_URL: z.url({ error: 'PUBLIC_BASE_URL must be a valid URL' })
@@ -56,7 +58,20 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   SECURITY_ALERT_WEBHOOK_URL: z.url({ error: 'SECURITY_ALERT_WEBHOOK_URL must be a valid URL' }).optional(),
+  SECURITY_ALERT_WEBHOOK_SHARED_SECRET: z.string().min(16).optional(),
   SECURITY_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  SECURITY_ALERT_WEBHOOK_MAX_DRIFT_SECONDS: z.coerce.number().int().positive().default(300),
+
+  // CAPTCHA verification for public auth endpoints (register/login/otp/password reset).
+  CAPTCHA_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  CAPTCHA_VERIFY_URL: z.url({ error: 'CAPTCHA_VERIFY_URL must be a valid URL' })
+    .default('https://challenges.cloudflare.com/turnstile/v0/siteverify'),
+  CAPTCHA_SECRET_KEY: z.string().min(1).optional(),
+  CAPTCHA_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  CAPTCHA_MIN_SCORE: z.coerce.number().min(0).max(1).default(0),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -64,8 +79,8 @@ export type Env = z.infer<typeof envSchema>;
 function parseEnv(): Env {
   // Default SWAGGER_ENABLED based on NODE_ENV so no extra config is needed in dev
   if (!process.env.SWAGGER_ENABLED) {
-    const env = process.env.NODE_ENV;
-    process.env.SWAGGER_ENABLED = env !== 'production' && env !== 'test' ? 'true' : 'false';
+    const nodeEnv = process.env.NODE_ENV;
+    process.env.SWAGGER_ENABLED = nodeEnv === 'development' ? 'true' : 'false';
   }
 
   const result = envSchema.safeParse(process.env);
@@ -100,6 +115,50 @@ function parseEnv(): Env {
       throw new Error(
         'SECURITY_ALERT_WEBHOOK_URL is required in staging/production when SECURITY_ALERT_PIPELINE_ENABLED=true.',
       );
+    }
+    if (parsed.SECURITY_ALERT_PIPELINE_ENABLED && !parsed.SECURITY_ALERT_WEBHOOK_SHARED_SECRET) {
+      throw new Error(
+        'SECURITY_ALERT_WEBHOOK_SHARED_SECRET is required in staging/production when SECURITY_ALERT_PIPELINE_ENABLED=true.',
+      );
+    }
+
+    if (
+      parsed.SECURITY_ALERT_WEBHOOK_URL &&
+      !parsed.SECURITY_ALERT_WEBHOOK_URL.startsWith('https://')
+    ) {
+      throw new Error('SECURITY_ALERT_WEBHOOK_URL must use https:// in staging/production.');
+    }
+
+    if (parsed.SECURITY_ALERT_WEBHOOK_URL) {
+      const webhookOrigin = new URL(parsed.SECURITY_ALERT_WEBHOOK_URL).origin;
+      const publicOrigin = new URL(parsed.PUBLIC_BASE_URL).origin;
+      if (
+        webhookOrigin === publicOrigin &&
+        !parsed.SECURITY_ALERT_WEBHOOK_SHARED_SECRET
+      ) {
+        throw new Error(
+          'SECURITY_ALERT_WEBHOOK_SHARED_SECRET is required when SECURITY_ALERT_WEBHOOK_URL points to this backend in staging/production.',
+        );
+      }
+    }
+
+    if (parsed.SWAGGER_ENABLED) {
+      if (!parsed.SWAGGER_BASIC_AUTH_USERNAME || !parsed.SWAGGER_BASIC_AUTH_PASSWORD) {
+        throw new Error(
+          'SWAGGER_BASIC_AUTH_USERNAME and SWAGGER_BASIC_AUTH_PASSWORD are required when SWAGGER_ENABLED=true outside development.',
+        );
+      }
+    }
+
+    if (parsed.CAPTCHA_ENABLED) {
+      if (!parsed.CAPTCHA_SECRET_KEY) {
+        throw new Error(
+          'CAPTCHA_SECRET_KEY is required in staging/production when CAPTCHA_ENABLED=true.',
+        );
+      }
+      if (!parsed.CAPTCHA_VERIFY_URL.startsWith('https://')) {
+        throw new Error('CAPTCHA_VERIFY_URL must use https:// in staging/production.');
+      }
     }
   }
 

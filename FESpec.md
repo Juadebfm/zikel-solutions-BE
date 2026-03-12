@@ -85,6 +85,18 @@ Exact matrix is below.
 Backend has global rate limit plus endpoint overrides.
 Handle `429 RATE_LIMIT_EXCEEDED` and module-specific cooldown errors like `OTP_COOLDOWN`.
 
+## 1.9 Implement privileged MFA challenge UX
+
+For privileged sessions (`super_admin` or `tenant_admin`), protected routes can return `403 MFA_REQUIRED`.
+
+Required flow:
+
+1. User logs in (or refreshes/switches tenant) and receives session with `mfaRequired=true`, `mfaVerified=false`.
+2. FE calls `POST /api/v1/auth/mfa/challenge`.
+3. FE prompts for OTP and submits `POST /api/v1/auth/mfa/verify`.
+4. FE replaces access token with returned access token (`mfaVerified=true` claim).
+5. Retry blocked request once.
+
 ## 2. Global API Contract
 
 ## 2.1 Base URLs
@@ -151,11 +163,15 @@ List endpoints typically return:
 
 ## 3.1 Global-role-gated routes (middleware `requireRole`)
 
-- `super_admin` only: tenant platform management core routes (`GET/POST/PATCH` tenant + memberships)
+- `super_admin` only: platform tenant directory/provisioning core routes (`GET /tenants`, `GET /tenants/:id`, `POST /tenants`)
 - `admin | super_admin`: `PATCH /api/v1/ai/access/:id`
 - `admin` only: announcement writes, care-group writes
 - `admin | manager`: home writes, employee writes, young-person writes
 - `super_admin | admin | manager`: vehicle writes
+
+Clarification:
+
+- Tenant membership/invite routes are scoped by service-layer actor role checks (`super_admin`, `tenant_admin`, `sub_admin`) and are not super-admin-only.
 
 ## 3.2 Service-level permission checks (not only middleware)
 
@@ -164,6 +180,7 @@ List endpoints typically return:
 - Tenant invite management depends on actor global + tenant role.
 - Audit viewing depends on global role or tenant role.
 - Break-glass is super-admin only.
+- Most authenticated route groups enforce privileged MFA (`MFA_REQUIRED`) when token session is privileged and not yet verified.
 
 ## 4. Endpoint Map by Business Domain
 
@@ -186,6 +203,8 @@ All paths below are full paths.
 | `POST /api/v1/auth/verify-otp` | Accepts `{email,code}` or legacy `{userId,code,purpose}`; marks OTP used; activates email; issues access+refresh tokens and session context. | OTP submit; on success treat as authenticated login. Store full session payload. |
 | `POST /api/v1/auth/resend-otp` | Cooldown enforced (`60s`); old unused OTPs invalidated; returns status + cooldown fields. | OTP resend button with countdown using `cooldownSeconds` or `resendAvailableAt`. Handle `429 OTP_COOLDOWN`. |
 | `POST /api/v1/auth/login` | Enforces lockout after failed attempts; blocks inactive/unverified accounts; issues token pair + session. | Standard login. Handle `INVALID_CREDENTIALS`, `ACCOUNT_LOCKED`, `EMAIL_NOT_VERIFIED`, `ACCOUNT_INACTIVE`. |
+| `POST /api/v1/auth/mfa/challenge` | Authenticated endpoint. Starts privileged-session MFA challenge and returns delivery/cooldown metadata. | Trigger when privileged route returns `MFA_REQUIRED` or proactively after login for privileged sessions. |
+| `POST /api/v1/auth/mfa/verify` | Authenticated endpoint. Validates MFA OTP and returns new access token with `mfaVerified=true`. | MFA submit screen. Replace access token and continue pending action. |
 | `POST /api/v1/auth/refresh` | Single-use refresh token rotation. Old refresh token revoked atomically. | Silent refresh in interceptor. Replace both tokens every refresh. |
 | `POST /api/v1/auth/switch-tenant` | Requires auth. Validates active membership in target tenant. Updates active tenant and re-signs access token with tenant claims. | Tenant switcher action. Replace access token only. Refetch tenant-scoped data. |
 | `POST /api/v1/auth/logout` | Revokes provided refresh token for current user; idempotent. | Send refresh token then clear local session. |
@@ -200,6 +219,7 @@ Additional FE decisions for Auth:
 - OTP is 6 digits; expiry 10 minutes.
 - Refresh expiry is env-configured (default `7d`).
 - Access token expiry default is `15m`.
+- For privileged sessions, MFA verification is token-bound. After login/refresh/switch-tenant, expect to re-challenge when `session.mfaRequired=true`.
 
 ## 4.3 Me Profile and Preferences
 
@@ -237,15 +257,22 @@ Additional FE decisions for Auth:
 | `GET /api/v1/tenants` | Super-admin only list with search/isActive pagination. | Platform admin tenant table. |
 | `GET /api/v1/tenants/:id` | Super-admin only detail with memberships included. | Tenant detail page. |
 | `POST /api/v1/tenants` | Super-admin provisions tenant; optional initial admin by `adminUserId` or `adminEmail` (not both). | Tenant creation wizard. Handle `TENANT_SLUG_TAKEN`, `USER_NOT_FOUND`. |
-| `POST /api/v1/tenants/:id/memberships` | Super-admin adds membership via `userId` or `email`; enforces unique tenant membership. | Membership add UI. Handle `TENANT_MEMBERSHIP_EXISTS`. |
-| `PATCH /api/v1/tenants/:id/memberships/:membershipId` | Super-admin updates role/status. | Membership edit UI. |
 
-## 4.5.2 Tenant-scoped invite management
+## 4.5.2 Tenant-scoped membership management
+
+| Endpoint | Business Decision and Logic | FE Usage Contract |
+|---|---|---|
+| `POST /api/v1/tenants/self-serve` | Authenticated self-serve onboarding. Creates a tenant and assigns current user as `tenant_admin`. Allowed only for eligible first-time org setup users. | “Create my organization” onboarding flow after account verification. |
+| `GET /api/v1/tenants/:id/memberships` | Scoped by actor role. Super-admin sees all roles; tenant admin sees all roles in tenant; sub admin sees only `sub_admin` + `staff`. | Membership table must adapt visible rows by actor capability and handle empty-result vs forbidden cleanly. |
+| `POST /api/v1/tenants/:id/memberships` | Scoped role-based add. Super-admin can add all roles; tenant admin can add `sub_admin|staff`; sub admin can add `staff`. | Add-member modal must role-filter selectable role options by actor role. |
+| `PATCH /api/v1/tenants/:id/memberships/:membershipId` | Scoped role/status updates with manageability constraints. | Edit-member UX must disable forbidden role transitions. Handle `403` fallback from backend. |
+
+## 4.5.3 Tenant-scoped invite management
 
 | Endpoint | Business Decision and Logic | FE Usage Contract |
 |---|---|---|
 | `GET /api/v1/tenants/:id/invites` | Auth required. Service checks actor can manage invites in tenant. Supports status filter. | Invite management list. Handle `TENANT_INVITE_FORBIDDEN`. |
-| `POST /api/v1/tenants/:id/invites` | Tokenized invite creation. Returns raw `inviteToken`. No automatic outbound send in backend. | Create invite flow must surface token/copy/share UX. |
+| `POST /api/v1/tenants/:id/invites` | Tokenized invite creation. Returns raw `inviteToken` and also triggers backend invite email dispatch (best effort). | Create invite flow should show “email sent” status plus manual token copy fallback for recovery/resend support. |
 | `PATCH /api/v1/tenants/:id/invites/:inviteId/revoke` | Scoped revoke with role permission checks. Accepted invites cannot be revoked. | Revoke action with state refresh. |
 | `POST /api/v1/tenants/invites/accept` | Invite token acceptance by authenticated user; email must match invited email; sets membership active. | Invite acceptance page for logged-in user; handle expired/revoked/already accepted states. |
 
@@ -331,7 +358,7 @@ Non-privileged users are mostly self-scope.
 | `GET /api/v1/tasks/:id` | Tenant-scoped. Non-privileged can only access owned/assigned tasks. | Detail page with permission-aware loading behavior. |
 | `POST /api/v1/tasks` | All authenticated can create. Non-privileged can only assign to self and limited approval statuses (`not_required`/`pending_approval`). | Create form should restrict assignee and approval options based on user privileges. |
 | `PATCH /api/v1/tasks/:id` | Non-privileged may only edit owned/assigned tasks; cannot arbitrarily change approval status; reassignment restricted. Supports nullable relation fields. | Edit form must enforce these restrictions client-side and handle `403` fallback. |
-| `DELETE /api/v1/tasks/:id` | Hard delete. Non-privileged only for owned/assigned tasks. | Use destructive confirmation; remove from list on success. |
+| `DELETE /api/v1/tasks/:id` | Archive (soft delete via `deletedAt`). Non-privileged only for owned/assigned tasks. | Use destructive confirmation with “Archive task” wording; remove from active lists on success. |
 
 Task enums:
 
@@ -343,7 +370,7 @@ Task enums:
 
 | Endpoint | Business Decision and Logic | FE Usage Contract |
 |---|---|---|
-| `GET /api/v1/summary/stats` | Personal KPI counts. `pendingApproval` is tenant-wide for approvers; otherwise scoped personal. | Top summary cards. |
+| `GET /api/v1/summary/stats` | Personal KPI counts. `pendingApproval` is tenant-wide for approvers; otherwise scoped personal. `comments` = unread announcements count for current user. `rewards` = completed-task reward points (server-derived). | Top summary cards; do not hardcode comments/rewards placeholders anymore. |
 | `GET /api/v1/summary/todos` | Personal to-do list with pagination/search/sort. | To-do panel data source. |
 | `GET /api/v1/summary/tasks-to-approve` | Only users with approval permission. Returns pending approval tasks. | Approvals queue tab; hide for non-approvers. |
 | `POST /api/v1/summary/tasks-to-approve/process-batch` | Batch approve/reject with partial success (`processed`, `failed[]`). | Batch action UX must show per-item failures. |
@@ -375,7 +402,7 @@ Approval permission (`canApprove`) logic:
 | `POST /api/v1/announcements/:id/read` | Explicit idempotent mark-read endpoint. | Use for list interactions without opening detail. |
 | `POST /api/v1/announcements` | `admin` only. Creates tenant announcement. | Admin announcement composer. |
 | `PATCH /api/v1/announcements/:id` | `admin` only. Partial update with date-window checks. | Admin edit flow. |
-| `DELETE /api/v1/announcements/:id` | `admin` only hard delete. | Admin delete action. |
+| `DELETE /api/v1/announcements/:id` | `admin` only archive (soft delete via `deletedAt`; also unpins/expires item). | Admin action should be labeled “Archive announcement”; remove from active feed after success. |
 
 Important: route middleware is `requireRole('admin')`; `super_admin` is not included here by route policy.
 
@@ -395,10 +422,11 @@ FE prompt-context decision:
 
 | Endpoint | Business Decision and Logic | FE Usage Contract |
 |---|---|---|
-| `GET /api/v1/audit` | Viewer-only endpoint. Supports filters by action/entity/user/date/search. Super-admin cross-tenant read requires break-glass active tenant alignment. | Audit log explorer with advanced filters. |
+| `GET /api/v1/audit` | Viewer-only endpoint. Supports filters by action/entity/user/date/search. Super-admin cross-tenant read requires break-glass active tenant alignment. Includes read events (`record_accessed`) and standardized metadata keys (e.g. `requestId`, `source`) on new records. | Audit log explorer with advanced filters; include `record_accessed` in action filter options. |
 | `GET /api/v1/audit/security-alerts` | Derives alerts from recent audit events (`repeated_auth_failures`, `cross_tenant_attempts`, `admin_changes`, `break_glass_access`). | Security alerts widget/dashboard. |
 | `GET /api/v1/audit/:id` | Fetch single audit log in scoped view. Optional `tenantId` query for super-admin with break-glass constraints. | Drilldown from audit list. |
 | `POST /api/v1/audit/break-glass/access` | Super-admin only. Sets active tenant for emergency access and writes immutable-style audit metadata. | Super-admin emergency switch flow with mandatory reason capture. |
+| `POST /api/v1/audit/break-glass/release` | Super-admin only. Releases active break-glass tenant context back to previous tenant (or null) and writes release audit metadata. | Provide explicit “Release break-glass” CTA in super-admin UX once incident work is done. |
 
 ## 5. Rate Limit Map (Endpoint Overrides)
 
@@ -411,6 +439,8 @@ Overrides:
 - `POST /api/v1/auth/verify-otp`: 10/min
 - `POST /api/v1/auth/resend-otp`: 5/min
 - `POST /api/v1/auth/login`: 10/min
+- `POST /api/v1/auth/mfa/challenge`: 5/min
+- `POST /api/v1/auth/mfa/verify`: 10/min
 - `POST /api/v1/auth/refresh`: 20/min
 - `POST /api/v1/auth/forgot-password`: 5/min
 - `POST /api/v1/auth/reset-password`: 5/min
@@ -444,6 +474,8 @@ Important backend codes to map to user-facing behavior:
   - `REFRESH_TOKEN_INVALID`
   - `TENANT_ACCESS_DENIED`
   - `TENANT_CONTEXT_REQUIRED`
+  - `MFA_REQUIRED`
+  - `MFA_NOT_REQUIRED`
 - Tenant/invite:
   - `TENANT_SLUG_TAKEN`
   - `TENANT_MEMBERSHIP_EXISTS`
@@ -481,12 +513,13 @@ And generic:
 
 1. Upgrade API client and session store for token rotation + tenant session context.
 2. Implement tenant switcher and mandatory tenant selection flow.
-3. Refactor permission guard system to include global role + tenant role.
-4. Update all CRUD screens to tenant-aware 404 semantics.
-5. Implement tenant invite lifecycle UI (create/copy/revoke/accept).
-6. Integrate summary/tasks permission behaviors and batch approval results.
-7. Integrate audit/security alert screens and break-glass flow for super-admin.
-8. Harden form handling for 400/422 dual validation style and 429 throttling UX.
+3. Add privileged MFA challenge/verify flow and `MFA_REQUIRED` retry handling.
+4. Refactor permission guard system to include global role + tenant role.
+5. Update all CRUD screens to tenant-aware 404 semantics and archive wording for task/announcement deletes.
+6. Implement tenant invite lifecycle UI (create/email-sent state/copy token/revoke/accept).
+7. Integrate summary/tasks permission behaviors and server-calculated comments/rewards.
+8. Integrate audit/security alert screens and break-glass access + release flow for super-admin.
+9. Harden form handling for 400/422 dual validation style and 429 throttling UX.
 
 ## 9. Quick Endpoint Inventory (for FE routing map)
 
@@ -503,6 +536,8 @@ Auth:
 - `POST /api/v1/auth/verify-otp`
 - `POST /api/v1/auth/resend-otp`
 - `POST /api/v1/auth/login`
+- `POST /api/v1/auth/mfa/challenge`
+- `POST /api/v1/auth/mfa/verify`
 - `POST /api/v1/auth/refresh`
 - `POST /api/v1/auth/switch-tenant`
 - `POST /api/v1/auth/logout`
@@ -560,6 +595,8 @@ Tenants:
 - `GET /api/v1/tenants`
 - `GET /api/v1/tenants/:id`
 - `POST /api/v1/tenants`
+- `POST /api/v1/tenants/self-serve`
+- `GET /api/v1/tenants/:id/memberships`
 - `POST /api/v1/tenants/:id/memberships`
 - `PATCH /api/v1/tenants/:id/memberships/:membershipId`
 - `GET /api/v1/tenants/:id/invites`
@@ -621,4 +658,4 @@ Audit:
 - `GET /api/v1/audit/security-alerts`
 - `GET /api/v1/audit/:id`
 - `POST /api/v1/audit/break-glass/access`
-
+- `POST /api/v1/audit/break-glass/release`

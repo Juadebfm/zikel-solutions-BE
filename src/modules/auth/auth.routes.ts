@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import { requireCaptcha } from '../../middleware/captcha.js';
 import {
   RegisterBodySchema,
   VerifyOtpBodySchema,
@@ -49,6 +50,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/register ────────────────────────────────────────────────────
   fastify.post('/register', {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_register')],
     schema: {
       tags: ['Auth'],
       summary: 'Register a new user (steps 1–3)',
@@ -87,6 +89,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         409: { description: 'Email already registered.', $ref: 'ApiError#' },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
         422: { description: 'Validation error (password policy, terms, etc.).', $ref: 'ApiError#' },
       },
     },
@@ -107,10 +111,12 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── GET /auth/check-email ─────────────────────────────────────────────────
   fastify.get('/check-email', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_check_email')],
     schema: {
       tags: ['Auth'],
       summary: 'Check email availability',
-      description: 'Returns whether an email is available before continuing signup.',
+      description:
+        'Privacy-safe pre-check endpoint for signup flows. Returns a generic response to avoid account enumeration.',
       security: [],
       querystring: checkEmailQueryJson,
       response: {
@@ -128,6 +134,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
       },
     },
     handler: async (request, reply) => {
@@ -140,6 +148,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/verify-otp ──────────────────────────────────────────────────
   fastify.post('/verify-otp', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_verify_otp')],
     schema: {
       tags: ['Auth'],
       summary: 'Verify OTP and activate account',
@@ -154,7 +163,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           $ref: 'AuthResponse#',
         },
         400: { description: 'Invalid, expired, or already-used OTP.', $ref: 'ApiError#' },
-        404: { description: 'User not found.', $ref: 'ApiError#' },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
       },
     },
     handler: async (request, reply) => {
@@ -171,6 +181,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/resend-otp ──────────────────────────────────────────────────
   fastify.post('/resend-otp', {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_resend_otp')],
     schema: {
       tags: ['Auth'],
       summary: 'Resend OTP',
@@ -211,7 +222,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
-        404: { description: 'User not found.', $ref: 'ApiError#' },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
         429: { description: 'Cooldown in effect — too many resend requests.', $ref: 'ApiError#' },
       },
     },
@@ -225,6 +237,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/login ───────────────────────────────────────────────────────
   fastify.post('/login', {
     config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_login')],
     schema: {
       tags: ['Auth'],
       summary: 'Login with email and password',
@@ -243,6 +256,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           description: 'Account locked or email not verified.',
           $ref: 'ApiError#',
         },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
       },
     },
     handler: async (request, reply) => {
@@ -488,6 +502,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/forgot-password ─────────────────────────────────────────────
   fastify.post('/forgot-password', {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_forgot_password')],
     schema: {
       tags: ['Auth'],
       summary: 'Request a password reset OTP',
@@ -513,6 +528,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
         429: { description: 'Too many requests.', $ref: 'ApiError#' },
       },
     },
@@ -526,6 +543,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/reset-password ───────────────────────────────────────────────
   fastify.post('/reset-password', {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_reset_password')],
     schema: {
       tags: ['Auth'],
       summary: 'Reset password using OTP',
@@ -552,6 +570,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         400: { description: 'Invalid, expired, or already-used OTP.', $ref: 'ApiError#' },
+        403: { description: 'Captcha verification failed.', $ref: 'ApiError#' },
+        503: { description: 'Captcha verification misconfigured.', $ref: 'ApiError#' },
         422: { description: 'Validation error (password policy, passwords do not match).', $ref: 'ApiError#' },
       },
     },

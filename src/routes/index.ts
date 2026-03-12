@@ -15,6 +15,7 @@ import youngPeopleRoutes from '../modules/young-people/young-people.routes.js';
 import vehicleRoutes from '../modules/vehicles/vehicles.routes.js';
 import taskRoutes from '../modules/tasks/tasks.routes.js';
 import auditRoutes from '../modules/audit/audit.routes.js';
+import integrationsRoutes from '../modules/integrations/integrations.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
   // Infrastructure probes — no auth, no /api/v1 prefix
@@ -38,6 +39,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(vehicleRoutes, { prefix: '/vehicles' });
       await v1.register(taskRoutes, { prefix: '/tasks' });
       await v1.register(auditRoutes, { prefix: '/audit' });
+      await v1.register(integrationsRoutes, { prefix: '/integrations' });
     },
     { prefix: '/api/v1' },
   );
