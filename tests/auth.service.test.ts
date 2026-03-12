@@ -4,6 +4,7 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
   mockPrisma: {
     user: {
       findUnique: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
     },
     otpCode: {
@@ -67,6 +68,75 @@ beforeEach(() => {
 });
 
 describe('auth.service', () => {
+  it('register returns sent delivery status when OTP email dispatch succeeds', async () => {
+    const createdUser = makeUser({ id: 'user_new' });
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.user.create.mockResolvedValueOnce(createdUser);
+    mockPrisma.otpCode.create.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    sendOtpEmail.mockResolvedValueOnce(undefined);
+
+    const result = await authService.register({
+      country: 'UK',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      password: 'Password123!',
+      confirmPassword: 'Password123!',
+      acceptTerms: true,
+    });
+
+    expect(result).toMatchObject({
+      userId: 'user_new',
+      otpDeliveryStatus: 'sent',
+      message: 'OTP sent to your email address.',
+    });
+    expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
+  });
+
+  it('register returns failed delivery status when OTP email dispatch fails', async () => {
+    const createdUser = makeUser({ id: 'user_failed' });
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.user.create.mockResolvedValueOnce(createdUser);
+    mockPrisma.otpCode.create.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    sendOtpEmail.mockRejectedValueOnce(new Error('provider-down'));
+
+    const result = await authService.register({
+      country: 'UK',
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      password: 'Password123!',
+      confirmPassword: 'Password123!',
+      acceptTerms: true,
+    });
+
+    expect(result).toMatchObject({
+      userId: 'user_failed',
+      otpDeliveryStatus: 'failed',
+      message: 'Account created, but OTP delivery failed. Please use resend.',
+    });
+    expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
+  });
+
+  it('resend OTP returns delivery status and next resend time', async () => {
+    const user = makeUser();
+    mockPrisma.user.findUnique.mockResolvedValueOnce(user);
+    mockPrisma.otpCode.findFirst.mockResolvedValueOnce(null);
+    mockPrisma.otpCode.create.mockResolvedValueOnce({});
+    sendOtpEmail.mockResolvedValueOnce(undefined);
+
+    const result = await authService.resendOtp({ email: user.email });
+
+    expect(result).toMatchObject({
+      otpDeliveryStatus: 'sent',
+      cooldownSeconds: 60,
+      message: 'A new OTP has been sent to your email.',
+    });
+    expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
+  });
+
   it('verifies OTP using email identifier and issues tokens', async () => {
     const user = makeUser();
     mockPrisma.user.findUnique.mockResolvedValueOnce(user);

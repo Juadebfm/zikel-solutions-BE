@@ -31,23 +31,34 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Register a new user (steps 1–3)',
       description:
         'Accepts all data collected across the 4-step signup flow (country, profile, password). ' +
-        'Creates a pending user and sends a 6-digit OTP to the provided email. ' +
+        'Creates a pending user and starts OTP delivery to the provided email. ' +
         'The account is activated only after OTP verification.',
       security: [],
       body: registerBodyJson,
       response: {
         201: {
-          description: 'User registered — OTP sent to email.',
+          description: 'User registered — includes OTP delivery status for unambiguous UI messaging.',
           type: 'object',
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
             data: {
               type: 'object',
-              required: ['userId', 'message'],
+              required: ['userId', 'message', 'otpDeliveryStatus', 'resendAvailableAt'],
               properties: {
                 userId: { type: 'string', description: 'Use this ID in /auth/verify-otp' },
-                message: { type: 'string', example: 'OTP sent to your email address.' },
+                message: { type: 'string', example: "Account created. We're sending your OTP now." },
+                otpDeliveryStatus: {
+                  type: 'string',
+                  enum: ['sent', 'queued', 'failed'],
+                  description:
+                    'Delivery state from backend perspective: provider accepted (sent), deferred (queued), or failed.',
+                },
+                resendAvailableAt: {
+                  type: 'string',
+                  format: 'date-time',
+                  description: 'ISO timestamp when resend is next allowed.',
+                },
               },
             },
           },
@@ -142,25 +153,36 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Resend OTP',
       description:
         'Issues a new OTP and invalidates the previous one. ' +
-        'Enforces a cooldown period to prevent abuse. Returns remaining cooldown seconds if blocked.',
+        'Enforces a cooldown period to prevent abuse. Returns delivery state for unambiguous UI messaging.',
       security: [],
       body: resendOtpBodyJson,
       response: {
         200: {
-          description: 'OTP resent.',
+          description: 'OTP regenerated — includes delivery status and next allowed resend time.',
           type: 'object',
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
             data: {
               type: 'object',
-              required: ['message'],
+              required: ['message', 'cooldownSeconds', 'otpDeliveryStatus', 'resendAvailableAt'],
               properties: {
                 message: { type: 'string', example: 'A new OTP has been sent to your email.' },
                 cooldownSeconds: {
                   type: 'integer',
                   example: 60,
                   description: 'Seconds until another resend is allowed.',
+                },
+                otpDeliveryStatus: {
+                  type: 'string',
+                  enum: ['sent', 'queued', 'failed'],
+                  description:
+                    'Delivery state from backend perspective: provider accepted (sent), deferred (queued), or failed.',
+                },
+                resendAvailableAt: {
+                  type: 'string',
+                  format: 'date-time',
+                  description: 'ISO timestamp when resend is next allowed.',
                 },
               },
             },

@@ -20,6 +20,7 @@ import type {
 const BCRYPT_COST = 12;
 const OTP_EXPIRY_MS = 10 * 60 * 1_000; // 10 minutes
 const OTP_COOLDOWN_MS = 60 * 1_000;    // 60 seconds between resends
+const OTP_EMAIL_WAIT_MS = 1_200;       // wait briefly for provider ack, then return queued
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MS = 30 * 60 * 1_000;   // 30 minutes
 
@@ -44,6 +45,64 @@ function resolveOtpPurpose(body: VerifyOtpBody | ResendOtpBody): OtpPurpose {
     return body.purpose as OtpPurpose;
   }
   return OtpPurpose.email_verification;
+}
+
+type OtpDeliveryStatus = 'sent' | 'queued' | 'failed';
+
+function isoAfter(ms: number): string {
+  return new Date(Date.now() + ms).toISOString();
+}
+
+function registerMessageFor(status: OtpDeliveryStatus): string {
+  switch (status) {
+    case 'sent':
+      return 'OTP sent to your email address.';
+    case 'queued':
+      return "Account created. We're sending your OTP now.";
+    case 'failed':
+      return 'Account created, but OTP delivery failed. Please use resend.';
+  }
+}
+
+function resendMessageFor(status: OtpDeliveryStatus): string {
+  switch (status) {
+    case 'sent':
+      return 'A new OTP has been sent to your email.';
+    case 'queued':
+      return "A new OTP has been created and is being sent now.";
+    case 'failed':
+      return 'A new OTP was created, but delivery failed. Please try resend again shortly.';
+  }
+}
+
+async function dispatchOtp(
+  email: string,
+  code: string,
+  purpose: OtpPurpose,
+): Promise<OtpDeliveryStatus> {
+  return new Promise<OtpDeliveryStatus>((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve('queued');
+    }, OTP_EMAIL_WAIT_MS);
+
+    sendOtpEmail(email, code, purpose)
+      .then(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve('sent');
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve('failed');
+      });
+  });
 }
 
 /**
@@ -96,7 +155,7 @@ function safeUser(user: {
 
 /**
  * Step 1–3 of the signup flow.
- * Creates a pending user (emailVerified: false) and sends a 6-digit OTP.
+ * Creates a pending user (emailVerified: false) and initiates 6-digit OTP delivery.
  */
 export async function register(body: RegisterBody) {
   const existing = await prisma.user.findUnique({ where: { email: body.email } });
@@ -131,13 +190,22 @@ export async function register(body: RegisterBody) {
     },
   });
 
-  await sendOtpEmail(body.email, code, OtpPurpose.email_verification);
+  const otpDeliveryStatus = await dispatchOtp(
+    body.email,
+    code,
+    OtpPurpose.email_verification,
+  );
 
   await prisma.auditLog.create({
     data: { userId: user.id, action: AuditAction.register },
   });
 
-  return { userId: user.id, message: 'OTP sent to your email address.' };
+  return {
+    userId: user.id,
+    message: registerMessageFor(otpDeliveryStatus),
+    otpDeliveryStatus,
+    resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+  };
 }
 
 export async function checkEmailAvailability(email: string) {
@@ -238,9 +306,14 @@ export async function resendOtp(body: ResendOtpBody) {
     },
   });
 
-  await sendOtpEmail(user.email, code, purpose);
+  const otpDeliveryStatus = await dispatchOtp(user.email, code, purpose);
 
-  return { message: 'A new OTP has been sent to your email.', cooldownSeconds: OTP_COOLDOWN_MS / 1_000 };
+  return {
+    message: resendMessageFor(otpDeliveryStatus),
+    cooldownSeconds: OTP_COOLDOWN_MS / 1_000,
+    otpDeliveryStatus,
+    resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+  };
 }
 
 /**

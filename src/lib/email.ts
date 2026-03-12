@@ -21,7 +21,7 @@ function getResend(): Resend {
 // ─── Assets ───────────────────────────────────────────────────────────────────
 
 // Hosted public URL — Gmail blocks data: URIs so the logo is served from the app itself.
-const WHITE_LOGO_URL = 'https://zikel-solutions.fly.dev/assets/white-logo.svg';
+const WHITE_LOGO_URL = `${env.PUBLIC_BASE_URL.replace(/\/+$/, '')}/assets/white-logo.svg`;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

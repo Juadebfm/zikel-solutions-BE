@@ -30,6 +30,10 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .transform((v) => v === 'true'),
 
+  // Public backend URL used for email-safe hosted assets (e.g. logo SVG).
+  PUBLIC_BASE_URL: z.url({ error: 'PUBLIC_BASE_URL must be a valid URL' })
+    .default('https://zikel-solutions-be.onrender.com'),
+
   // Email — Resend (https://resend.com)
   // Optional in development (email.ts logs OTPs to console instead).
   // Required in production: set via `fly secrets set`.
