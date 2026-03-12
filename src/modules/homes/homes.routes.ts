@@ -59,7 +59,8 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const { data, meta } = await homesService.listHomes(parse.data);
+      const actorId = (request.user as JwtPayload).sub;
+      const { data, meta } = await homesService.listHomes(actorId, parse.data);
       return reply.send({ success: true, data, meta });
     },
   });
@@ -82,8 +83,9 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const data = await homesService.getHome(id);
+      const data = await homesService.getHome(actorId, id);
       return reply.send({ success: true, data });
     },
   });

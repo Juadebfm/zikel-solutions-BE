@@ -19,6 +19,16 @@ const ROLE_PERMISSIONS: Record<
     canExportData: boolean;
   }
 > = {
+  super_admin: {
+    canViewAllHomes: true,
+    canViewAllYoungPeople: true,
+    canViewAllEmployees: true,
+    canApproveIOILogs: true,
+    canManageUsers: true,
+    canManageSettings: true,
+    canViewReports: true,
+    canExportData: true,
+  },
   staff: {
     canViewAllHomes: false,
     canViewAllYoungPeople: false,
@@ -62,6 +72,7 @@ type UserWithEmployee = {
   language: string;
   timezone: string;
   aiAccessEnabled: boolean;
+  activeTenantId: string | null;
   createdAt: Date;
   lastLoginAt: Date | null;
   employee: { homeId: string | null; jobTitle: string | null; home: { name: string } | null } | null;
@@ -101,15 +112,9 @@ async function getUserOrThrow(userId: string): Promise<UserWithEmployee> {
       language: true,
       timezone: true,
       aiAccessEnabled: true,
+      activeTenantId: true,
       createdAt: true,
       lastLoginAt: true,
-      employee: {
-        select: {
-          homeId: true,
-          jobTitle: true,
-          home: { select: { name: true } },
-        },
-      },
     },
   });
 
@@ -117,7 +122,24 @@ async function getUserOrThrow(userId: string): Promise<UserWithEmployee> {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  return user;
+  const employee = user.activeTenantId
+    ? await prisma.employee.findFirst({
+        where: {
+          userId: user.id,
+          tenantId: user.activeTenantId,
+        },
+        select: {
+          homeId: true,
+          jobTitle: true,
+          home: { select: { name: true } },
+        },
+      })
+    : null;
+
+  return {
+    ...user,
+    employee,
+  };
 }
 
 export async function getMyProfile(userId: string) {
@@ -132,30 +154,9 @@ export async function updateMyProfile(userId: string, body: UpdateMeBody) {
   if (body.phone !== undefined) updateData.phoneNumber = body.phone;
   if (body.avatar !== undefined) updateData.avatarUrl = body.avatar;
 
-  const updated = await prisma.user.update({
+  await prisma.user.update({
     where: { id: userId },
     data: updateData,
-    select: {
-      id: true,
-      email: true,
-      firstName: true,
-      lastName: true,
-      role: true,
-      avatarUrl: true,
-      phoneNumber: true,
-      language: true,
-      timezone: true,
-      aiAccessEnabled: true,
-      createdAt: true,
-      lastLoginAt: true,
-      employee: {
-        select: {
-          homeId: true,
-          jobTitle: true,
-          home: { select: { name: true } },
-        },
-      },
-    },
   });
 
   await prisma.auditLog.create({
@@ -168,6 +169,7 @@ export async function updateMyProfile(userId: string, body: UpdateMeBody) {
     },
   });
 
+  const updated = await getUserOrThrow(userId);
   return mapProfile(updated);
 }
 

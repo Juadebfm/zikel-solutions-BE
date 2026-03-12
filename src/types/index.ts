@@ -1,11 +1,15 @@
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-export type UserRole = 'staff' | 'manager' | 'admin';
+export type UserRole = 'super_admin' | 'staff' | 'manager' | 'admin';
+export type TenantRole = 'tenant_admin' | 'sub_admin' | 'staff';
 
 export interface JwtPayload {
   sub: string;       // user id
   email: string;
   role: UserRole;
+  tenantId?: string | null;
+  tenantRole?: TenantRole | null;
+  mfaVerified?: boolean;
   iat?: number;
   exp?: number;
 }

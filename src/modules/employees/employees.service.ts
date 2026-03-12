@@ -1,6 +1,7 @@
-import { AuditAction, Prisma } from '@prisma/client';
+import { AuditAction, MembershipStatus, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateEmployeeBody,
   ListEmployeesQuery,
@@ -39,7 +40,7 @@ function mapEmployee(employee: {
   };
 }
 
-async function ensureUserExists(userId: string) {
+async function ensureUserHasTenantAccess(userId: string, tenantId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { id: true },
@@ -47,11 +48,29 @@ async function ensureUserExists(userId: string) {
   if (!user) {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
+
+  const membership = await prisma.tenantMembership.findUnique({
+    where: {
+      tenantId_userId: {
+        tenantId,
+        userId,
+      },
+    },
+    select: { status: true },
+  });
+
+  if (!membership || membership.status !== MembershipStatus.active) {
+    throw httpError(
+      409,
+      'TENANT_MEMBERSHIP_REQUIRED',
+      'User must have an active tenant membership before becoming an employee.',
+    );
+  }
 }
 
-async function ensureHomeExists(homeId: string) {
-  const home = await prisma.home.findUnique({
-    where: { id: homeId },
+async function ensureHomeExists(homeId: string, tenantId: string) {
+  const home = await prisma.home.findFirst({
+    where: { id: homeId, tenantId },
     select: { id: true },
   });
   if (!home) {
@@ -59,9 +78,11 @@ async function ensureHomeExists(homeId: string) {
   }
 }
 
-export async function listEmployees(query: ListEmployeesQuery) {
+export async function listEmployees(actorId: string, query: ListEmployeesQuery) {
+  const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
   const where: Prisma.EmployeeWhereInput = {
+    tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     ...(query.search
@@ -110,9 +131,10 @@ export async function listEmployees(query: ListEmployeesQuery) {
   };
 }
 
-export async function getEmployee(id: string) {
-  const employee = await prisma.employee.findUnique({
-    where: { id },
+export async function getEmployee(actorId: string, id: string) {
+  const tenant = await requireTenantContext(actorId);
+  const employee = await prisma.employee.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     include: {
       user: {
         select: {
@@ -133,12 +155,14 @@ export async function getEmployee(id: string) {
 }
 
 export async function createEmployee(actorId: string, body: CreateEmployeeBody) {
-  await ensureUserExists(body.userId);
-  if (body.homeId) await ensureHomeExists(body.homeId);
+  const tenant = await requireTenantContext(actorId);
+  await ensureUserHasTenantAccess(body.userId, tenant.tenantId);
+  if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
 
   try {
     const employee = await prisma.employee.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: body.userId,
         homeId: body.homeId ?? null,
         jobTitle: body.jobTitle ?? null,
@@ -161,6 +185,7 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
 
     await prisma.auditLog.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: actorId,
         action: AuditAction.record_created,
         entityType: 'employee',
@@ -181,8 +206,9 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
 }
 
 export async function updateEmployee(actorId: string, id: string, body: UpdateEmployeeBody) {
-  const existing = await prisma.employee.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.employee.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -190,7 +216,7 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
   }
 
   if (body.homeId !== undefined && body.homeId !== null) {
-    await ensureHomeExists(body.homeId);
+    await ensureHomeExists(body.homeId, tenant.tenantId);
   }
 
   const updateData: Prisma.EmployeeUpdateInput = {};
@@ -222,6 +248,7 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_updated,
       entityType: 'employee',
@@ -234,8 +261,9 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
 }
 
 export async function deactivateEmployee(actorId: string, id: string) {
-  const existing = await prisma.employee.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.employee.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -249,6 +277,7 @@ export async function deactivateEmployee(actorId: string, id: string) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_deleted,
       entityType: 'employee',

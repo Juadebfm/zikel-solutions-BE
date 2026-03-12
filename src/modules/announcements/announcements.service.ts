@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateAnnouncementBody,
   ListAnnouncementsQuery,
@@ -39,12 +40,14 @@ function mapAnnouncement(
 }
 
 export async function listAnnouncements(userId: string, query: ListAnnouncementsQuery) {
+  const tenant = await requireTenantContext(userId);
   const page = query.page;
   const limit = query.limit;
   const skip = (page - 1) * limit;
   const now = new Date();
 
   const where: Prisma.AnnouncementWhereInput = {
+    tenantId: tenant.tenantId,
     publishedAt: { lte: now },
     OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
     ...(query.status === 'read'
@@ -83,8 +86,9 @@ export async function listAnnouncements(userId: string, query: ListAnnouncements
 }
 
 export async function getAnnouncement(userId: string, id: string, markAsRead = true) {
-  const announcement = await prisma.announcement.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(userId);
+  const announcement = await prisma.announcement.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     include: {
       reads: {
         where: { userId },
@@ -120,8 +124,9 @@ export async function getAnnouncement(userId: string, id: string, markAsRead = t
 }
 
 export async function markAnnouncementRead(userId: string, id: string) {
-  const exists = await prisma.announcement.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(userId);
+  const exists = await prisma.announcement.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
 
@@ -147,8 +152,10 @@ export async function markAnnouncementRead(userId: string, id: string) {
 }
 
 export async function createAnnouncement(actorId: string, body: CreateAnnouncementBody) {
+  const tenant = await requireTenantContext(actorId);
   const created = await prisma.announcement.create({
     data: {
+      tenantId: tenant.tenantId,
       title: body.title,
       body: body.description,
       images: body.images ?? [],
@@ -164,6 +171,7 @@ export async function createAnnouncement(actorId: string, body: CreateAnnounceme
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_created,
       entityType: 'announcement',
@@ -175,8 +183,9 @@ export async function createAnnouncement(actorId: string, body: CreateAnnounceme
 }
 
 export async function updateAnnouncement(actorId: string, id: string, body: UpdateAnnouncementBody) {
-  const existing = await prisma.announcement.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.announcement.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
 
@@ -202,6 +211,7 @@ export async function updateAnnouncement(actorId: string, id: string, body: Upda
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_updated,
       entityType: 'announcement',
@@ -214,8 +224,9 @@ export async function updateAnnouncement(actorId: string, id: string, body: Upda
 }
 
 export async function deleteAnnouncement(actorId: string, id: string) {
-  const existing = await prisma.announcement.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.announcement.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
 
@@ -227,6 +238,7 @@ export async function deleteAnnouncement(actorId: string, id: string) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_deleted,
       entityType: 'announcement',

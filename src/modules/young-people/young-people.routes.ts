@@ -42,7 +42,8 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const { data, meta } = await youngPeopleService.listYoungPeople(parse.data);
+      const actorId = (request.user as JwtPayload).sub;
+      const { data, meta } = await youngPeopleService.listYoungPeople(actorId, parse.data);
       return reply.send({ success: true, data, meta });
     },
   });
@@ -65,8 +66,9 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const data = await youngPeopleService.getYoungPerson(id);
+      const data = await youngPeopleService.getYoungPerson(actorId, id);
       return reply.send({ success: true, data });
     },
   });

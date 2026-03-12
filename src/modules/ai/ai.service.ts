@@ -1,6 +1,7 @@
-import { AuditAction } from '@prisma/client';
+import { AuditAction, MembershipStatus, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import { getSummaryStats } from '../summary/summary.service.js';
 import type { AskAiBody, SetAiAccessBody } from './ai.schema.js';
 
@@ -213,6 +214,7 @@ async function assertAiAccessEnabled(userId: string) {
 }
 
 export async function askAi(userId: string, body: AskAiBody) {
+  const tenant = await requireTenantContext(userId);
   await assertAiAccessEnabled(userId);
 
   const summaryContext = await resolveSummaryContext(userId, body);
@@ -240,6 +242,7 @@ export async function askAi(userId: string, body: AskAiBody) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId,
       action: AuditAction.record_created,
       entityType: 'ai_ask',
@@ -265,13 +268,38 @@ export async function askAi(userId: string, body: AskAiBody) {
 }
 
 export async function setUserAiAccess(actorUserId: string, targetUserId: string, body: SetAiAccessBody) {
-  const existingUser = await prisma.user.findUnique({
-    where: { id: targetUserId },
-    select: { id: true },
+  const actor = await prisma.user.findUnique({
+    where: { id: actorUserId },
+    select: { id: true, role: true },
   });
+  if (!actor) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
 
-  if (!existingUser) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  let auditTenantId: string | null = null;
+  if (actor.role !== UserRole.super_admin) {
+    const tenant = await requireTenantContext(actorUserId);
+    auditTenantId = tenant.tenantId;
+
+    const membership = await prisma.tenantMembership.findUnique({
+      where: {
+        tenantId_userId: {
+          tenantId: tenant.tenantId,
+          userId: targetUserId,
+        },
+      },
+      select: { status: true },
+    });
+
+    if (!membership || membership.status !== MembershipStatus.active) {
+      throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+    }
+  } else {
+    const existingUser = await prisma.user.findUnique({
+      where: { id: targetUserId },
+      select: { id: true },
+    });
+    if (!existingUser) {
+      throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+    }
   }
 
   const updated = await prisma.user.update({
@@ -286,6 +314,7 @@ export async function setUserAiAccess(actorUserId: string, targetUserId: string,
 
   await prisma.auditLog.create({
     data: {
+      tenantId: auditTenantId,
       userId: actorUserId,
       action: AuditAction.permission_changed,
       entityType: 'user_ai_access',

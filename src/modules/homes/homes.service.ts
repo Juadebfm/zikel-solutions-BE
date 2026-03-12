@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type { CreateHomeBody, ListHomesQuery, UpdateHomeBody } from './homes.schema.js';
 
 function mapHome(home: {
@@ -27,9 +28,9 @@ function mapHome(home: {
   };
 }
 
-async function ensureCareGroupExists(careGroupId: string) {
-  const exists = await prisma.careGroup.findUnique({
-    where: { id: careGroupId },
+async function ensureCareGroupExists(careGroupId: string, tenantId: string) {
+  const exists = await prisma.careGroup.findFirst({
+    where: { id: careGroupId, tenantId },
     select: { id: true },
   });
   if (!exists) {
@@ -37,9 +38,11 @@ async function ensureCareGroupExists(careGroupId: string) {
   }
 }
 
-export async function listHomes(query: ListHomesQuery) {
+export async function listHomes(actorId: string, query: ListHomesQuery) {
+  const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
   const where: Prisma.HomeWhereInput = {
+    tenantId: tenant.tenantId,
     ...(query.search
       ? {
           OR: [
@@ -76,9 +79,10 @@ export async function listHomes(query: ListHomesQuery) {
   };
 }
 
-export async function getHome(id: string) {
-  const home = await prisma.home.findUnique({
-    where: { id },
+export async function getHome(actorId: string, id: string) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     include: { careGroup: { select: { id: true, name: true } } },
   });
   if (!home) {
@@ -88,10 +92,12 @@ export async function getHome(id: string) {
 }
 
 export async function createHome(actorId: string, body: CreateHomeBody) {
-  await ensureCareGroupExists(body.careGroupId);
+  const tenant = await requireTenantContext(actorId);
+  await ensureCareGroupExists(body.careGroupId, tenant.tenantId);
 
   const home = await prisma.home.create({
     data: {
+      tenantId: tenant.tenantId,
       careGroupId: body.careGroupId,
       name: body.name,
       address: body.address ?? null,
@@ -102,6 +108,7 @@ export async function createHome(actorId: string, body: CreateHomeBody) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_created,
       entityType: 'home',
@@ -113,8 +120,9 @@ export async function createHome(actorId: string, body: CreateHomeBody) {
 }
 
 export async function updateHome(actorId: string, id: string, body: UpdateHomeBody) {
-  const existing = await prisma.home.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.home.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -122,7 +130,7 @@ export async function updateHome(actorId: string, id: string, body: UpdateHomeBo
   }
 
   if (body.careGroupId !== undefined) {
-    await ensureCareGroupExists(body.careGroupId);
+    await ensureCareGroupExists(body.careGroupId, tenant.tenantId);
   }
 
   const updateData: Prisma.HomeUpdateInput = {};
@@ -140,6 +148,7 @@ export async function updateHome(actorId: string, id: string, body: UpdateHomeBo
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_updated,
       entityType: 'home',
@@ -152,8 +161,9 @@ export async function updateHome(actorId: string, id: string, body: UpdateHomeBo
 }
 
 export async function deactivateHome(actorId: string, id: string) {
-  const existing = await prisma.home.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.home.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -167,6 +177,7 @@ export async function deactivateHome(actorId: string, id: string) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_deleted,
       entityType: 'home',

@@ -7,15 +7,14 @@ import aiRoutes from '../modules/ai/ai.routes.js';
 import announcementsRoutes from '../modules/announcements/announcements.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
+import tenantRoutes from '../modules/tenants/tenants.routes.js';
 import careGroupRoutes from '../modules/care-groups/care-groups.routes.js';
 import homeRoutes from '../modules/homes/homes.routes.js';
 import employeeRoutes from '../modules/employees/employees.routes.js';
 import youngPeopleRoutes from '../modules/young-people/young-people.routes.js';
-
-// Future modules — uncomment as they are implemented:
-// import vehicleRoutes from '../modules/vehicles/vehicles.routes.js';
-// import taskRoutes from '../modules/tasks/tasks.routes.js';
-// import auditRoutes from '../modules/audit/audit.routes.js';
+import vehicleRoutes from '../modules/vehicles/vehicles.routes.js';
+import taskRoutes from '../modules/tasks/tasks.routes.js';
+import auditRoutes from '../modules/audit/audit.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
   // Infrastructure probes — no auth, no /api/v1 prefix
@@ -31,13 +30,14 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(announcementsRoutes, { prefix: '/announcements' });
       await v1.register(summaryRoutes, { prefix: '/summary' });
       await v1.register(dashboardRoutes, { prefix: '/dashboard' });
+      await v1.register(tenantRoutes, { prefix: '/tenants' });
       await v1.register(careGroupRoutes, { prefix: '/care-groups' });
       await v1.register(homeRoutes, { prefix: '/homes' });
       await v1.register(employeeRoutes, { prefix: '/employees' });
       await v1.register(youngPeopleRoutes, { prefix: '/young-people' });
-      // await v1.register(vehicleRoutes, { prefix: '/vehicles' });
-      // await v1.register(taskRoutes, { prefix: '/tasks' });
-      // await v1.register(auditRoutes, { prefix: '/audit' });
+      await v1.register(vehicleRoutes, { prefix: '/vehicles' });
+      await v1.register(taskRoutes, { prefix: '/tasks' });
+      await v1.register(auditRoutes, { prefix: '/audit' });
     },
     { prefix: '/api/v1' },
   );

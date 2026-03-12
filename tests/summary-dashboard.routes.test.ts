@@ -6,6 +6,15 @@ const { mockPrisma } = vi.hoisted(() => ({
     user: {
       findUnique: vi.fn(),
     },
+    tenant: {
+      findUnique: vi.fn(),
+    },
+    tenantMembership: {
+      findUnique: vi.fn(),
+    },
+    employee: {
+      findFirst: vi.fn(),
+    },
     task: {
       count: vi.fn(),
       findMany: vi.fn(),
@@ -64,17 +73,40 @@ function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'ma
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
+    tenantRole: role === 'staff' ? 'staff' : 'sub_admin',
   });
   return { authorization: `Bearer ${token}` };
 }
 
+function mockTenantContext(
+  userId = 'user_1',
+  userRole: 'staff' | 'manager' | 'admin' = 'manager',
+  tenantRole: 'staff' | 'sub_admin' | 'tenant_admin' = 'sub_admin',
+) {
+  mockPrisma.user.findUnique.mockResolvedValueOnce({
+    id: userId,
+    role: userRole,
+    activeTenantId: 'tenant_1',
+  });
+  mockPrisma.tenant.findUnique.mockResolvedValueOnce({
+    id: 'tenant_1',
+    isActive: true,
+  });
+  mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
+    role: tenantRole,
+    status: 'active',
+  });
+}
+
 describe('Summary routes', () => {
   it('GET /api/v1/summary/stats returns summary KPIs', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
-      employee: { id: 'emp_1', homeId: 'home_1' },
     });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
     mockPrisma.task.count
       .mockResolvedValueOnce(3) // overdue
       .mockResolvedValueOnce(5) // dueToday
@@ -106,11 +138,12 @@ describe('Summary routes', () => {
   });
 
   it('GET /api/v1/summary/provisions returns grouped events and shifts', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
-      employee: { id: 'emp_1', homeId: 'home_1' },
     });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
     mockPrisma.home.findMany.mockResolvedValueOnce([
       { id: 'home_1', name: 'Sunrise House' },
     ]);
@@ -172,9 +205,11 @@ describe('Summary routes', () => {
 
 describe('Dashboard routes', () => {
   it('GET /api/v1/dashboard/widgets returns my widgets', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.widget.findMany.mockResolvedValueOnce([
       {
         id: 'widget_1',
+        tenantId: 'tenant_1',
         userId: 'user_1',
         title: 'My Tasks This Month',
         period: 'this_month',
@@ -218,8 +253,10 @@ describe('Dashboard routes', () => {
   });
 
   it('DELETE /api/v1/dashboard/widgets/:id blocks deleting another user widget', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.widget.findUnique.mockResolvedValueOnce({
       id: 'widget_2',
+      tenantId: 'tenant_1',
       userId: 'user_other',
     });
 

@@ -73,7 +73,7 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/access/:id', {
-    preHandler: [requireRole('admin')],
+    preHandler: [requireRole('admin', 'super_admin')],
     schema: {
       tags: ['AI'],
       summary: 'Update AI access for a user (admin only)',

@@ -24,9 +24,23 @@ enum Gender {
 }
 
 enum UserRole {
+  super_admin
   staff
   manager
   admin
+}
+
+enum TenantRole {
+  tenant_admin
+  sub_admin
+  staff
+}
+
+enum MembershipStatus {
+  invited
+  active
+  suspended
+  revoked
 }
 
 enum OtpPurpose {
@@ -143,21 +157,101 @@ model User {
   acceptedTerms  Boolean   @default(false)
   isActive       Boolean   @default(true)
   aiAccessEnabled Boolean  @default(false)
+  activeTenantId String?
   lastLoginAt    DateTime?
   failedAttempts Int       @default(0)
   lockedUntil    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  activeTenant   Tenant?   @relation("UserActiveTenant", fields: [activeTenantId], references: [id], onDelete: SetNull)
   refreshTokens  RefreshToken[]
   otpCodes       OtpCode[]
   auditLogs      AuditLog[]
-  employee       Employee?
+  tenantMemberships TenantMembership[] @relation("UserTenantMemberships")
+  sentTenantInvites TenantMembership[] @relation("UserTenantInvites")
+  tenantInvitationsSent TenantInvite[] @relation("UserSentTenantInvites")
+  tenantInvitationsAccepted TenantInvite[] @relation("UserAcceptedTenantInvites")
+  employees      Employee[]
   widgets        Widget[]
   announcementReads AnnouncementRead[]
 
   @@index([email])
   @@index([role])
+  @@index([activeTenantId])
+}
+
+model Tenant {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  country     Country  @default(UK)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  activeUsers User[]   @relation("UserActiveTenant")
+  memberships TenantMembership[]
+  invites     TenantInvite[]
+  careGroups  CareGroup[]
+  homes       Home[]
+  employees   Employee[]
+  homeEvents  HomeEvent[]
+  employeeShifts EmployeeShift[]
+  youngPeople YoungPerson[]
+  vehicles    Vehicle[]
+  tasks       Task[]
+  announcements Announcement[]
+  widgets     Widget[]
+  auditLogs   AuditLog[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model TenantMembership {
+  id          String           @id @default(cuid())
+  tenantId    String
+  userId      String
+  role        TenantRole       @default(staff)
+  status      MembershipStatus @default(active)
+  invitedById String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User             @relation("UserTenantMemberships", fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy   User?            @relation("UserTenantInvites", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, userId])
+  @@index([userId])
+  @@index([tenantId, role])
+  @@index([status])
+}
+
+model TenantInvite {
+  id               String    @id @default(cuid())
+  tenantId         String
+  email            String
+  role             TenantRole
+  tokenHash        String    @unique
+  invitedById      String
+  acceptedByUserId String?
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy        User      @relation("UserSentTenantInvites", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedByUser   User?     @relation("UserAcceptedTenantInvites", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, email])
+  @@index([tenantId, role])
+  @@index([tenantId, expiresAt])
+  @@index([invitedById])
+  @@index([acceptedByUserId])
 }
 
 model RefreshToken {
@@ -192,19 +286,24 @@ model OtpCode {
 
 model CareGroup {
   id          String   @id @default(cuid())
-  name        String   @unique
+  tenantId    String
+  name        String
   description String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   homes       Home[]
 
+  @@unique([tenantId, name])
+  @@index([tenantId])
   @@index([name])
 }
 
 model Home {
   id          String    @id @default(cuid())
+  tenantId    String
   careGroupId String
   name        String
   address     String?
@@ -213,12 +312,14 @@ model Home {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   careGroup   CareGroup   @relation(fields: [careGroupId], references: [id])
   employees   Employee[]
   youngPeople YoungPerson[]
   events      HomeEvent[]
   shifts      EmployeeShift[]
 
+  @@index([tenantId])
   @@index([careGroupId])
 }
 
@@ -226,7 +327,8 @@ model Home {
 
 model Employee {
   id          String    @id @default(cuid())
-  userId      String    @unique
+  tenantId    String
+  userId      String
   homeId      String?
   jobTitle    String?
   startDate   DateTime?
@@ -234,12 +336,15 @@ model Employee {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user        User      @relation(fields: [userId], references: [id])
   home        Home?     @relation(fields: [homeId], references: [id])
   tasks       Task[]    @relation("TaskAssignee")
   approvedTasks Task[]  @relation("TaskApprover")
   shifts      EmployeeShift[]
 
+  @@unique([tenantId, userId])
+  @@index([tenantId])
   @@index([homeId])
 }
 
@@ -247,6 +352,7 @@ model Employee {
 
 model HomeEvent {
   id          String    @id @default(cuid())
+  tenantId    String
   homeId      String
   title       String
   description String?
@@ -255,13 +361,16 @@ model HomeEvent {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, startsAt])
   @@index([homeId, startsAt])
 }
 
 model EmployeeShift {
   id          String    @id @default(cuid())
+  tenantId    String
   homeId      String
   employeeId  String
   startTime   DateTime
@@ -269,9 +378,11 @@ model EmployeeShift {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
   employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, startTime])
   @@index([homeId, startTime])
   @@index([employeeId, startTime])
 }
@@ -280,18 +391,22 @@ model EmployeeShift {
 
 model YoungPerson {
   id          String    @id @default(cuid())
+  tenantId    String
   homeId      String
   firstName   String
   lastName    String
   dateOfBirth DateTime?
-  referenceNo String?   @unique
+  referenceNo String?
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   home        Home      @relation(fields: [homeId], references: [id])
   tasks       Task[]
 
+  @@unique([tenantId, referenceNo])
+  @@index([tenantId])
   @@index([homeId])
   @@index([lastName, firstName])
 }
@@ -300,6 +415,7 @@ model YoungPerson {
 
 model Vehicle {
   id             String    @id @default(cuid())
+  tenantId       String
   registration   String    @unique
   make           String?
   model          String?
@@ -311,6 +427,9 @@ model Vehicle {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
   @@index([registration])
 }
 
@@ -318,6 +437,7 @@ model Vehicle {
 
 model Task {
   id               String             @id @default(cuid())
+  tenantId         String
   title            String
   description      String?
   status           TaskStatus         @default(pending)
@@ -334,10 +454,12 @@ model Task {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
 
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
   approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
   youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
 
+  @@index([tenantId])
   @@index([status, priority])
   @@index([approvalStatus])
   @@index([assigneeId])
@@ -349,6 +471,7 @@ model Task {
 
 model Announcement {
   id          String    @id @default(cuid())
+  tenantId    String
   title       String
   body        String
   images      String[]  @default([])
@@ -358,8 +481,10 @@ model Announcement {
   isPinned    Boolean   @default(false)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reads       AnnouncementRead[]
 
+  @@index([tenantId])
   @@index([publishedAt])
   @@index([isPinned])
 }
@@ -384,6 +509,7 @@ model AnnouncementRead {
 
 model Widget {
   id         String   @id @default(cuid())
+  tenantId   String
   userId     String
   title      String
   period     String   // e.g. "last_7_days", "last_30_days", "this_month", "this_year"
@@ -391,8 +517,10 @@ model Widget {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId])
   @@index([userId])
 }
 
@@ -400,6 +528,7 @@ model Widget {
 
 model AuditLog {
   id         String      @id @default(cuid())
+  tenantId   String?
   userId     String?
   action     AuditAction
   entityType String?
@@ -409,8 +538,10 @@ model AuditLog {
   userAgent  String?
   createdAt  DateTime    @default(now())
 
+  tenant     Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
   user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@index([tenantId])
   @@index([userId])
   @@index([action])
   @@index([entityType, entityId])

@@ -42,7 +42,8 @@ const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const { data, meta } = await careGroupsService.listCareGroups(parse.data);
+      const actorId = (request.user as JwtPayload).sub;
+      const { data, meta } = await careGroupsService.listCareGroups(actorId, parse.data);
       return reply.send({ success: true, data, meta });
     },
   });
@@ -65,8 +66,9 @@ const careGroupRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const data = await careGroupsService.getCareGroup(id);
+      const data = await careGroupsService.getCareGroup(actorId, id);
       return reply.send({ success: true, data });
     },
   });

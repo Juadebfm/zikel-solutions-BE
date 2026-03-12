@@ -1,10 +1,14 @@
 import { randomInt } from 'crypto';
-import bcrypt from 'bcryptjs';
-import { OtpPurpose, AuditAction } from '@prisma/client';
+import { OtpPurpose, AuditAction, MembershipStatus, TenantRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { generateRefreshToken, refreshExpiresAt } from '../../lib/tokens.js';
 import { httpError } from '../../lib/errors.js';
+import {
+  hashPassword,
+  normalizePasswordCheckTiming,
+  verifyPassword,
+} from '../../lib/password.js';
 import type {
   RegisterBody,
   VerifyOtpBody,
@@ -17,7 +21,6 @@ import type {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const BCRYPT_COST = 12;
 const OTP_EXPIRY_MS = 10 * 60 * 1_000; // 10 minutes
 const OTP_COOLDOWN_MS = 60 * 1_000;    // 60 seconds between resends
 const OTP_EMAIL_WAIT_MS = 1_200;       // wait briefly for provider ack, then return queued
@@ -112,7 +115,7 @@ async function dispatchOtp(
 function safeUser(user: {
   id: string;
   email: string;
-  role: string;
+  role: 'super_admin' | 'staff' | 'manager' | 'admin';
   firstName: string;
   middleName: string | null;
   lastName: string;
@@ -126,6 +129,7 @@ function safeUser(user: {
   acceptedTerms: boolean;
   isActive: boolean;
   aiAccessEnabled: boolean;
+  activeTenantId: string | null;
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -147,9 +151,86 @@ function safeUser(user: {
     acceptedTerms: user.acceptedTerms,
     isActive: user.isActive,
     aiAccessEnabled: user.aiAccessEnabled,
+    activeTenantId: user.activeTenantId,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
+  };
+}
+
+export interface AuthSessionMembership {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  tenantRole: TenantRole;
+}
+
+export interface AuthSessionContext {
+  activeTenantId: string | null;
+  activeTenantRole: TenantRole | null;
+  memberships: AuthSessionMembership[];
+  mfaRequired: boolean;
+  mfaVerified: boolean;
+}
+
+async function resolveAuthSessionContext(args: {
+  userId: string;
+  userRole: 'super_admin' | 'staff' | 'manager' | 'admin';
+  currentActiveTenantId: string | null;
+  preferredTenantId?: string | null;
+}): Promise<AuthSessionContext> {
+  const memberships = await prisma.tenantMembership.findMany({
+    where: {
+      userId: args.userId,
+      status: MembershipStatus.active,
+      tenant: { isActive: true },
+    },
+    select: {
+      tenantId: true,
+      role: true,
+      tenant: {
+        select: {
+          name: true,
+          slug: true,
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  const mappedMemberships: AuthSessionMembership[] = memberships.map((membership) => ({
+    tenantId: membership.tenantId,
+    tenantName: membership.tenant.name,
+    tenantSlug: membership.tenant.slug,
+    tenantRole: membership.role,
+  }));
+
+  const preferredMembership = args.preferredTenantId
+    ? mappedMemberships.find((membership) => membership.tenantId === args.preferredTenantId) ?? null
+    : null;
+  const currentMembership = args.currentActiveTenantId
+    ? mappedMemberships.find((membership) => membership.tenantId === args.currentActiveTenantId) ?? null
+    : null;
+  const selectedMembership = preferredMembership ?? currentMembership ?? mappedMemberships[0] ?? null;
+  const resolvedActiveTenantId = selectedMembership?.tenantId ?? null;
+  const mfaRequired =
+    args.userRole === 'super_admin' ||
+    selectedMembership?.tenantRole === TenantRole.tenant_admin;
+  const mfaVerified = !mfaRequired;
+
+  if (args.currentActiveTenantId !== resolvedActiveTenantId) {
+    await prisma.user.update({
+      where: { id: args.userId },
+      data: { activeTenantId: resolvedActiveTenantId },
+    });
+  }
+
+  return {
+    activeTenantId: resolvedActiveTenantId,
+    activeTenantRole: selectedMembership?.tenantRole ?? null,
+    memberships: mappedMemberships,
+    mfaRequired,
+    mfaVerified,
   };
 }
 
@@ -165,7 +246,7 @@ export async function register(body: RegisterBody) {
     throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
   }
 
-  const passwordHash = await bcrypt.hash(body.password, BCRYPT_COST);
+  const passwordHash = await hashPassword(body.password);
 
   const user = await prisma.user.create({
     data: {
@@ -264,7 +345,17 @@ export async function verifyOtp(body: VerifyOtpBody) {
     data: { userId: user.id, action: AuditAction.otp_verified },
   });
 
-  return { user: safeUser(updatedUser), refreshToken };
+  const session = await resolveAuthSessionContext({
+    userId: updatedUser.id,
+    userRole: updatedUser.role,
+    currentActiveTenantId: updatedUser.activeTenantId,
+  });
+
+  return {
+    user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
+    refreshToken,
+    session,
+  };
 }
 
 /**
@@ -328,7 +419,7 @@ export async function login(body: LoginBody) {
 
   if (!user) {
     // Constant-time dummy compare to prevent user-enumeration via timing
-    await bcrypt.compare(body.password, '$2a$12$invalidhashfortimingnormalisati');
+    await normalizePasswordCheckTiming(body.password);
     throw httpError(401, 'INVALID_CREDENTIALS', 'Invalid email or password.');
   }
 
@@ -340,18 +431,32 @@ export async function login(body: LoginBody) {
     throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
   }
 
-  const passwordMatch = await bcrypt.compare(body.password, user.passwordHash);
-  if (!passwordMatch) {
+  const passwordCheck = await verifyPassword(body.password, user.passwordHash);
+  if (!passwordCheck.match) {
     const newFailed = user.failedAttempts + 1;
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        failedAttempts: newFailed,
-        ...(newFailed >= MAX_FAILED_ATTEMPTS
-          ? { lockedUntil: new Date(Date.now() + LOCKOUT_MS) }
-          : {}),
-      },
-    });
+    const lockedUntil = newFailed >= MAX_FAILED_ATTEMPTS
+      ? new Date(Date.now() + LOCKOUT_MS)
+      : null;
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: user.id },
+        data: {
+          failedAttempts: newFailed,
+          ...(lockedUntil ? { lockedUntil } : {}),
+        },
+      }),
+      prisma.auditLog.create({
+        data: {
+          userId: user.id,
+          action: AuditAction.login,
+          entityType: 'auth_login_failed',
+          metadata: {
+            failedAttempts: newFailed,
+            accountLocked: Boolean(lockedUntil),
+          },
+        },
+      }),
+    ]);
     throw httpError(401, 'INVALID_CREDENTIALS', 'Invalid email or password.');
   }
 
@@ -359,9 +464,18 @@ export async function login(body: LoginBody) {
     throw httpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email address before logging in.');
   }
 
+  const maybeRehashedPassword = passwordCheck.needsRehash
+    ? await hashPassword(body.password)
+    : null;
+
   await prisma.user.update({
     where: { id: user.id },
-    data: { failedAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
+    data: {
+      failedAttempts: 0,
+      lockedUntil: null,
+      lastLoginAt: new Date(),
+      ...(maybeRehashedPassword ? { passwordHash: maybeRehashedPassword } : {}),
+    },
   });
 
   const refreshToken = generateRefreshToken();
@@ -373,7 +487,17 @@ export async function login(body: LoginBody) {
     data: { userId: user.id, action: AuditAction.login },
   });
 
-  return { user: safeUser(user), refreshToken };
+  const session = await resolveAuthSessionContext({
+    userId: user.id,
+    userRole: user.role,
+    currentActiveTenantId: user.activeTenantId,
+  });
+
+  return {
+    user: { ...safeUser(user), activeTenantId: session.activeTenantId },
+    refreshToken,
+    session,
+  };
 }
 
 /**
@@ -399,7 +523,98 @@ export async function logout(refreshToken: string, actorUserId: string) {
 export async function getMe(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  return safeUser(user);
+  const session = await resolveAuthSessionContext({
+    userId: user.id,
+    userRole: user.role,
+    currentActiveTenantId: user.activeTenantId,
+  });
+  return { ...safeUser(user), activeTenantId: session.activeTenantId };
+}
+
+/**
+ * Switches the authenticated user to an active tenant they belong to and
+ * returns refreshed session context for token re-issuance.
+ */
+export async function switchTenant(actorUserId: string, tenantId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: actorUserId },
+    select: {
+      id: true,
+      email: true,
+      role: true,
+      firstName: true,
+      middleName: true,
+      lastName: true,
+      gender: true,
+      country: true,
+      phoneNumber: true,
+      avatarUrl: true,
+      language: true,
+      timezone: true,
+      emailVerified: true,
+      acceptedTerms: true,
+      isActive: true,
+      aiAccessEnabled: true,
+      activeTenantId: true,
+      lastLoginAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+
+  if (!user.isActive) {
+    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
+  }
+
+  const membership = await prisma.tenantMembership.findFirst({
+    where: {
+      userId: actorUserId,
+      tenantId,
+      status: MembershipStatus.active,
+      tenant: { isActive: true },
+    },
+    select: { role: true },
+  });
+
+  if (!membership) {
+    throw httpError(
+      403,
+      'TENANT_ACCESS_DENIED',
+      'You do not have active access to the requested tenant.',
+    );
+  }
+
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: actorUserId },
+      data: { activeTenantId: tenantId },
+    }),
+    prisma.auditLog.create({
+      data: {
+        userId: actorUserId,
+        action: AuditAction.permission_changed,
+        entityType: 'auth_session',
+        entityId: actorUserId,
+        metadata: { type: 'tenant_switched', tenantId, tenantRole: membership.role },
+      },
+    }),
+  ]);
+
+  const session = await resolveAuthSessionContext({
+    userId: actorUserId,
+    userRole: user.role,
+    currentActiveTenantId: tenantId,
+    preferredTenantId: tenantId,
+  });
+
+  return {
+    user: { ...safeUser(user), activeTenantId: session.activeTenantId },
+    session,
+  };
 }
 
 /**
@@ -452,7 +667,17 @@ export async function refreshAccessToken(body: RefreshBody) {
     },
   });
 
-  return { user: safeUser(stored.user), newRefreshToken: newRawToken };
+  const session = await resolveAuthSessionContext({
+    userId: stored.user.id,
+    userRole: stored.user.role,
+    currentActiveTenantId: stored.user.activeTenantId,
+  });
+
+  return {
+    user: { ...safeUser(stored.user), activeTenantId: session.activeTenantId },
+    newRefreshToken: newRawToken,
+    session,
+  };
 }
 
 /**
@@ -529,7 +754,7 @@ export async function resetPassword(body: ResetPasswordBody) {
     throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
   }
 
-  const newPasswordHash = await bcrypt.hash(body.newPassword, BCRYPT_COST);
+  const newPasswordHash = await hashPassword(body.newPassword);
 
   // Atomic: mark OTP used + update password + revoke all refresh tokens
   await prisma.$transaction([

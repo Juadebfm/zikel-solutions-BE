@@ -67,7 +67,33 @@ function parseEnv(): Env {
       .join('\n');
     throw new Error(`Environment validation failed:\n${formatted}`);
   }
-  return result.data;
+  const parsed = result.data;
+
+  if (parsed.NODE_ENV === 'staging' || parsed.NODE_ENV === 'production') {
+    if (!parsed.DATABASE_URL.includes('sslmode=require')) {
+      throw new Error('DATABASE_URL must enforce TLS (sslmode=require) in staging/production.');
+    }
+    if (parsed.DIRECT_URL && !parsed.DIRECT_URL.includes('sslmode=require')) {
+      throw new Error('DIRECT_URL must enforce TLS (sslmode=require) in staging/production.');
+    }
+    if (!parsed.PUBLIC_BASE_URL.startsWith('https://')) {
+      throw new Error('PUBLIC_BASE_URL must use https:// in staging/production.');
+    }
+
+    const origins = parsed.CORS_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean);
+    if (origins.some((origin) => origin === '*')) {
+      throw new Error('CORS_ORIGINS cannot include wildcard (*) in staging/production.');
+    }
+    if (origins.some((origin) => !origin.startsWith('https://'))) {
+      throw new Error('CORS_ORIGINS must be https:// origins only in staging/production.');
+    }
+  }
+
+  if (parsed.AI_ENABLED && !parsed.AI_API_KEY) {
+    throw new Error('AI_API_KEY is required when AI_ENABLED=true.');
+  }
+
+  return parsed;
 }
 
 export const env = parseEnv();

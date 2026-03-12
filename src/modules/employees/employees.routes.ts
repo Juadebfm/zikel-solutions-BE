@@ -42,7 +42,8 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
         });
       }
 
-      const { data, meta } = await employeesService.listEmployees(parse.data);
+      const actorId = (request.user as JwtPayload).sub;
+      const { data, meta } = await employeesService.listEmployees(actorId, parse.data);
       return reply.send({ success: true, data, meta });
     },
   });
@@ -65,8 +66,9 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const data = await employeesService.getEmployee(id);
+      const data = await employeesService.getEmployee(actorId, id);
       return reply.send({ success: true, data });
     },
   });

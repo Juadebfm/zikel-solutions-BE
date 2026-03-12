@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateCareGroupBody,
   ListCareGroupsQuery,
@@ -25,9 +26,11 @@ function mapCareGroup(group: {
   };
 }
 
-export async function listCareGroups(query: ListCareGroupsQuery) {
+export async function listCareGroups(actorId: string, query: ListCareGroupsQuery) {
+  const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
   const where: Prisma.CareGroupWhereInput = {
+    tenantId: tenant.tenantId,
     ...(query.search
       ? {
           OR: [
@@ -60,8 +63,11 @@ export async function listCareGroups(query: ListCareGroupsQuery) {
   };
 }
 
-export async function getCareGroup(id: string) {
-  const group = await prisma.careGroup.findUnique({ where: { id } });
+export async function getCareGroup(actorId: string, id: string) {
+  const tenant = await requireTenantContext(actorId);
+  const group = await prisma.careGroup.findFirst({
+    where: { id, tenantId: tenant.tenantId },
+  });
   if (!group) {
     throw httpError(404, 'CARE_GROUP_NOT_FOUND', 'Care group not found.');
   }
@@ -69,9 +75,12 @@ export async function getCareGroup(id: string) {
 }
 
 export async function createCareGroup(actorId: string, body: CreateCareGroupBody) {
+  const tenant = await requireTenantContext(actorId);
+
   try {
     const group = await prisma.careGroup.create({
       data: {
+        tenantId: tenant.tenantId,
         name: body.name,
         description: body.description ?? null,
       },
@@ -79,6 +88,7 @@ export async function createCareGroup(actorId: string, body: CreateCareGroupBody
 
     await prisma.auditLog.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: actorId,
         action: AuditAction.record_created,
         entityType: 'care_group',
@@ -99,8 +109,9 @@ export async function createCareGroup(actorId: string, body: CreateCareGroupBody
 }
 
 export async function updateCareGroup(actorId: string, id: string, body: UpdateCareGroupBody) {
-  const existing = await prisma.careGroup.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.careGroup.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -120,6 +131,7 @@ export async function updateCareGroup(actorId: string, id: string, body: UpdateC
 
     await prisma.auditLog.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: actorId,
         action: AuditAction.record_updated,
         entityType: 'care_group',
@@ -141,8 +153,9 @@ export async function updateCareGroup(actorId: string, id: string, body: UpdateC
 }
 
 export async function deactivateCareGroup(actorId: string, id: string) {
-  const existing = await prisma.careGroup.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.careGroup.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -156,6 +169,7 @@ export async function deactivateCareGroup(actorId: string, id: string) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_deleted,
       entityType: 'care_group',

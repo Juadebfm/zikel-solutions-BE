@@ -69,13 +69,13 @@ export const CuidParamSchema = {
 export const UserRoleSchema = {
   $id: 'UserRole',
   type: 'string',
-  enum: ['staff', 'manager', 'admin'],
+  enum: ['super_admin', 'staff', 'manager', 'admin'],
 } as const;
 
 export const UserSchema = {
   $id: 'User',
   type: 'object',
-  required: ['id', 'email', 'role', 'firstName', 'lastName', 'country', 'emailVerified', 'isActive', 'aiAccessEnabled', 'createdAt'],
+  required: ['id', 'email', 'role', 'firstName', 'lastName', 'country', 'emailVerified', 'isActive', 'aiAccessEnabled', 'activeTenantId', 'createdAt'],
   properties: {
     id: { type: 'string' },
     email: { type: 'string', format: 'email' },
@@ -93,6 +93,7 @@ export const UserSchema = {
     acceptedTerms: { type: 'boolean' },
     isActive: { type: 'boolean' },
     aiAccessEnabled: { type: 'boolean' },
+    activeTenantId: { type: 'string', nullable: true },
     lastLoginAt: { type: 'string', format: 'date-time', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
   },
@@ -108,6 +109,36 @@ export const TokenPairSchema = {
   },
 } as const;
 
+export const AuthSessionMembershipSchema = {
+  $id: 'AuthSessionMembership',
+  type: 'object',
+  required: ['tenantId', 'tenantName', 'tenantSlug', 'tenantRole'],
+  properties: {
+    tenantId: { type: 'string' },
+    tenantName: { type: 'string' },
+    tenantSlug: { type: 'string' },
+    tenantRole: { $ref: 'TenantRole#' },
+  },
+} as const;
+
+export const AuthSessionSchema = {
+  $id: 'AuthSession',
+  type: 'object',
+  required: ['activeTenantId', 'activeTenantRole', 'memberships', 'mfaRequired', 'mfaVerified'],
+  properties: {
+    activeTenantId: { type: 'string', nullable: true },
+    activeTenantRole: {
+      anyOf: [{ $ref: 'TenantRole#' }, { type: 'null' }],
+    },
+    memberships: {
+      type: 'array',
+      items: { $ref: 'AuthSessionMembership#' },
+    },
+    mfaRequired: { type: 'boolean' },
+    mfaVerified: { type: 'boolean' },
+  },
+} as const;
+
 export const AuthResponseSchema = {
   $id: 'AuthResponse',
   type: 'object',
@@ -116,10 +147,11 @@ export const AuthResponseSchema = {
     success: { type: 'boolean', enum: [true] },
     data: {
       type: 'object',
-      required: ['user', 'tokens'],
+      required: ['user', 'tokens', 'session'],
       properties: {
         user: { $ref: 'User#' },
         tokens: { $ref: 'TokenPair#' },
+        session: { $ref: 'AuthSession#' },
       },
     },
   },
@@ -136,6 +168,76 @@ export const CareGroupSchema = {
     name: { type: 'string' },
     description: { type: 'string', nullable: true },
     isActive: { type: 'boolean' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const TenantRoleSchema = {
+  $id: 'TenantRole',
+  type: 'string',
+  enum: ['tenant_admin', 'sub_admin', 'staff'],
+} as const;
+
+export const TenantSchema = {
+  $id: 'Tenant',
+  type: 'object',
+  required: ['id', 'name', 'slug', 'country', 'isActive', 'createdAt', 'updatedAt'],
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string' },
+    slug: { type: 'string' },
+    country: { type: 'string', enum: ['UK', 'Nigeria'] },
+    isActive: { type: 'boolean' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const TenantMembershipSchema = {
+  $id: 'TenantMembership',
+  type: 'object',
+  required: ['id', 'tenantId', 'userId', 'role', 'status', 'createdAt', 'updatedAt'],
+  properties: {
+    id: { type: 'string' },
+    tenantId: { type: 'string' },
+    userId: { type: 'string' },
+    role: { $ref: 'TenantRole#' },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
+    invitedById: { type: 'string', nullable: true },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const TenantInviteSchema = {
+  $id: 'TenantInvite',
+  type: 'object',
+  required: [
+    'id',
+    'tenantId',
+    'email',
+    'role',
+    'status',
+    'invitedById',
+    'acceptedByUserId',
+    'expiresAt',
+    'acceptedAt',
+    'revokedAt',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string' },
+    tenantId: { type: 'string' },
+    email: { type: 'string', format: 'email' },
+    role: { $ref: 'TenantRole#' },
+    status: { type: 'string', enum: ['pending', 'accepted', 'revoked', 'expired'] },
+    invitedById: { type: 'string' },
+    acceptedByUserId: { type: 'string', nullable: true },
+    expiresAt: { type: 'string', format: 'date-time' },
+    acceptedAt: { type: 'string', format: 'date-time', nullable: true },
+    revokedAt: { type: 'string', format: 'date-time', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
@@ -344,9 +446,15 @@ export const ALL_SHARED_SCHEMAS = [
   CuidParamSchema,
   UserRoleSchema,
   UserSchema,
+  TenantRoleSchema,
   TokenPairSchema,
+  AuthSessionMembershipSchema,
+  AuthSessionSchema,
   AuthResponseSchema,
   CareGroupSchema,
+  TenantSchema,
+  TenantMembershipSchema,
+  TenantInviteSchema,
   HomeSchema,
   EmployeeSchema,
   YoungPersonSchema,

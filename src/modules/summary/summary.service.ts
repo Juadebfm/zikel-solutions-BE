@@ -1,5 +1,6 @@
 import {
   AuditAction,
+  TenantRole,
   TaskApprovalStatus,
   TaskStatus,
   UserRole,
@@ -7,11 +8,14 @@ import {
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type { BatchApproveBody, SummaryListQuery } from './summary.schema.js';
 
 type UserContext = {
   id: string;
+  tenantId: string;
   role: UserRole;
+  tenantRole: TenantRole | null;
   employee: { id: string; homeId: string | null } | null;
 };
 
@@ -33,39 +37,63 @@ function getTodayBounds() {
   return { start, end };
 }
 
-function canApprove(role: UserRole) {
-  return role === UserRole.manager || role === UserRole.admin;
+function canApprove(user: UserContext) {
+  if (user.role === UserRole.super_admin) return true;
+  if (user.tenantRole === TenantRole.tenant_admin || user.tenantRole === TenantRole.sub_admin) {
+    return true;
+  }
+  return user.role === UserRole.manager || user.role === UserRole.admin;
 }
 
 async function getUserContext(userId: string): Promise<UserContext> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      role: true,
-      employee: {
-        select: {
-          id: true,
-          homeId: true,
-        },
+  const tenant = await requireTenantContext(userId);
+  const [user, employee] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
       },
-    },
-  });
+    }),
+    prisma.employee.findFirst({
+      where: {
+        userId,
+        tenantId: tenant.tenantId,
+        isActive: true,
+      },
+      select: {
+        id: true,
+        homeId: true,
+      },
+    }),
+  ]);
 
   if (!user) {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  return user;
+  return {
+    id: user.id,
+    role: user.role,
+    tenantId: tenant.tenantId,
+    tenantRole: tenant.tenantRole,
+    employee,
+  };
 }
 
 function buildPersonalTaskScope(user: UserContext): Prisma.TaskWhereInput {
   if (user.employee?.id) {
     return {
-      OR: [{ assigneeId: user.employee.id }, { createdById: user.id }],
+      AND: [
+        { tenantId: user.tenantId },
+        { OR: [{ assigneeId: user.employee.id }, { createdById: user.id }] },
+      ],
     };
   }
-  return { createdById: user.id };
+  return {
+    tenantId: user.tenantId,
+    createdById: user.id,
+  };
 }
 
 function buildTaskOrderBy(query: SummaryListQuery): Prisma.TaskOrderByWithRelationInput[] {
@@ -137,8 +165,8 @@ export async function getSummaryStats(userId: string) {
         }),
       }),
       prisma.task.count({
-        where: canApprove(user.role)
-          ? { approvalStatus: TaskApprovalStatus.pending_approval }
+        where: canApprove(user)
+          ? { tenantId: user.tenantId, approvalStatus: TaskApprovalStatus.pending_approval }
           : withScope({ approvalStatus: TaskApprovalStatus.pending_approval }),
       }),
       prisma.task.count({
@@ -210,13 +238,13 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
 
 export async function listTasksToApprove(userId: string, query: SummaryListQuery) {
   const user = await getUserContext(userId);
-  if (!canApprove(user.role)) {
+  if (!canApprove(user)) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
   }
 
   const skip = (query.page - 1) * query.pageSize;
   const filters: Prisma.TaskWhereInput[] = [
-    { approvalStatus: TaskApprovalStatus.pending_approval },
+    { tenantId: user.tenantId, approvalStatus: TaskApprovalStatus.pending_approval },
   ];
 
   if (query.search) {
@@ -247,11 +275,13 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
 
 export async function approveTask(userId: string, taskId: string, comment?: string) {
   const user = await getUserContext(userId);
-  if (!canApprove(user.role)) {
+  if (!canApprove(user)) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
   }
 
-  const existing = await prisma.task.findUnique({ where: { id: taskId } });
+  const existing = await prisma.task.findFirst({
+    where: { id: taskId, tenantId: user.tenantId },
+  });
   if (!existing) {
     throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
   }
@@ -271,6 +301,7 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
 
   await prisma.auditLog.create({
     data: {
+      tenantId: user.tenantId,
       userId: user.id,
       action: AuditAction.record_updated,
       entityType: 'task_approval',
@@ -284,12 +315,12 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
 
 export async function processTaskBatch(userId: string, body: BatchApproveBody) {
   const user = await getUserContext(userId);
-  if (!canApprove(user.role)) {
+  if (!canApprove(user)) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
   }
 
   const tasks = await prisma.task.findMany({
-    where: { id: { in: body.taskIds } },
+    where: { id: { in: body.taskIds }, tenantId: user.tenantId },
     select: { id: true, approvalStatus: true },
   });
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
@@ -336,6 +367,7 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
   if (processed > 0) {
     await prisma.auditLog.create({
       data: {
+        tenantId: user.tenantId,
         userId: user.id,
         action: AuditAction.record_updated,
         entityType: 'task_approval_batch',
@@ -355,14 +387,18 @@ export async function getTodayProvisions(userId: string) {
   const user = await getUserContext(userId);
   const { start, end } = getTodayBounds();
 
-  const homes = canApprove(user.role)
+  const homes = canApprove(user)
     ? await prisma.home.findMany({
+        where: { tenantId: user.tenantId },
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
       })
     : user.employee?.homeId
       ? await prisma.home.findMany({
-          where: { id: user.employee.homeId },
+          where: {
+            id: user.employee.homeId,
+            tenantId: user.tenantId,
+          },
           select: { id: true, name: true },
         })
       : [];
@@ -375,6 +411,7 @@ export async function getTodayProvisions(userId: string) {
   const [events, shifts] = await Promise.all([
     prisma.homeEvent.findMany({
       where: {
+        tenantId: user.tenantId,
         homeId: { in: homeIds },
         startsAt: { gte: start, lte: end },
       },
@@ -382,6 +419,7 @@ export async function getTodayProvisions(userId: string) {
     }),
     prisma.employeeShift.findMany({
       where: {
+        tenantId: user.tenantId,
         homeId: { in: homeIds },
         startTime: { lte: end },
         endTime: { gte: start },

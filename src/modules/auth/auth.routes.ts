@@ -1,4 +1,4 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import {
   RegisterBodySchema,
   VerifyOtpBodySchema,
@@ -6,6 +6,7 @@ import {
   LoginBodySchema,
   CheckEmailQuerySchema,
   LogoutBodySchema,
+  SwitchTenantBodySchema,
   RefreshBodySchema,
   ForgotPasswordBodySchema,
   ResetPasswordBodySchema,
@@ -15,12 +16,32 @@ import {
   loginBodyJson,
   checkEmailQueryJson,
   logoutBodyJson,
+  switchTenantBodyJson,
   refreshBodyJson,
   forgotPasswordBodyJson,
   resetPasswordBodyJson,
 } from './auth.schema.js';
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
+
+function signAccessToken(
+  fastify: FastifyInstance,
+  user: { id: string; email: string; role: JwtPayload['role'] },
+  session: {
+    activeTenantId: string | null;
+    activeTenantRole: JwtPayload['tenantRole'];
+    mfaVerified: boolean;
+  },
+) {
+  return fastify.jwt.sign({
+    sub: user.id,
+    email: user.email,
+    role: user.role,
+    tenantId: session.activeTenantId,
+    tenantRole: session.activeTenantRole ?? null,
+    mfaVerified: session.mfaVerified,
+  });
+}
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/register ────────────────────────────────────────────────────
@@ -136,11 +157,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = VerifyOtpBodySchema.parse(request.body);
-      const { user, refreshToken } = await authService.verifyOtp(body);
-      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      const { user, refreshToken, session } = await authService.verifyOtp(body);
+      const accessToken = signAccessToken(fastify, user, session);
       return reply.send({
         success: true,
-        data: { user, tokens: { accessToken, refreshToken } },
+        data: { user, session, tokens: { accessToken, refreshToken } },
       });
     },
   });
@@ -224,11 +245,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = LoginBodySchema.parse(request.body);
-      const { user, refreshToken } = await authService.login(body);
-      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      const { user, refreshToken, session } = await authService.login(body);
+      const accessToken = signAccessToken(fastify, user, session);
       return reply.send({
         success: true,
-        data: { user, tokens: { accessToken, refreshToken } },
+        data: { user, session, tokens: { accessToken, refreshToken } },
       });
     },
   });
@@ -260,11 +281,66 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = RefreshBodySchema.parse(request.body);
-      const { user, newRefreshToken } = await authService.refreshAccessToken(body);
-      const accessToken = fastify.jwt.sign({ sub: user.id, email: user.email, role: user.role });
+      const { user, newRefreshToken, session } = await authService.refreshAccessToken(body);
+      const accessToken = signAccessToken(fastify, user, session);
       return reply.send({
         success: true,
-        data: { user, tokens: { accessToken, refreshToken: newRefreshToken } },
+        data: { user, session, tokens: { accessToken, refreshToken: newRefreshToken } },
+      });
+    },
+  });
+
+  // ── POST /auth/switch-tenant ───────────────────────────────────────────────
+  fastify.post('/switch-tenant', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Switch active tenant context',
+      description:
+        'Sets the active tenant for the authenticated user when they have an active membership. ' +
+        'Returns a new access token containing tenant claims.',
+      body: switchTenantBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['user', 'session', 'tokens'],
+              properties: {
+                user: { $ref: 'User#' },
+                session: { $ref: 'AuthSession#' },
+                tokens: {
+                  type: 'object',
+                  required: ['accessToken'],
+                  properties: {
+                    accessToken: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        401: { description: 'Missing or invalid access token.', $ref: 'ApiError#' },
+        403: { description: 'No active membership in requested tenant.', $ref: 'ApiError#' },
+        404: { description: 'User not found.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    preHandler: [fastify.authenticate],
+    handler: async (request, reply) => {
+      const body = SwitchTenantBodySchema.parse(request.body);
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { user, session } = await authService.switchTenant(actorUserId, body.tenantId);
+      const accessToken = signAccessToken(fastify, user, session);
+      return reply.send({
+        success: true,
+        data: {
+          user,
+          session,
+          tokens: { accessToken },
+        },
       });
     },
   });

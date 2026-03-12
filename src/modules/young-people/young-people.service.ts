@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
+import { requireTenantContext } from '../../lib/tenant-context.js';
 import type {
   CreateYoungPersonBody,
   ListYoungPeopleQuery,
@@ -37,9 +38,9 @@ function mapYoungPerson(youngPerson: {
   };
 }
 
-async function ensureHomeExists(homeId: string) {
-  const home = await prisma.home.findUnique({
-    where: { id: homeId },
+async function ensureHomeExists(homeId: string, tenantId: string) {
+  const home = await prisma.home.findFirst({
+    where: { id: homeId, tenantId },
     select: { id: true },
   });
   if (!home) {
@@ -47,9 +48,11 @@ async function ensureHomeExists(homeId: string) {
   }
 }
 
-export async function listYoungPeople(query: ListYoungPeopleQuery) {
+export async function listYoungPeople(actorId: string, query: ListYoungPeopleQuery) {
+  const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
   const where: Prisma.YoungPersonWhereInput = {
+    tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     ...(query.search
@@ -86,9 +89,10 @@ export async function listYoungPeople(query: ListYoungPeopleQuery) {
   };
 }
 
-export async function getYoungPerson(id: string) {
-  const youngPerson = await prisma.youngPerson.findUnique({
-    where: { id },
+export async function getYoungPerson(actorId: string, id: string) {
+  const tenant = await requireTenantContext(actorId);
+  const youngPerson = await prisma.youngPerson.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     include: { home: { select: { id: true, name: true } } },
   });
   if (!youngPerson) {
@@ -98,11 +102,13 @@ export async function getYoungPerson(id: string) {
 }
 
 export async function createYoungPerson(actorId: string, body: CreateYoungPersonBody) {
-  await ensureHomeExists(body.homeId);
+  const tenant = await requireTenantContext(actorId);
+  await ensureHomeExists(body.homeId, tenant.tenantId);
 
   try {
     const youngPerson = await prisma.youngPerson.create({
       data: {
+        tenantId: tenant.tenantId,
         homeId: body.homeId,
         firstName: body.firstName,
         lastName: body.lastName,
@@ -114,6 +120,7 @@ export async function createYoungPerson(actorId: string, body: CreateYoungPerson
 
     await prisma.auditLog.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: actorId,
         action: AuditAction.record_created,
         entityType: 'young_person',
@@ -134,8 +141,9 @@ export async function createYoungPerson(actorId: string, body: CreateYoungPerson
 }
 
 export async function updateYoungPerson(actorId: string, id: string, body: UpdateYoungPersonBody) {
-  const existing = await prisma.youngPerson.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.youngPerson.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -143,7 +151,7 @@ export async function updateYoungPerson(actorId: string, id: string, body: Updat
   }
 
   if (body.homeId !== undefined) {
-    await ensureHomeExists(body.homeId);
+    await ensureHomeExists(body.homeId, tenant.tenantId);
   }
 
   const updateData: Prisma.YoungPersonUpdateInput = {};
@@ -165,6 +173,7 @@ export async function updateYoungPerson(actorId: string, id: string, body: Updat
 
     await prisma.auditLog.create({
       data: {
+        tenantId: tenant.tenantId,
         userId: actorId,
         action: AuditAction.record_updated,
         entityType: 'young_person',
@@ -186,8 +195,9 @@ export async function updateYoungPerson(actorId: string, id: string, body: Updat
 }
 
 export async function deactivateYoungPerson(actorId: string, id: string) {
-  const existing = await prisma.youngPerson.findUnique({
-    where: { id },
+  const tenant = await requireTenantContext(actorId);
+  const existing = await prisma.youngPerson.findFirst({
+    where: { id, tenantId: tenant.tenantId },
     select: { id: true },
   });
   if (!existing) {
@@ -201,6 +211,7 @@ export async function deactivateYoungPerson(actorId: string, id: string) {
 
   await prisma.auditLog.create({
     data: {
+      tenantId: tenant.tenantId,
       userId: actorId,
       action: AuditAction.record_deleted,
       entityType: 'young_person',

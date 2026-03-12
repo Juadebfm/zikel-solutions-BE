@@ -7,6 +7,10 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
       create: vi.fn(),
       update: vi.fn(),
     },
+    tenantMembership: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+    },
     otpCode: {
       findFirst: vi.fn(),
       update: vi.fn(),
@@ -52,6 +56,7 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     acceptedTerms: true,
     isActive: true,
     aiAccessEnabled: false,
+    activeTenantId: null,
     lastLoginAt: null,
     failedAttempts: 0,
     lockedUntil: null,
@@ -63,6 +68,7 @@ function makeUser(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.tenantMembership.findMany.mockResolvedValue([]);
   mockPrisma.$transaction.mockImplementation(async (operations: Array<Promise<unknown>>) =>
     Promise.all(operations),
   );
@@ -229,5 +235,48 @@ describe('auth.service', () => {
       data: { revokedAt: expect.any(Date) },
     });
     expect(mockPrisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('switches tenant for a user with active membership', async () => {
+    const user = makeUser({ id: 'user_switch', emailVerified: true });
+    mockPrisma.user.findUnique.mockResolvedValueOnce(user);
+    mockPrisma.tenantMembership.findFirst.mockResolvedValueOnce({ role: 'tenant_admin' });
+    mockPrisma.user.update.mockResolvedValueOnce({ ...user, activeTenantId: 'tenant_1' });
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    mockPrisma.tenantMembership.findMany.mockResolvedValueOnce([
+      {
+        tenantId: 'tenant_1',
+        role: 'tenant_admin',
+        tenant: { name: 'Acme Care', slug: 'acme-care' },
+      },
+    ]);
+
+    const result = await authService.switchTenant(user.id, 'tenant_1');
+
+    expect(result).toMatchObject({
+      user: { id: 'user_switch', activeTenantId: 'tenant_1' },
+      session: {
+        activeTenantId: 'tenant_1',
+        activeTenantRole: 'tenant_admin',
+        memberships: [
+          {
+            tenantId: 'tenant_1',
+            tenantName: 'Acme Care',
+            tenantSlug: 'acme-care',
+            tenantRole: 'tenant_admin',
+          },
+        ],
+      },
+    });
+  });
+
+  it('blocks tenant switch when membership is missing', async () => {
+    const user = makeUser({ id: 'user_blocked' });
+    mockPrisma.user.findUnique.mockResolvedValueOnce(user);
+    mockPrisma.tenantMembership.findFirst.mockResolvedValueOnce(null);
+
+    await expect(authService.switchTenant(user.id, 'tenant_404')).rejects.toMatchObject({
+      code: 'TENANT_ACCESS_DENIED',
+    });
   });
 });

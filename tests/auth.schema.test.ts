@@ -3,6 +3,7 @@ import {
   ResetPasswordBodySchema,
   VerifyOtpBodySchema,
   ResendOtpBodySchema,
+  SwitchTenantBodySchema,
 } from '../src/modules/auth/auth.schema.js';
 
 describe('auth schema contracts', () => {
@@ -54,5 +55,13 @@ describe('auth schema contracts', () => {
 
     expect(emailResult.success).toBe(true);
     expect(userIdResult.success).toBe(true);
+  });
+
+  it('requires tenantId for switch-tenant payload', () => {
+    const ok = SwitchTenantBodySchema.safeParse({ tenantId: 'tenant_1' });
+    const bad = SwitchTenantBodySchema.safeParse({ tenant: 'tenant_1' });
+
+    expect(ok.success).toBe(true);
+    expect(bad.success).toBe(false);
   });
 });

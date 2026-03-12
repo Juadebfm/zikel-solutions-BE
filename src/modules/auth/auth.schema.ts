@@ -10,11 +10,13 @@ import { z } from 'zod';
 
 export const passwordSchema = z
   .string()
-  .min(8, 'Minimum 8 characters')
+  .min(12, 'Minimum 12 characters')
+  .max(128, 'Maximum 128 characters')
   .regex(/[A-Z]/, 'Must contain an uppercase letter')
   .regex(/[a-z]/, 'Must contain a lowercase letter')
   .regex(/[0-9]/, 'Must contain a number')
-  .regex(/[^A-Za-z0-9]/, 'Must contain a special character');
+  .regex(/[^A-Za-z0-9]/, 'Must contain a special character')
+  .regex(/^\S+$/, 'Must not contain spaces');
 
 // ─── Zod schemas (service layer) ──────────────────────────────────────────────
 
@@ -93,6 +95,10 @@ export const LogoutBodySchema = z.object({
   refreshToken: z.string().min(1),
 });
 
+export const SwitchTenantBodySchema = z.object({
+  tenantId: z.string().min(1),
+});
+
 // ─── JSON Schemas (route validation + OpenAPI) ────────────────────────────────
 
 export const registerBodyJson = {
@@ -109,10 +115,11 @@ export const registerBodyJson = {
     phoneNumber: { type: 'string', minLength: 7, maxLength: 20 },
     password: {
       type: 'string',
-      minLength: 8,
-      description: 'Min 8 chars, must include uppercase, lowercase, number, and special character.',
+      minLength: 12,
+      maxLength: 128,
+      description: 'Min 12 chars, must include uppercase, lowercase, number, special character, and no spaces.',
     },
-    confirmPassword: { type: 'string', minLength: 8 },
+    confirmPassword: { type: 'string', minLength: 12, maxLength: 128 },
     acceptTerms: { type: 'boolean', enum: [true], description: 'Must be true to register.' },
   },
 } as const;
@@ -159,10 +166,11 @@ export const resetPasswordBodyJson = {
     code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit OTP from forgot-password email' },
     newPassword: {
       type: 'string',
-      minLength: 8,
-      description: 'Min 8 chars, must include uppercase, lowercase, number, and special character.',
+      minLength: 12,
+      maxLength: 128,
+      description: 'Min 12 chars, must include uppercase, lowercase, number, special character, and no spaces.',
     },
-    confirmPassword: { type: 'string', minLength: 8 },
+    confirmPassword: { type: 'string', minLength: 12, maxLength: 128 },
   },
 } as const;
 
@@ -217,6 +225,15 @@ export const logoutBodyJson = {
   },
 } as const;
 
+export const switchTenantBodyJson = {
+  type: 'object',
+  required: ['tenantId'],
+  additionalProperties: false,
+  properties: {
+    tenantId: { type: 'string' },
+  },
+} as const;
+
 export const RefreshBodySchema = z.object({
   refreshToken: z.string().min(1).optional(),
   token: z.string().min(1).optional(),
@@ -255,6 +272,7 @@ export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type CheckEmailQuery = z.infer<typeof CheckEmailQuerySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
+export type SwitchTenantBody = z.infer<typeof SwitchTenantBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
 export type ForgotPasswordBody = z.infer<typeof ForgotPasswordBodySchema>;
 export type ResetPasswordBody = z.infer<typeof ResetPasswordBodySchema>;

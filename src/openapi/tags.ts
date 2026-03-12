@@ -27,6 +27,10 @@ export const TAGS = [
       'My Summary page — personal KPI stats, to-do list, approval queue, and today\'s provisions grouped by home.',
   },
   {
+    name: 'Tenants',
+    description: 'Multi-tenant provisioning and membership management for organizations.',
+  },
+  {
     name: 'Care Groups',
     description: 'Top-level organisational units that group one or more care homes.',
   },

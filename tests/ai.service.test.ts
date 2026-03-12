@@ -6,6 +6,12 @@ const { mockPrisma, getSummaryStats } = vi.hoisted(() => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    tenant: {
+      findUnique: vi.fn(),
+    },
+    tenantMembership: {
+      findUnique: vi.fn(),
+    },
     auditLog: {
       create: vi.fn(),
     },
@@ -38,7 +44,14 @@ afterEach(() => {
 
 describe('ai.service', () => {
   it('returns fallback response when AI is disabled', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_1', aiAccessEnabled: true });
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'user_1', role: 'staff', activeTenantId: 'tenant_1' })
+      .mockResolvedValueOnce({ id: 'user_1', aiAccessEnabled: true });
+    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
+    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
+      role: 'staff',
+      status: 'active',
+    });
     process.env.AI_ENABLED = 'false';
     getSummaryStats.mockResolvedValueOnce({
       overdue: 3,
@@ -64,7 +77,14 @@ describe('ai.service', () => {
   });
 
   it('returns model response when AI provider succeeds', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_2', aiAccessEnabled: true });
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'user_2', role: 'staff', activeTenantId: 'tenant_1' })
+      .mockResolvedValueOnce({ id: 'user_2', aiAccessEnabled: true });
+    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
+    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
+      role: 'staff',
+      status: 'active',
+    });
     process.env.AI_ENABLED = 'true';
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://example.com/v1';
@@ -99,7 +119,14 @@ describe('ai.service', () => {
   });
 
   it('blocks ask-ai when user AI access is disabled', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_3', aiAccessEnabled: false });
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'user_3', role: 'staff', activeTenantId: 'tenant_1' })
+      .mockResolvedValueOnce({ id: 'user_3', aiAccessEnabled: false });
+    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
+    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
+      role: 'staff',
+      status: 'active',
+    });
 
     await expect(
       aiService.askAi('user_3', {
@@ -116,7 +143,9 @@ describe('ai.service', () => {
   });
 
   it('allows admin service to enable AI access for a user', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_target' });
+    mockPrisma.user.findUnique
+      .mockResolvedValueOnce({ id: 'admin_1', role: 'super_admin' })
+      .mockResolvedValueOnce({ id: 'user_target' });
     mockPrisma.user.update.mockResolvedValueOnce({
       id: 'user_target',
       aiAccessEnabled: true,
@@ -136,6 +165,7 @@ describe('ai.service', () => {
     });
     expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
       data: {
+        tenantId: null,
         userId: 'admin_1',
         action: 'permission_changed',
         entityType: 'user_ai_access',
