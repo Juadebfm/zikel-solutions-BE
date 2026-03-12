@@ -34,6 +34,16 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: z.url({ error: 'PUBLIC_BASE_URL must be a valid URL' })
     .default('https://zikel-solutions-be.onrender.com'),
 
+  // AI (provider-backed with fallback)
+  AI_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  AI_API_KEY: z.string().min(1).optional(),
+  AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  AI_BASE_URL: z.url({ error: 'AI_BASE_URL must be a valid URL' }).default('https://api.openai.com/v1'),
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
+
   // Email — Resend (https://resend.com)
   // Optional in development (email.ts logs OTPs to console instead).
   // Required in production: set via `fly secrets set`.

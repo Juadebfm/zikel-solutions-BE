@@ -3,6 +3,7 @@ import healthRoutes from './health.js';
 import authRoutes from '../modules/auth/auth.routes.js';
 import meRoutes from '../modules/me/me.routes.js';
 import publicRoutes from '../modules/public/public.routes.js';
+import aiRoutes from '../modules/ai/ai.routes.js';
 import announcementsRoutes from '../modules/announcements/announcements.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
@@ -26,6 +27,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(authRoutes, { prefix: '/auth' });
       await v1.register(meRoutes, { prefix: '/me' });
       await v1.register(publicRoutes, { prefix: '/public' });
+      await v1.register(aiRoutes, { prefix: '/ai' });
       await v1.register(announcementsRoutes, { prefix: '/announcements' });
       await v1.register(summaryRoutes, { prefix: '/summary' });
       await v1.register(dashboardRoutes, { prefix: '/dashboard' });

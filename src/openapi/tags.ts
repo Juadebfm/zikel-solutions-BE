@@ -18,6 +18,10 @@ export const TAGS = [
       'Public website endpoints for demo booking, waitlist signup, and contact messages.',
   },
   {
+    name: 'AI',
+    description: 'AI-assisted guidance endpoints with safe fallback responses.',
+  },
+  {
     name: 'Summary',
     description:
       'My Summary page — personal KPI stats, to-do list, approval queue, and today\'s provisions grouped by home.',
