@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AskAiBodySchema } from '../src/modules/ai/ai.schema.js';
+import { AskAiBodySchema, SetAiAccessBodySchema } from '../src/modules/ai/ai.schema.js';
 
 describe('ai schema contracts', () => {
   it('accepts minimal ask-ai payload', () => {
@@ -34,5 +34,15 @@ describe('ai schema contracts', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it('accepts AI access toggle body', () => {
+    const result = SetAiAccessBodySchema.safeParse({ enabled: true });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects invalid AI access toggle body', () => {
+    const result = SetAiAccessBodySchema.safeParse({ enabled: 'yes' });
+    expect(result.success).toBe(false);
   });
 });

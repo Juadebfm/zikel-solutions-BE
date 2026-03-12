@@ -61,6 +61,7 @@ type UserWithEmployee = {
   phoneNumber: string | null;
   language: string;
   timezone: string;
+  aiAccessEnabled: boolean;
   createdAt: Date;
   lastLoginAt: Date | null;
   employee: { homeId: string | null; jobTitle: string | null; home: { name: string } | null } | null;
@@ -80,6 +81,7 @@ function mapProfile(user: UserWithEmployee) {
     jobTitle: user.employee?.jobTitle ?? null,
     language: user.language,
     timezone: user.timezone,
+    aiAccessEnabled: user.aiAccessEnabled,
     createdAt: user.createdAt,
     lastLoginAt: user.lastLoginAt,
   };
@@ -98,6 +100,7 @@ async function getUserOrThrow(userId: string): Promise<UserWithEmployee> {
       phoneNumber: true,
       language: true,
       timezone: true,
+      aiAccessEnabled: true,
       createdAt: true,
       lastLoginAt: true,
       employee: {
@@ -142,6 +145,7 @@ export async function updateMyProfile(userId: string, body: UpdateMeBody) {
       phoneNumber: true,
       language: true,
       timezone: true,
+      aiAccessEnabled: true,
       createdAt: true,
       lastLoginAt: true,
       employee: {

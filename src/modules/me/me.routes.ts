@@ -26,7 +26,7 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
             success: { type: 'boolean', enum: [true] },
             data: {
               type: 'object',
-              required: ['id', 'email', 'firstName', 'lastName', 'role'],
+              required: ['id', 'email', 'firstName', 'lastName', 'role', 'aiAccessEnabled'],
               properties: {
                 id: { type: 'string' },
                 email: { type: 'string', format: 'email' },
@@ -40,6 +40,7 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
                 jobTitle: { type: ['string', 'null'] },
                 language: { type: 'string' },
                 timezone: { type: 'string' },
+                aiAccessEnabled: { type: 'boolean' },
                 createdAt: { type: 'string', format: 'date-time' },
                 lastLoginAt: { type: ['string', 'null'], format: 'date-time' },
               },

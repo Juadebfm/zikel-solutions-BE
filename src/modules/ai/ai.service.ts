@@ -1,7 +1,8 @@
 import { AuditAction } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { httpError } from '../../lib/errors.js';
 import { getSummaryStats } from '../summary/summary.service.js';
-import type { AskAiBody } from './ai.schema.js';
+import type { AskAiBody, SetAiAccessBody } from './ai.schema.js';
 
 const DEFAULT_AI_MODEL = 'gpt-4o-mini';
 const DEFAULT_AI_TIMEOUT_MS = 12_000;
@@ -193,7 +194,27 @@ async function callModel(body: AskAiBody, context: {
   }
 }
 
+async function assertAiAccessEnabled(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      aiAccessEnabled: true,
+    },
+  });
+
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+
+  if (!user.aiAccessEnabled) {
+    throw httpError(403, 'AI_ACCESS_DISABLED', 'AI access is not enabled for this account.');
+  }
+}
+
 export async function askAi(userId: string, body: AskAiBody) {
+  await assertAiAccessEnabled(userId);
+
   const summaryContext = await resolveSummaryContext(userId, body);
   const fallbackAnswer = buildFallbackAnswer(body.query, summaryContext.stats);
 
@@ -240,5 +261,42 @@ export async function askAi(userId: string, body: AskAiBody) {
     model,
     statsSource: summaryContext.statsSource,
     generatedAt,
+  };
+}
+
+export async function setUserAiAccess(actorUserId: string, targetUserId: string, body: SetAiAccessBody) {
+  const existingUser = await prisma.user.findUnique({
+    where: { id: targetUserId },
+    select: { id: true },
+  });
+
+  if (!existingUser) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+
+  const updated = await prisma.user.update({
+    where: { id: targetUserId },
+    data: { aiAccessEnabled: body.enabled },
+    select: {
+      id: true,
+      aiAccessEnabled: true,
+      updatedAt: true,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: actorUserId,
+      action: AuditAction.permission_changed,
+      entityType: 'user_ai_access',
+      entityId: targetUserId,
+      metadata: { enabled: body.enabled },
+    },
+  });
+
+  return {
+    userId: updated.id,
+    aiAccessEnabled: updated.aiAccessEnabled,
+    updatedAt: updated.updatedAt,
   };
 }

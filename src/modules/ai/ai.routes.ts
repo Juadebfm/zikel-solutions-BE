@@ -1,7 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
+import { requireRole } from '../../middleware/rbac.js';
 import * as aiService from './ai.service.js';
-import { AskAiBodySchema, askAiBodyJson } from './ai.schema.js';
+import {
+  AskAiBodySchema,
+  SetAiAccessBodySchema,
+  askAiBodyJson,
+  setAiAccessBodyJson,
+} from './ai.schema.js';
 
 const aiRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -45,6 +51,8 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         401: { $ref: 'ApiError#' },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
     },
@@ -60,6 +68,54 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
 
       const userId = (request.user as JwtPayload).sub;
       const data = await aiService.askAi(userId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.patch('/access/:id', {
+    preHandler: [requireRole('admin')],
+    schema: {
+      tags: ['AI'],
+      summary: 'Update AI access for a user (admin only)',
+      description: 'Enables or disables AI access for a specific user account.',
+      params: { $ref: 'CuidParam#' },
+      body: setAiAccessBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['userId', 'aiAccessEnabled', 'updatedAt'],
+              properties: {
+                userId: { type: 'string' },
+                aiAccessEnabled: { type: 'boolean' },
+                updatedAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = SetAiAccessBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await aiService.setUserAiAccess(actorUserId, id, parse.data);
       return reply.send({ success: true, data });
     },
   });

@@ -142,6 +142,7 @@ model User {
   emailVerified  Boolean   @default(false)
   acceptedTerms  Boolean   @default(false)
   isActive       Boolean   @default(true)
+  aiAccessEnabled Boolean  @default(false)
   lastLoginAt    DateTime?
   failedAttempts Int       @default(0)
   lockedUntil    DateTime?

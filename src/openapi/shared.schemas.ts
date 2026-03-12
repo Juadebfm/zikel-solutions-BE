@@ -75,7 +75,7 @@ export const UserRoleSchema = {
 export const UserSchema = {
   $id: 'User',
   type: 'object',
-  required: ['id', 'email', 'role', 'firstName', 'lastName', 'country', 'emailVerified', 'isActive', 'createdAt'],
+  required: ['id', 'email', 'role', 'firstName', 'lastName', 'country', 'emailVerified', 'isActive', 'aiAccessEnabled', 'createdAt'],
   properties: {
     id: { type: 'string' },
     email: { type: 'string', format: 'email' },
@@ -92,6 +92,7 @@ export const UserSchema = {
     emailVerified: { type: 'boolean' },
     acceptedTerms: { type: 'boolean' },
     isActive: { type: 'boolean' },
+    aiAccessEnabled: { type: 'boolean' },
     lastLoginAt: { type: 'string', format: 'date-time', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
   },

@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-const { askAi } = vi.hoisted(() => ({
+const { askAi, setUserAiAccess } = vi.hoisted(() => ({
   askAi: vi.fn(),
+  setUserAiAccess: vi.fn(),
 }));
 
-vi.mock('../src/modules/ai/ai.service.js', () => ({ askAi }));
+vi.mock('../src/modules/ai/ai.service.js', () => ({ askAi, setUserAiAccess }));
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
@@ -91,5 +92,58 @@ describe('AI routes', () => {
         model: null,
       },
     });
+  });
+
+  it('forbids non-admin users from toggling AI access', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/ai/access/user_24',
+      headers: authHeader('manager_1', 'manager'),
+      payload: { enabled: true },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(setUserAiAccess).not.toHaveBeenCalled();
+  });
+
+  it('allows admin to toggle AI access', async () => {
+    setUserAiAccess.mockResolvedValueOnce({
+      userId: 'user_24',
+      aiAccessEnabled: true,
+      updatedAt: '2026-03-12T08:00:00.000Z',
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/ai/access/user_24',
+      headers: authHeader('admin_1', 'admin'),
+      payload: { enabled: true },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(setUserAiAccess).toHaveBeenCalledWith('admin_1', 'user_24', { enabled: true });
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        userId: 'user_24',
+        aiAccessEnabled: true,
+      },
+    });
+  });
+
+  it('validates AI access toggle body', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/ai/access/user_24',
+      headers: authHeader('admin_1', 'admin'),
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: { code: 'FST_ERR_VALIDATION' },
+    });
+    expect(setUserAiAccess).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockPrisma, getSummaryStats } = vi.hoisted(() => ({
   mockPrisma: {
+    user: {
+      findUnique: vi.fn(),
+      update: vi.fn(),
+    },
     auditLog: {
       create: vi.fn(),
     },
@@ -34,6 +38,7 @@ afterEach(() => {
 
 describe('ai.service', () => {
   it('returns fallback response when AI is disabled', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_1', aiAccessEnabled: true });
     process.env.AI_ENABLED = 'false';
     getSummaryStats.mockResolvedValueOnce({
       overdue: 3,
@@ -59,6 +64,7 @@ describe('ai.service', () => {
   });
 
   it('returns model response when AI provider succeeds', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_2', aiAccessEnabled: true });
     process.env.AI_ENABLED = 'true';
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://example.com/v1';
@@ -90,5 +96,56 @@ describe('ai.service', () => {
     expect(result.statsSource).toBe('client');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockPrisma.auditLog.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks ask-ai when user AI access is disabled', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_3', aiAccessEnabled: false });
+
+    await expect(
+      aiService.askAi('user_3', {
+        query: 'What should I focus on?',
+        page: 'summary',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'AI_ACCESS_DISABLED',
+    });
+
+    expect(getSummaryStats).not.toHaveBeenCalled();
+    expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('allows admin service to enable AI access for a user', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce({ id: 'user_target' });
+    mockPrisma.user.update.mockResolvedValueOnce({
+      id: 'user_target',
+      aiAccessEnabled: true,
+      updatedAt: new Date('2026-03-12T08:00:00.000Z'),
+    });
+
+    const result = await aiService.setUserAiAccess('admin_1', 'user_target', { enabled: true });
+
+    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'user_target' },
+      data: { aiAccessEnabled: true },
+      select: {
+        id: true,
+        aiAccessEnabled: true,
+        updatedAt: true,
+      },
+    });
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
+      data: {
+        userId: 'admin_1',
+        action: 'permission_changed',
+        entityType: 'user_ai_access',
+        entityId: 'user_target',
+        metadata: { enabled: true },
+      },
+    });
+    expect(result).toMatchObject({
+      userId: 'user_target',
+      aiAccessEnabled: true,
+    });
   });
 });

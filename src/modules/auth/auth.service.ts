@@ -125,6 +125,7 @@ function safeUser(user: {
   emailVerified: boolean;
   acceptedTerms: boolean;
   isActive: boolean;
+  aiAccessEnabled: boolean;
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -145,6 +146,7 @@ function safeUser(user: {
     emailVerified: user.emailVerified,
     acceptedTerms: user.acceptedTerms,
     isActive: user.isActive,
+    aiAccessEnabled: user.aiAccessEnabled,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,

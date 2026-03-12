@@ -37,6 +37,12 @@ export const AskAiBodySchema = z
   })
   .strict();
 
+export const SetAiAccessBodySchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
 export const askAiBodyJson = {
   type: 'object',
   required: ['query'],
@@ -97,4 +103,14 @@ export const askAiBodyJson = {
   },
 } as const;
 
+export const setAiAccessBodyJson = {
+  type: 'object',
+  required: ['enabled'],
+  additionalProperties: false,
+  properties: {
+    enabled: { type: 'boolean' },
+  },
+} as const;
+
 export type AskAiBody = z.infer<typeof AskAiBodySchema>;
+export type SetAiAccessBody = z.infer<typeof SetAiAccessBodySchema>;

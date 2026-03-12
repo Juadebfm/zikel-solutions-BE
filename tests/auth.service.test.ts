@@ -51,6 +51,7 @@ function makeUser(overrides: Record<string, unknown> = {}) {
     emailVerified: false,
     acceptedTerms: true,
     isActive: true,
+    aiAccessEnabled: false,
     lastLoginAt: null,
     failedAttempts: 0,
     lockedUntil: null,
