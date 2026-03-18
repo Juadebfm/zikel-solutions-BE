@@ -107,8 +107,10 @@ function parseEnv(): Env {
     if (origins.some((origin) => origin === '*')) {
       throw new Error('CORS_ORIGINS cannot include wildcard (*) in staging/production.');
     }
-    if (origins.some((origin) => !origin.startsWith('https://'))) {
-      throw new Error('CORS_ORIGINS must be https:// origins only in staging/production.');
+    const isLocalhost = (o: string) =>
+      o.startsWith('http://localhost:') || o.startsWith('http://127.0.0.1:');
+    if (origins.some((origin) => !origin.startsWith('https://') && !isLocalhost(origin))) {
+      throw new Error('CORS_ORIGINS must be https:// origins (localhost is allowed for testing) in staging/production.');
     }
 
     if (parsed.SECURITY_ALERT_PIPELINE_ENABLED && !parsed.SECURITY_ALERT_WEBHOOK_URL) {
