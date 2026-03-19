@@ -38,7 +38,7 @@ export const AddTenantMemberBodySchema = z
     userId: z.string().min(1).optional(),
     email: z.email().optional(),
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked']).default('active'),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).default('active'),
   })
   .strict()
   .refine((v) => Boolean(v.userId || v.email), {
@@ -53,7 +53,7 @@ export const AddTenantMemberBodySchema = z
 export const UpdateTenantMemberBodySchema = z
   .object({
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']).optional(),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked']).optional(),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).optional(),
   })
   .strict()
   .refine((v) => Object.values(v).some((value) => value !== undefined), {
@@ -73,7 +73,7 @@ export const ListTenantMembershipsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']).optional(),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked']).optional(),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).optional(),
     search: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
@@ -83,6 +83,48 @@ export const AcceptTenantInviteBodySchema = z
     token: z.string().min(20).max(256),
   })
   .strict();
+
+export const ProvisionStaffBodySchema = z
+  .object({
+    firstName: z.string().min(1).max(100),
+    lastName: z.string().min(1).max(100),
+    email: z.email(),
+    role: z.enum(['sub_admin', 'staff']).default('staff'),
+  })
+  .strict();
+
+export const provisionStaffBodyJson = {
+  type: 'object',
+  required: ['firstName', 'lastName', 'email'],
+  additionalProperties: false,
+  properties: {
+    firstName: { type: 'string', minLength: 1, maxLength: 100 },
+    lastName: { type: 'string', minLength: 1, maxLength: 100 },
+    email: { type: 'string', format: 'email' },
+    role: { type: 'string', enum: ['sub_admin', 'staff'], default: 'staff' },
+  },
+} as const;
+
+export const CreateInviteLinkBodySchema = z
+  .object({
+    defaultRole: z.enum(['sub_admin', 'staff']).default('staff'),
+    expiresInHours: z.coerce.number().int().min(1).max(24 * 365).optional(),
+  })
+  .strict();
+
+export const createInviteLinkBodyJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    defaultRole: { type: 'string', enum: ['sub_admin', 'staff'], default: 'staff' },
+    expiresInHours: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 8760,
+      description: 'Hours until the link expires. Omit for no expiry.',
+    },
+  },
+} as const;
 
 export const ListTenantInvitesQuerySchema = z
   .object({
@@ -152,7 +194,7 @@ export const addTenantMemberBodyJson = {
     userId: { type: 'string', minLength: 1 },
     email: { type: 'string', format: 'email' },
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'], default: 'active' },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'], default: 'active' },
   },
   oneOf: [
     { required: ['userId'] },
@@ -165,7 +207,7 @@ export const updateTenantMemberBodyJson = {
   additionalProperties: false,
   properties: {
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
   },
   minProperties: 1,
 } as const;
@@ -188,7 +230,7 @@ export const listTenantMembershipsQueryJson = {
     page: { type: 'integer', minimum: 1, default: 1 },
     pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
     search: { type: 'string', minLength: 1, maxLength: 120 },
   },
 } as const;
@@ -220,4 +262,6 @@ export type UpdateTenantMemberBody = z.infer<typeof UpdateTenantMemberBodySchema
 export type CreateTenantInviteBody = z.infer<typeof CreateTenantInviteBodySchema>;
 export type ListTenantMembershipsQuery = z.infer<typeof ListTenantMembershipsQuerySchema>;
 export type AcceptTenantInviteBody = z.infer<typeof AcceptTenantInviteBodySchema>;
+export type ProvisionStaffBody = z.infer<typeof ProvisionStaffBodySchema>;
+export type CreateInviteLinkBody = z.infer<typeof CreateInviteLinkBodySchema>;
 export type ListTenantInvitesQuery = z.infer<typeof ListTenantInvitesQuerySchema>;

@@ -4,12 +4,19 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
   mockPrisma: {
     user: {
       findUnique: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
+    },
+    tenant: {
+      create: vi.fn(),
     },
     tenantMembership: {
       findMany: vi.fn(),
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
+      create: vi.fn(),
+      updateMany: vi.fn(),
     },
     otpCode: {
       findFirst: vi.fn(),
@@ -34,6 +41,9 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
 vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 vi.mock('../src/lib/email.js', () => ({ sendOtpEmail }));
 vi.mock('../src/lib/tokens.js', () => ({ generateRefreshToken, refreshExpiresAt }));
+vi.mock('../src/modules/tenants/tenants.service.js', () => ({
+  resolveInviteLinkByCode: vi.fn(),
+}));
 
 import * as authService from '../src/modules/auth/auth.service.js';
 
@@ -85,9 +95,12 @@ describe('auth.service', () => {
   it('register returns sent delivery status when OTP email dispatch succeeds', async () => {
     const createdUser = makeUser({ id: 'user_new' });
     mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.$transaction.mockImplementationOnce(async (fn: (tx: typeof mockPrisma) => Promise<unknown>) => fn(mockPrisma));
+    mockPrisma.tenant.create.mockResolvedValueOnce({ id: 'tenant_1', slug: 'sunrise-care', country: 'UK' });
     mockPrisma.user.create.mockResolvedValueOnce(createdUser);
+    mockPrisma.tenantMembership.create.mockResolvedValueOnce({});
     mockPrisma.otpCode.create.mockResolvedValueOnce({});
-    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValue({});
     sendOtpEmail.mockResolvedValueOnce(undefined);
 
     const result = await authService.register({
@@ -98,6 +111,7 @@ describe('auth.service', () => {
       password: 'Password123!',
       confirmPassword: 'Password123!',
       acceptTerms: true,
+      organizationName: 'Sunrise Care',
     });
 
     expect(result).toMatchObject({
@@ -111,9 +125,12 @@ describe('auth.service', () => {
   it('register returns failed delivery status when OTP email dispatch fails', async () => {
     const createdUser = makeUser({ id: 'user_failed' });
     mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.$transaction.mockImplementationOnce(async (fn: (tx: typeof mockPrisma) => Promise<unknown>) => fn(mockPrisma));
+    mockPrisma.tenant.create.mockResolvedValueOnce({ id: 'tenant_2', slug: 'sunset-care', country: 'UK' });
     mockPrisma.user.create.mockResolvedValueOnce(createdUser);
+    mockPrisma.tenantMembership.create.mockResolvedValueOnce({});
     mockPrisma.otpCode.create.mockResolvedValueOnce({});
-    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValue({});
     sendOtpEmail.mockRejectedValueOnce(new Error('provider-down'));
 
     const result = await authService.register({
@@ -124,6 +141,7 @@ describe('auth.service', () => {
       password: 'Password123!',
       confirmPassword: 'Password123!',
       acceptTerms: true,
+      organizationName: 'Sunset Care',
     });
 
     expect(result).toMatchObject({

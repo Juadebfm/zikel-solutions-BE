@@ -150,12 +150,14 @@ export async function sendOtpEmail(
     email_verification: 'Your Zikel Solutions verification code',
     password_reset: 'Your Zikel Solutions password reset code',
     mfa_challenge: 'Your Zikel Solutions MFA code',
+    staff_activation: 'Activate your Zikel Solutions staff account',
   };
 
   const actionByPurpose: Record<OtpPurpose, string> = {
     email_verification: 'verify your email address',
     password_reset: 'reset your password',
     mfa_challenge: 'verify your privileged session',
+    staff_activation: 'activate your staff account',
   };
 
   const subject = subjectByPurpose[purpose];

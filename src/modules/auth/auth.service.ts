@@ -1,5 +1,5 @@
 import { randomInt } from 'crypto';
-import { OtpPurpose, AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
+import { Prisma, OtpPurpose, AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { generateRefreshToken, refreshExpiresAt } from '../../lib/tokens.js';
@@ -10,8 +10,11 @@ import {
   normalizePasswordCheckTiming,
   verifyPassword,
 } from '../../lib/password.js';
+import { resolveInviteLinkByCode } from '../tenants/tenants.service.js';
 import type {
   RegisterBody,
+  JoinViaInviteLinkBody,
+  StaffActivateBody,
   VerifyOtpBody,
   VerifyMfaChallengeBody,
   ResendOtpBody,
@@ -119,6 +122,16 @@ async function dispatchOtp(
         resolve('failed');
       });
   });
+}
+
+function slugify(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-{2,}/g, '-')
+    .slice(0, 120);
 }
 
 /**
@@ -273,48 +286,290 @@ export async function register(body: RegisterBody) {
     throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
   }
 
+  const tenantSlug = (body.organizationSlug ?? slugify(body.organizationName)).toLowerCase();
+  if (!tenantSlug) {
+    throw httpError(422, 'VALIDATION_ERROR', 'Unable to derive slug from organization name.');
+  }
+
   const passwordHash = await hashPassword(body.password);
 
-  const user = await prisma.user.create({
-    data: {
-      email: body.email,
-      passwordHash,
-      firstName: body.firstName,
-      middleName: body.middleName ?? null,
-      lastName: body.lastName,
-      gender: (body.gender ?? null) as 'male' | 'female' | 'other' | null,
-      country: body.country as 'UK' | 'Nigeria',
-      phoneNumber: body.phoneNumber ?? null,
-      acceptedTerms: body.acceptTerms as boolean,
-      emailVerified: false,
-    },
-  });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.create({
+        data: {
+          name: body.organizationName,
+          slug: tenantSlug,
+          country: body.country as 'UK' | 'Nigeria',
+        },
+      });
 
-  const code = generateOtpCode();
-  await prisma.otpCode.create({
-    data: {
+      const user = await tx.user.create({
+        data: {
+          email: body.email,
+          passwordHash,
+          firstName: body.firstName,
+          middleName: body.middleName ?? null,
+          lastName: body.lastName,
+          gender: (body.gender ?? null) as 'male' | 'female' | 'other' | null,
+          country: body.country as 'UK' | 'Nigeria',
+          phoneNumber: body.phoneNumber ?? null,
+          acceptedTerms: body.acceptTerms as boolean,
+          emailVerified: false,
+          activeTenantId: tenant.id,
+        },
+      });
+
+      await tx.tenantMembership.create({
+        data: {
+          tenantId: tenant.id,
+          userId: user.id,
+          role: TenantRole.tenant_admin,
+          status: MembershipStatus.active,
+        },
+      });
+
+      const otpCode = generateOtpCode();
+      await tx.otpCode.create({
+        data: {
+          userId: user.id,
+          code: otpCode,
+          purpose: OtpPurpose.email_verification,
+          expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: { userId: user.id, action: AuditAction.register },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: AuditAction.record_created,
+          entityType: 'tenant',
+          entityId: tenant.id,
+          metadata: { slug: tenant.slug, country: tenant.country },
+        },
+      });
+
+      return { user, tenant, otpCode };
+    });
+
+    const otpDeliveryStatus = await dispatchOtp(
+      body.email,
+      result.otpCode,
+      OtpPurpose.email_verification,
+    );
+
+    return {
+      userId: result.user.id,
+      message: registerMessageFor(otpDeliveryStatus),
+      otpDeliveryStatus,
+      resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+    };
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      const target = (error.meta?.target as string[]) ?? [];
+      if (target.includes('slug')) {
+        throw httpError(409, 'ORG_SLUG_TAKEN', 'An organization with this slug already exists. Please choose a different name or slug.');
+      }
+      if (target.includes('email')) {
+        throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
+      }
+    }
+    throw error;
+  }
+}
+
+/**
+ * Staff self-registration via org invite link.
+ * Creates an account with pending_approval membership. Admin must approve.
+ */
+export async function joinViaInviteLink(inviteCode: string, body: JoinViaInviteLinkBody) {
+  const linkInfo = await resolveInviteLinkByCode(inviteCode);
+
+  const existing = await prisma.user.findUnique({ where: { email: body.email } });
+  if (existing) {
+    throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
+  }
+
+  const passwordHash = await hashPassword(body.password);
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: body.email,
+          passwordHash,
+          firstName: body.firstName,
+          lastName: body.lastName,
+          phoneNumber: body.phoneNumber ?? null,
+          country: 'UK',
+          acceptedTerms: body.acceptTerms as boolean,
+          emailVerified: false,
+          activeTenantId: linkInfo.tenantId,
+        },
+      });
+
+      await tx.tenantMembership.create({
+        data: {
+          tenantId: linkInfo.tenantId,
+          userId: user.id,
+          role: linkInfo.defaultRole,
+          status: MembershipStatus.pending_approval,
+        },
+      });
+
+      const otpCode = generateOtpCode();
+      await tx.otpCode.create({
+        data: {
+          userId: user.id,
+          code: otpCode,
+          purpose: OtpPurpose.email_verification,
+          expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: AuditAction.register,
+          metadata: {
+            joinedVia: 'invite_link',
+            tenantId: linkInfo.tenantId,
+            tenantName: linkInfo.tenantName,
+            role: linkInfo.defaultRole,
+          },
+        },
+      });
+
+      return { user, otpCode };
+    });
+
+    const otpDeliveryStatus = await dispatchOtp(
+      body.email,
+      result.otpCode,
+      OtpPurpose.email_verification,
+    );
+
+    return {
+      userId: result.user.id,
+      message: registerMessageFor(otpDeliveryStatus),
+      otpDeliveryStatus,
+      resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+      tenantName: linkInfo.tenantName,
+      pendingApproval: true,
+    };
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2002'
+    ) {
+      throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Public endpoint — validates an invite link code and returns the org name.
+ */
+export async function validateInviteLink(inviteCode: string) {
+  const linkInfo = await resolveInviteLinkByCode(inviteCode);
+  return {
+    tenantName: linkInfo.tenantName,
+    tenantSlug: linkInfo.tenantSlug,
+    defaultRole: linkInfo.defaultRole,
+  };
+}
+
+/**
+ * Activates a pre-provisioned staff account.
+ * Staff enters email + 6-digit activation code + sets password.
+ * On success, activates account, sets password, upgrades membership to active, and issues tokens.
+ */
+export async function staffActivate(body: StaffActivateBody) {
+  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  if (!user) {
+    throw httpError(400, 'ACTIVATION_INVALID', 'Invalid email or activation code.');
+  }
+
+  if (user.emailVerified) {
+    throw httpError(409, 'ALREADY_ACTIVATED', 'This account has already been activated. Please log in.');
+  }
+
+  const otp = await prisma.otpCode.findFirst({
+    where: {
       userId: user.id,
-      code,
-      purpose: OtpPurpose.email_verification,
-      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
+      code: body.code,
+      purpose: OtpPurpose.staff_activation,
+      usedAt: null,
+      expiresAt: { gt: new Date() },
     },
   });
 
-  const otpDeliveryStatus = await dispatchOtp(
-    body.email,
-    code,
-    OtpPurpose.email_verification,
-  );
+  if (!otp) {
+    throw httpError(400, 'ACTIVATION_INVALID', 'Invalid email or activation code.');
+  }
 
-  await prisma.auditLog.create({
-    data: { userId: user.id, action: AuditAction.register },
+  const passwordHash = await hashPassword(body.password);
+
+  await prisma.$transaction(async (tx) => {
+    // Mark OTP consumed
+    await tx.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
+
+    // Activate user account + set password
+    await tx.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        emailVerified: true,
+        acceptedTerms: true,
+      },
+    });
+
+    // Upgrade membership from invited to active
+    await tx.tenantMembership.updateMany({
+      where: {
+        userId: user.id,
+        status: MembershipStatus.invited,
+      },
+      data: {
+        status: MembershipStatus.active,
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        userId: user.id,
+        action: AuditAction.register,
+        entityType: 'staff_activation',
+        metadata: { activatedVia: 'staff_code' },
+      },
+    });
+  });
+
+  // Fetch updated user for session
+  const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+
+  const refreshToken = generateRefreshToken();
+  await prisma.refreshToken.create({
+    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
+  });
+
+  const session = await resolveAuthSessionContext({
+    userId: updatedUser.id,
+    userRole: updatedUser.role,
+    currentActiveTenantId: updatedUser.activeTenantId,
   });
 
   return {
-    userId: user.id,
-    message: registerMessageFor(otpDeliveryStatus),
-    otpDeliveryStatus,
-    resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
+    user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
+    refreshToken,
+    session,
   };
 }
 
