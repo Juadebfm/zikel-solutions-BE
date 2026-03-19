@@ -6,18 +6,20 @@ import * as tenantsService from './tenants.service.js';
 import {
   AcceptTenantInviteBodySchema,
   AddTenantMemberBodySchema,
+  CreateInviteLinkBodySchema,
   CreateTenantInviteBodySchema,
   CreateTenantBodySchema,
-  SelfServeCreateTenantBodySchema,
+  ProvisionStaffBodySchema,
   ListTenantMembershipsQuerySchema,
   ListTenantInvitesQuerySchema,
   ListTenantsQuerySchema,
   UpdateTenantMemberBodySchema,
   acceptTenantInviteBodyJson,
   addTenantMemberBodyJson,
+  createInviteLinkBodyJson,
   createTenantInviteBodyJson,
   createTenantBodyJson,
-  selfServeCreateTenantBodyJson,
+  provisionStaffBodyJson,
   listTenantMembershipsQueryJson,
   listTenantInvitesQueryJson,
   listTenantsQueryJson,
@@ -170,52 +172,6 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  fastify.post('/self-serve', {
-    config: { rateLimit: { max: 3, timeWindow: '10 minutes' } },
-    schema: {
-      tags: ['Tenants'],
-      summary: 'Self-serve organization onboarding',
-      description:
-        'Creates a tenant and assigns the authenticated user as tenant_admin for first-time organization onboarding.',
-      body: selfServeCreateTenantBodyJson,
-      response: {
-        201: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['tenant', 'adminMembership'],
-              properties: {
-                tenant: { $ref: 'Tenant#' },
-                adminMembership: { $ref: 'TenantMembership#' },
-              },
-            },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        404: { $ref: 'ApiError#' },
-        409: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = SelfServeCreateTenantBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
-
-      const actorUserId = (request.user as JwtPayload).sub;
-      const data = await tenantsService.selfServeCreateTenant(actorUserId, parse.data);
-      return reply.status(201).send({ success: true, data });
-    },
-  });
-
   fastify.get('/:id/memberships', {
     schema: {
       tags: ['Tenants'],
@@ -336,6 +292,206 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
         membershipId,
         parse.data,
       );
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /:id/staff — Provision staff account ─────────────────────────────
+  fastify.post('/:id/staff', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Tenants'],
+      summary: 'Provision a staff account (admin-driven)',
+      description:
+        'Creates a pre-provisioned user account for a staff member and sends them an activation email. ' +
+        'The staff member activates via /auth/staff-activate with their OTP code and a new password.',
+      params: { $ref: 'CuidParam#' },
+      body: provisionStaffBodyJson,
+      response: {
+        201: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['user', 'membership', 'tenantName'],
+              properties: {
+                user: {
+                  type: 'object',
+                  required: ['id', 'email', 'firstName', 'lastName'],
+                  properties: {
+                    id: { type: 'string' },
+                    email: { type: 'string', format: 'email' },
+                    firstName: { type: 'string' },
+                    lastName: { type: 'string' },
+                  },
+                },
+                membership: { $ref: 'TenantMembership#' },
+                tenantName: { type: 'string' },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        409: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ProvisionStaffBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actor = request.user as JwtPayload;
+      const { id } = request.params as { id: string };
+      const data = await tenantsService.provisionStaff(
+        actor.sub,
+        actor.role,
+        id,
+        parse.data,
+      );
+      return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  // ── Invite Links (self-service staff registration) ─────────────────────────
+
+  fastify.post('/:id/invite-link', {
+    schema: {
+      tags: ['Tenants'],
+      summary: 'Generate org invite link (admin)',
+      description: 'Creates a reusable invite link that can be shared with staff for self-registration.',
+      params: { $ref: 'CuidParam#' },
+      body: createInviteLinkBodyJson,
+      response: {
+        201: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['id', 'tenantId', 'code', 'defaultRole', 'isActive', 'createdAt'],
+              properties: {
+                id: { type: 'string' },
+                tenantId: { type: 'string' },
+                tenantName: { type: 'string' },
+                code: { type: 'string' },
+                defaultRole: { type: 'string', enum: ['sub_admin', 'staff'] },
+                isActive: { type: 'boolean' },
+                expiresAt: { type: 'string', format: 'date-time', nullable: true },
+                createdAt: { type: 'string', format: 'date-time' },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = CreateInviteLinkBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actor = request.user as JwtPayload;
+      const { id } = request.params as { id: string };
+      const data = await tenantsService.createInviteLink(actor.sub, actor.role, id, parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  fastify.get('/:id/invite-links', {
+    schema: {
+      tags: ['Tenants'],
+      summary: 'List active invite links (admin)',
+      params: { $ref: 'CuidParam#' },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['id', 'tenantId', 'code', 'defaultRole', 'isActive', 'createdAt'],
+                properties: {
+                  id: { type: 'string' },
+                  tenantId: { type: 'string' },
+                  tenantName: { type: 'string' },
+                  code: { type: 'string' },
+                  defaultRole: { type: 'string', enum: ['sub_admin', 'staff'] },
+                  isActive: { type: 'boolean' },
+                  expiresAt: { type: 'string', format: 'date-time', nullable: true },
+                  createdAt: { type: 'string', format: 'date-time' },
+                },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const { id } = request.params as { id: string };
+      const data = await tenantsService.getInviteLink(actor.sub, actor.role, id);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.patch('/:id/invite-links/:linkId/revoke', {
+    schema: {
+      tags: ['Tenants'],
+      summary: 'Revoke an invite link',
+      params: {
+        type: 'object',
+        required: ['id', 'linkId'],
+        properties: {
+          id: { type: 'string' },
+          linkId: { type: 'string' },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['id', 'isActive'],
+              properties: {
+                id: { type: 'string' },
+                isActive: { type: 'boolean' },
+              },
+            },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const actor = request.user as JwtPayload;
+      const { id, linkId } = request.params as { id: string; linkId: string };
+      const data = await tenantsService.revokeInviteLink(actor.sub, actor.role, id, linkId);
       return reply.send({ success: true, data });
     },
   });

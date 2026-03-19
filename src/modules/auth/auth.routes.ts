@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { requireCaptcha } from '../../middleware/captcha.js';
 import {
   RegisterBodySchema,
+  JoinViaInviteLinkBodySchema,
+  StaffActivateBodySchema,
   VerifyOtpBodySchema,
   ResendOtpBodySchema,
   LoginBodySchema,
@@ -13,6 +15,8 @@ import {
   ForgotPasswordBodySchema,
   ResetPasswordBodySchema,
   registerBodyJson,
+  joinViaInviteLinkBodyJson,
+  staffActivateBodyJson,
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
@@ -53,11 +57,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     preHandler: [requireCaptcha('auth_register')],
     schema: {
       tags: ['Auth'],
-      summary: 'Register a new user (steps 1–3)',
+      summary: 'Register a new care home organization',
       description:
-        'Accepts all data collected across the 4-step signup flow (country, profile, password). ' +
-        'Creates a pending user and starts OTP delivery to the provided email. ' +
-        'The account is activated only after OTP verification.',
+        'Creates a pending user account and their care home organization in a single transaction. ' +
+        'The user becomes the tenant admin. Starts OTP delivery to the provided email. ' +
+        'The account is activated only after OTP verification via /auth/verify-otp.',
       security: [],
       body: registerBodyJson,
       response: {
@@ -105,6 +109,151 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const data = await authService.register(parse.data);
       return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  // ── GET /auth/join/:inviteCode — Validate invite link (public) ──────────────
+  fastify.get('/join/:inviteCode', {
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Validate an invite link (public)',
+      description: 'Returns the organization name and default role for a valid invite link code.',
+      security: [],
+      params: {
+        type: 'object',
+        required: ['inviteCode'],
+        properties: {
+          inviteCode: { type: 'string' },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['tenantName', 'defaultRole'],
+              properties: {
+                tenantName: { type: 'string' },
+                tenantSlug: { type: 'string' },
+                defaultRole: { type: 'string' },
+              },
+            },
+          },
+        },
+        404: { $ref: 'ApiError#' },
+        410: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const { inviteCode } = request.params as { inviteCode: string };
+      const data = await authService.validateInviteLink(inviteCode);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /auth/join/:inviteCode ──────────────────────────────────────────────
+  fastify.post('/join/:inviteCode', {
+    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_join')],
+    schema: {
+      tags: ['Auth'],
+      summary: 'Self-register via org invite link',
+      description:
+        'Staff registers using a shared invite link. Creates account with pending_approval membership. ' +
+        'Admin must approve before the staff member can fully access the organization. ' +
+        'An OTP is sent for email verification.',
+      security: [],
+      params: {
+        type: 'object',
+        required: ['inviteCode'],
+        properties: {
+          inviteCode: { type: 'string', description: 'The invite link code from the URL' },
+        },
+      },
+      body: joinViaInviteLinkBodyJson,
+      response: {
+        201: {
+          description: 'Account created with pending approval — OTP sent for email verification.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['userId', 'message', 'otpDeliveryStatus', 'resendAvailableAt', 'tenantName', 'pendingApproval'],
+              properties: {
+                userId: { type: 'string' },
+                message: { type: 'string' },
+                otpDeliveryStatus: { type: 'string', enum: ['sent', 'queued', 'failed'] },
+                resendAvailableAt: { type: 'string', format: 'date-time' },
+                tenantName: { type: 'string' },
+                pendingApproval: { type: 'boolean', enum: [true] },
+              },
+            },
+          },
+        },
+        404: { description: 'Invalid invite link.', $ref: 'ApiError#' },
+        409: { description: 'Email already registered.', $ref: 'ApiError#' },
+        410: { description: 'Invite link expired or revoked.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = JoinViaInviteLinkBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+      const { inviteCode } = request.params as { inviteCode: string };
+      const data = await authService.joinViaInviteLink(inviteCode, parse.data);
+      return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  // ── POST /auth/staff-activate ────────────────────────────────────────────────
+  fastify.post('/staff-activate', {
+    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+    preHandler: [requireCaptcha('auth_staff_activate')],
+    schema: {
+      tags: ['Auth'],
+      summary: 'Activate a pre-provisioned staff account',
+      description:
+        'Staff enters email, 6-digit activation code (from email), and sets their password. ' +
+        'On success, account is activated and tokens are issued for automatic login.',
+      security: [],
+      body: staffActivateBodyJson,
+      response: {
+        200: {
+          description: 'Account activated — tokens issued.',
+          $ref: 'AuthResponse#',
+        },
+        400: { description: 'Invalid email or activation code.', $ref: 'ApiError#' },
+        409: { description: 'Account already activated.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = StaffActivateBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: msg },
+        });
+      }
+      const { user, refreshToken, session } = await authService.staffActivate(parse.data);
+      const accessToken = signAccessToken(fastify, user, session);
+      return reply.send({
+        success: true,
+        data: { user, session, tokens: { accessToken, refreshToken } },
+      });
     },
   });
 

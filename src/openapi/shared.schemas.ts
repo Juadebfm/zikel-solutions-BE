@@ -203,7 +203,7 @@ export const TenantMembershipSchema = {
     tenantId: { type: 'string' },
     userId: { type: 'string' },
     role: { $ref: 'TenantRole#' },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
     invitedById: { type: 'string', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },

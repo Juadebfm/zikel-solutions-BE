@@ -1,25 +1,28 @@
-import { createHash, randomBytes } from 'crypto';
-import { AuditAction, MembershipStatus, Prisma, TenantRole } from '@prisma/client';
+import { createHash, randomBytes, randomInt } from 'crypto';
+import { AuditAction, MembershipStatus, OtpPurpose, Prisma, TenantRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
-import { sendTenantInviteEmail } from '../../lib/email.js';
+import { sendOtpEmail, sendTenantInviteEmail } from '../../lib/email.js';
 import { logger } from '../../lib/logger.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
+import { hashPassword } from '../../lib/password.js';
 import type {
   AcceptTenantInviteBody,
   AddTenantMemberBody,
+  CreateInviteLinkBody,
   CreateTenantInviteBody,
   CreateTenantBody,
   ListTenantMembershipsQuery,
   ListTenantInvitesQuery,
   ListTenantsQuery,
-  SelfServeCreateTenantBody,
+  ProvisionStaffBody,
   UpdateTenantMemberBody,
 } from './tenants.schema.js';
 
 type ActorGlobalRole = 'super_admin' | 'admin' | 'manager' | 'staff';
 
 const INVITE_TOKEN_BYTES = 32;
+const STAFF_ACTIVATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1_000; // 7 days
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -527,59 +530,6 @@ export async function createTenant(actorUserId: string, body: CreateTenantBody) 
   }
 }
 
-export async function selfServeCreateTenant(actorUserId: string, body: SelfServeCreateTenantBody) {
-  const actor = await prisma.user.findUnique({
-    where: { id: actorUserId },
-    select: {
-      id: true,
-      isActive: true,
-      emailVerified: true,
-    },
-  });
-  if (!actor) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-  if (!actor.isActive) {
-    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
-  }
-  if (!actor.emailVerified) {
-    throw httpError(
-      403,
-      'EMAIL_VERIFICATION_REQUIRED',
-      'Verify your email address before creating an organization.',
-    );
-  }
-
-  const existingActiveMembership = await prisma.tenantMembership.findFirst({
-    where: {
-      userId: actorUserId,
-      status: MembershipStatus.active,
-    },
-    select: { id: true, tenantId: true },
-  });
-  if (existingActiveMembership) {
-    throw httpError(
-      409,
-      'SELF_SERVE_ONBOARDING_NOT_ALLOWED',
-      'You already belong to an active organization.',
-    );
-  }
-
-  const result = await createTenant(actorUserId, {
-    name: body.name,
-    slug: body.slug,
-    country: body.country,
-    adminUserId: actorUserId,
-  });
-
-  await prisma.user.update({
-    where: { id: actorUserId },
-    data: { activeTenantId: result.tenant.id },
-  });
-
-  return result;
-}
-
 export async function addTenantMembership(
   actorUserId: string,
   actorGlobalRole: ActorGlobalRole,
@@ -655,6 +605,113 @@ export async function addTenantMembership(
   });
 
   return mapMembership(membership);
+}
+
+export async function provisionStaff(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+  body: ProvisionStaffBody,
+) {
+  const tenant = await ensureTenantExists(tenantId);
+
+  const permission = await resolveMembershipPermissionContext(
+    actorUserId,
+    actorGlobalRole,
+    tenantId,
+  );
+  const targetRole = (body.role ?? 'staff') as TenantRole;
+  if (!permission.manageableRoles.includes(targetRole)) {
+    throw httpError(
+      403,
+      'TENANT_MEMBERSHIP_FORBIDDEN',
+      'You do not have permission to assign this tenant role.',
+    );
+  }
+
+  const email = normalizeEmail(body.email);
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
+    throw httpError(409, 'EMAIL_TAKEN', 'A user with this email already exists.');
+  }
+
+  // Generate a random temporary password (staff will set their own on activation)
+  const tempPassword = randomBytes(32).toString('hex');
+  const passwordHash = await hashPassword(tempPassword);
+  const otpCode = randomInt(100_000, 1_000_000).toString();
+
+  const result = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        email,
+        passwordHash,
+        firstName: body.firstName,
+        lastName: body.lastName,
+        country: tenant.name ? 'UK' : 'UK', // inherit from tenant later if needed
+        emailVerified: false,
+        acceptedTerms: false,
+        isActive: true,
+        activeTenantId: tenantId,
+      },
+    });
+
+    const membership = await tx.tenantMembership.create({
+      data: {
+        tenantId,
+        userId: user.id,
+        role: targetRole,
+        status: MembershipStatus.invited,
+        invitedById: actorUserId,
+      },
+      include: {
+        user: {
+          select: { email: true, firstName: true, lastName: true },
+        },
+      },
+    });
+
+    await tx.otpCode.create({
+      data: {
+        userId: user.id,
+        code: otpCode,
+        purpose: OtpPurpose.staff_activation,
+        expiresAt: new Date(Date.now() + STAFF_ACTIVATION_EXPIRY_MS),
+      },
+    });
+
+    await tx.auditLog.create({
+      data: {
+        userId: actorUserId,
+        action: AuditAction.record_created,
+        entityType: 'staff_provision',
+        entityId: user.id,
+        tenantId,
+        metadata: {
+          staffEmail: email,
+          role: targetRole,
+          tenantName: tenant.name,
+        },
+      },
+    });
+
+    return { user, membership };
+  });
+
+  // Send activation email (fire-and-forget)
+  sendOtpEmail(email, otpCode, OtpPurpose.staff_activation).catch((err) => {
+    logger.error({ err, email, tenantId }, 'Failed to send staff activation email');
+  });
+
+  return {
+    user: {
+      id: result.user.id,
+      email: result.user.email,
+      firstName: result.user.firstName,
+      lastName: result.user.lastName,
+    },
+    membership: mapMembership(result.membership),
+    tenantName: tenant.name,
+  };
 }
 
 export async function updateTenantMembership(
@@ -1046,4 +1103,166 @@ export async function revokeTenantInvite(
   });
 
   return mapInvite(revokedInvite);
+}
+
+// ─── Invite Link (self-service staff registration) ───────────────────────────
+
+function generateInviteCode(): string {
+  return randomBytes(12).toString('base64url');
+}
+
+export async function createInviteLink(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+  body: CreateInviteLinkBody,
+) {
+  const tenant = await ensureTenantExists(tenantId);
+
+  const targetRole = (body.defaultRole ?? 'staff') as TenantRole;
+  await assertInvitePermission(actorUserId, actorGlobalRole, tenantId, targetRole);
+
+  const code = generateInviteCode();
+  const expiresAt = body.expiresInHours
+    ? new Date(Date.now() + body.expiresInHours * 60 * 60 * 1_000)
+    : null;
+
+  const link = await prisma.tenantInviteLink.create({
+    data: {
+      tenantId,
+      code,
+      defaultRole: targetRole,
+      isActive: true,
+      createdById: actorUserId,
+      expiresAt,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: actorUserId,
+      action: AuditAction.record_created,
+      entityType: 'tenant_invite_link',
+      entityId: link.id,
+      tenantId,
+      metadata: {
+        code: link.code,
+        defaultRole: link.defaultRole,
+        expiresAt: link.expiresAt,
+      },
+    },
+  });
+
+  return {
+    id: link.id,
+    tenantId: link.tenantId,
+    tenantName: tenant.name,
+    tenantSlug: (tenant as { name: string }).name, // will be used for URL
+    code: link.code,
+    defaultRole: link.defaultRole,
+    isActive: link.isActive,
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt,
+  };
+}
+
+export async function getInviteLink(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+) {
+  await ensureTenantExists(tenantId);
+
+  // Only admins can view invite links
+  if (actorGlobalRole !== 'super_admin') {
+    const role = await resolveActorTenantRole(actorUserId, tenantId);
+    if (role !== TenantRole.tenant_admin && role !== TenantRole.sub_admin) {
+      throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to view invite links.');
+    }
+  }
+
+  const links = await prisma.tenantInviteLink.findMany({
+    where: { tenantId, isActive: true },
+    include: { tenant: { select: { name: true, slug: true } } },
+    orderBy: { createdAt: 'desc' },
+  });
+
+  return links.map((link) => ({
+    id: link.id,
+    tenantId: link.tenantId,
+    tenantName: link.tenant.name,
+    code: link.code,
+    defaultRole: link.defaultRole,
+    isActive: link.isActive,
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt,
+  }));
+}
+
+export async function revokeInviteLink(
+  actorUserId: string,
+  actorGlobalRole: ActorGlobalRole,
+  tenantId: string,
+  linkId: string,
+) {
+  await ensureTenantExists(tenantId);
+
+  if (actorGlobalRole !== 'super_admin') {
+    const role = await resolveActorTenantRole(actorUserId, tenantId);
+    if (role !== TenantRole.tenant_admin) {
+      throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to revoke invite links.');
+    }
+  }
+
+  const link = await prisma.tenantInviteLink.findFirst({
+    where: { id: linkId, tenantId },
+  });
+  if (!link) {
+    throw httpError(404, 'INVITE_LINK_NOT_FOUND', 'Invite link not found.');
+  }
+
+  const updated = await prisma.tenantInviteLink.update({
+    where: { id: linkId },
+    data: { isActive: false },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      userId: actorUserId,
+      action: AuditAction.permission_changed,
+      entityType: 'tenant_invite_link',
+      entityId: linkId,
+      tenantId,
+      metadata: { type: 'revoked' },
+    },
+  });
+
+  return { id: updated.id, isActive: updated.isActive };
+}
+
+export async function resolveInviteLinkByCode(code: string) {
+  const link = await prisma.tenantInviteLink.findUnique({
+    where: { code },
+    include: { tenant: { select: { id: true, name: true, slug: true, isActive: true } } },
+  });
+
+  if (!link) {
+    throw httpError(404, 'INVITE_LINK_NOT_FOUND', 'Invalid invite link.');
+  }
+  if (!link.isActive) {
+    throw httpError(410, 'INVITE_LINK_REVOKED', 'This invite link has been deactivated.');
+  }
+  if (link.expiresAt && link.expiresAt <= new Date()) {
+    throw httpError(410, 'INVITE_LINK_EXPIRED', 'This invite link has expired.');
+  }
+  if (!link.tenant.isActive) {
+    throw httpError(410, 'TENANT_INACTIVE', 'This organization is no longer active.');
+  }
+
+  return {
+    tenantId: link.tenant.id,
+    tenantName: link.tenant.name,
+    tenantSlug: link.tenant.slug,
+    defaultRole: link.defaultRole,
+  };
 }

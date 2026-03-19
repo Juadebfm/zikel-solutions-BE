@@ -41,12 +41,14 @@ enum MembershipStatus {
   active
   suspended
   revoked
+  pending_approval
 }
 
 enum OtpPurpose {
   email_verification
   password_reset
   mfa_challenge
+  staff_activation
 }
 
 enum AuditAction {
@@ -193,6 +195,7 @@ model User {
   sentTenantInvites TenantMembership[] @relation("UserTenantInvites")
   tenantInvitationsSent TenantInvite[] @relation("UserSentTenantInvites")
   tenantInvitationsAccepted TenantInvite[] @relation("UserAcceptedTenantInvites")
+  tenantInviteLinksCreated TenantInviteLink[] @relation("UserCreatedTenantInviteLinks")
   employees      Employee[]
   widgets        Widget[]
   announcementReads AnnouncementRead[]
@@ -214,6 +217,7 @@ model Tenant {
   activeUsers User[]   @relation("UserActiveTenant")
   memberships TenantMembership[]
   invites     TenantInvite[]
+  inviteLinks TenantInviteLink[]
   careGroups  CareGroup[]
   homes       Home[]
   employees   Employee[]
@@ -274,6 +278,25 @@ model TenantInvite {
   @@index([tenantId, expiresAt])
   @@index([invitedById])
   @@index([acceptedByUserId])
+}
+
+model TenantInviteLink {
+  id          String     @id @default(cuid())
+  tenantId    String
+  code        String     @unique
+  defaultRole TenantRole @default(staff)
+  isActive    Boolean    @default(true)
+  createdById String
+  expiresAt   DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User       @relation("UserCreatedTenantInviteLinks", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([code])
+  @@index([createdById])
 }
 
 model RefreshToken {

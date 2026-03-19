@@ -5,7 +5,11 @@ const {
   listTenants,
   getTenantById,
   createTenant,
-  selfServeCreateTenant,
+  provisionStaff,
+  createInviteLink,
+  getInviteLink,
+  revokeInviteLink,
+  resolveInviteLinkByCode,
   listTenantMemberships,
   addTenantMembership,
   updateTenantMembership,
@@ -17,7 +21,11 @@ const {
   listTenants: vi.fn(),
   getTenantById: vi.fn(),
   createTenant: vi.fn(),
-  selfServeCreateTenant: vi.fn(),
+  provisionStaff: vi.fn(),
+  createInviteLink: vi.fn(),
+  getInviteLink: vi.fn(),
+  revokeInviteLink: vi.fn(),
+  resolveInviteLinkByCode: vi.fn(),
   listTenantMemberships: vi.fn(),
   addTenantMembership: vi.fn(),
   updateTenantMembership: vi.fn(),
@@ -31,7 +39,11 @@ vi.mock('../src/modules/tenants/tenants.service.js', () => ({
   listTenants,
   getTenantById,
   createTenant,
-  selfServeCreateTenant,
+  provisionStaff,
+  createInviteLink,
+  getInviteLink,
+  revokeInviteLink,
+  resolveInviteLinkByCode,
   listTenantMemberships,
   addTenantMembership,
   updateTenantMembership,
@@ -159,51 +171,49 @@ describe('Tenant routes', () => {
     });
   });
 
-  it('creates a tenant via self-serve onboarding for authenticated user', async () => {
-    selfServeCreateTenant.mockResolvedValueOnce({
-      tenant: {
-        id: 'tenant_self_1',
-        name: 'Julius Child Care',
-        slug: 'julius-child-care',
-        country: 'UK',
-        isActive: true,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T10:00:00.000Z',
+  it('provisions a staff member', async () => {
+    provisionStaff.mockResolvedValueOnce({
+      user: {
+        id: 'staff_new',
+        email: 'jane@example.com',
+        firstName: 'Jane',
+        lastName: 'Doe',
       },
-      adminMembership: {
-        id: 'membership_self_1',
-        tenantId: 'tenant_self_1',
-        userId: 'staff_1',
-        role: 'tenant_admin',
-        status: 'active',
-        invitedById: 'staff_1',
+      membership: {
+        id: 'membership_staff_1',
+        tenantId: 'tenant_1',
+        userId: 'staff_new',
+        role: 'staff',
+        status: 'invited',
+        invitedById: 'admin_1',
         user: null,
         createdAt: '2026-03-12T10:00:00.000Z',
         updatedAt: '2026-03-12T10:00:00.000Z',
       },
+      tenantName: 'Acme Care',
     });
 
     const res = await app.inject({
       method: 'POST',
-      url: '/api/v1/tenants/self-serve',
-      headers: authHeader('staff_1', 'staff'),
+      url: '/api/v1/tenants/tenant_1/staff',
+      headers: authHeader('admin_1', 'admin', 'tenant_admin'),
       payload: {
-        name: 'Julius Child Care',
-        country: 'UK',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        email: 'jane@example.com',
       },
     });
 
     expect(res.statusCode).toBe(201);
-    expect(selfServeCreateTenant).toHaveBeenCalledWith('staff_1', {
-      name: 'Julius Child Care',
-      country: 'UK',
+    expect(provisionStaff).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
+      firstName: 'Jane',
+      lastName: 'Doe',
+      email: 'jane@example.com',
+      role: 'staff',
     });
     expect(res.json()).toMatchObject({
       success: true,
-      data: {
-        tenant: { slug: 'julius-child-care' },
-        adminMembership: { role: 'tenant_admin' },
-      },
+      data: { user: { email: 'jane@example.com' }, tenantName: 'Acme Care' },
     });
   });
 

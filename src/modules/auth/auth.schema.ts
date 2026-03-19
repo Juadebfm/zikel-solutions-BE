@@ -20,6 +20,8 @@ export const passwordSchema = z
 
 // ─── Zod schemas (service layer) ──────────────────────────────────────────────
 
+const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 export const RegisterBodySchema = z
   .object({
     country: z.enum(['UK', 'Nigeria']),
@@ -32,6 +34,8 @@ export const RegisterBodySchema = z
     password: passwordSchema,
     confirmPassword: z.string(),
     acceptTerms: z.literal(true, { error: 'You must accept the terms and conditions.' }),
+    organizationName: z.string().min(2).max(120),
+    organizationSlug: z.string().min(2).max(120).regex(slugRegex).optional(),
   })
   .refine((d) => d.password === d.confirmPassword, {
     message: 'Passwords do not match.',
@@ -82,6 +86,72 @@ const ResendOtpLegacyBodySchema = z.object({
 export const ResendOtpBodySchema = z
   .union([ResendOtpEmailBodySchema, ResendOtpLegacyBodySchema]);
 
+export const JoinViaInviteLinkBodySchema = z
+  .object({
+    firstName: z.string().min(1).max(100),
+    lastName: z.string().min(1).max(100),
+    email: z.email(),
+    phoneNumber: z.string().min(7).max(20).optional(),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+    acceptTerms: z.literal(true, { error: 'You must accept the terms and conditions.' }),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  });
+
+export const joinViaInviteLinkBodyJson = {
+  type: 'object',
+  required: ['firstName', 'lastName', 'email', 'password', 'confirmPassword', 'acceptTerms'],
+  additionalProperties: false,
+  properties: {
+    firstName: { type: 'string', minLength: 1, maxLength: 100 },
+    lastName: { type: 'string', minLength: 1, maxLength: 100 },
+    email: { type: 'string', format: 'email' },
+    phoneNumber: { type: 'string', minLength: 7, maxLength: 20 },
+    password: {
+      type: 'string',
+      minLength: 12,
+      maxLength: 128,
+      description: 'Min 12 chars, must include uppercase, lowercase, number, special character, and no spaces.',
+    },
+    confirmPassword: { type: 'string', minLength: 12, maxLength: 128 },
+    acceptTerms: { type: 'boolean', enum: [true], description: 'Must be true to register.' },
+  },
+} as const;
+
+export const StaffActivateBodySchema = z
+  .object({
+    email: z.email(),
+    code: z.string().length(6, 'Activation code must be exactly 6 digits'),
+    password: passwordSchema,
+    confirmPassword: z.string(),
+    acceptTerms: z.literal(true, { error: 'You must accept the terms and conditions.' }),
+  })
+  .refine((d) => d.password === d.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  });
+
+export const staffActivateBodyJson = {
+  type: 'object',
+  required: ['email', 'code', 'password', 'confirmPassword', 'acceptTerms'],
+  additionalProperties: false,
+  properties: {
+    email: { type: 'string', format: 'email' },
+    code: { type: 'string', minLength: 6, maxLength: 6, description: '6-digit activation code from email' },
+    password: {
+      type: 'string',
+      minLength: 12,
+      maxLength: 128,
+      description: 'Min 12 chars, must include uppercase, lowercase, number, special character, and no spaces.',
+    },
+    confirmPassword: { type: 'string', minLength: 12, maxLength: 128 },
+    acceptTerms: { type: 'boolean', enum: [true], description: 'Must be true to activate.' },
+  },
+} as const;
+
 export const LoginBodySchema = z.object({
   email: z.email(),
   password: z.string().min(1),
@@ -107,7 +177,7 @@ export const VerifyMfaChallengeBodySchema = z.object({
 
 export const registerBodyJson = {
   type: 'object',
-  required: ['country', 'firstName', 'lastName', 'email', 'password', 'confirmPassword', 'acceptTerms'],
+  required: ['country', 'firstName', 'lastName', 'email', 'password', 'confirmPassword', 'acceptTerms', 'organizationName'],
   additionalProperties: false,
   properties: {
     country: { type: 'string', enum: ['UK', 'Nigeria'], description: 'Country of residence' },
@@ -125,6 +195,19 @@ export const registerBodyJson = {
     },
     confirmPassword: { type: 'string', minLength: 12, maxLength: 128 },
     acceptTerms: { type: 'boolean', enum: [true], description: 'Must be true to register.' },
+    organizationName: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 120,
+      description: 'Name of the care home / organization.',
+    },
+    organizationSlug: {
+      type: 'string',
+      minLength: 2,
+      maxLength: 120,
+      pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+      description: 'URL-friendly slug. Auto-generated from organizationName if omitted.',
+    },
   },
 } as const;
 
@@ -280,6 +363,8 @@ export const refreshBodyJson = {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RegisterBody = z.infer<typeof RegisterBodySchema>;
+export type JoinViaInviteLinkBody = z.infer<typeof JoinViaInviteLinkBodySchema>;
+export type StaffActivateBody = z.infer<typeof StaffActivateBodySchema>;
 export type VerifyOtpBody = z.infer<typeof VerifyOtpBodySchema>;
 export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
