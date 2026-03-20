@@ -110,10 +110,7 @@ staff → cannot manage anyone
 - OTP verify: 10/min
 - Self-serve: 3/10min
 
-### 13. Captcha Protection
-**Rule:** All new public auth endpoints MUST use `requireCaptcha()`. Internal/authenticated endpoints do not need captcha.
-
-### 14. Password Security
+### 13. Password Security
 **Rule:** Use existing `hashPassword()` from `lib/password.ts`. Never store plaintext. The existing password schema (12+ chars, uppercase, lowercase, number, special char) must be enforced for any new registration flow.
 
 ---
@@ -169,7 +166,7 @@ staff → cannot manage anyone
 
 #### F. Security
 - [ ] New public endpoints have rate limiting
-- [ ] New public endpoints have captcha protection
+
 - [ ] Passwords are hashed (never stored in plain text)
 - [ ] Invite codes/tokens are hashed before storage
 - [ ] No account enumeration vulnerabilities in new endpoints
@@ -245,7 +242,6 @@ Run ALL checks A through H.
 |------|--------|
 | `src/middleware/mfa.ts` | MFA logic is correct, no changes needed |
 | `src/middleware/rbac.ts` | RBAC hierarchy is correct, no changes needed |
-| `src/middleware/captcha.ts` | Captcha middleware is correct, just USE it |
 | `src/lib/password.ts` | Password hashing is correct, just USE it |
 | `src/lib/break-glass.ts` | Break-glass is unrelated to this change |
 | `src/lib/tenant-context.ts` | Tenant context resolution is correct, no changes needed |

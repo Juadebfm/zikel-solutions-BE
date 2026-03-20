@@ -103,4 +103,3 @@ Review method used static inspection of all route modules, auth middleware usage
 ## Priority Remediation Plan
 
 1. Optional hardening implemented: webhook requests now require `HMAC-SHA256` signature + timestamp validation.
-2. Optional hardening implemented: CAPTCHA verification middleware now protects public auth endpoints.

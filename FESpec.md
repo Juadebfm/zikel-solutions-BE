@@ -1,14 +1,15 @@
 # Frontend Integration Spec (Backend-Verified)
 
-Last updated: 2026-03-12
+Last updated: 2026-03-19
 Source of truth: `src/routes`, `src/modules/*/*.routes.ts`, `src/modules/*/*.service.ts`, middleware, schemas, and tests.
 
 This is the implementation handoff for frontend engineers. It describes what the product currently does, why each endpoint exists, and exactly how FE should use it.
 
 ## 1. Product Model (How It Works Today)
 
-The product is a multi-tenant platform.
+The product is a multi-tenant care home management platform.
 
+- Every user belongs to an **organization** (care home). Registration always creates both.
 - A user has a global role: `super_admin`, `admin`, `manager`, `staff`.
 - A user can also have tenant memberships with tenant roles: `tenant_admin`, `sub_admin`, `staff`.
 - Every operational module is tenant-scoped.
@@ -18,10 +19,163 @@ Key consequence for FE:
 
 - Authentication is not only `user + token`.
 - FE must store and honor `session` context from auth responses.
+- After registration + OTP verify, the user already has an active org — no "homeless user" state.
 
-## 2. Non-Negotiable FE Changes
+## 2. Registration & Onboarding Flows
 
-## 2.1 Session storage must include tenant + MFA context
+There are **two distinct user types** with different onboarding paths:
+
+### 2.1 Care Home Owner Registration (public)
+
+This is the main signup flow. The person registering IS the organization.
+
+**Flow:**
+
+1. User fills registration form with personal details AND organization name.
+2. `POST /api/v1/auth/register` — creates user + org + admin membership atomically.
+3. `POST /api/v1/auth/verify-otp` — verifies email, activates account, issues tokens.
+4. User lands in dashboard with their org already active. No extra steps.
+
+**What FE receives after verify-otp:**
+```json
+{
+  "user": { "id": "...", "activeTenantId": "the-new-org-id", ... },
+  "session": {
+    "activeTenantId": "the-new-org-id",
+    "activeTenantRole": "tenant_admin",
+    "memberships": [{ "tenantId": "...", "tenantName": "Sunrise Care", "tenantSlug": "sunrise-care", "tenantRole": "tenant_admin" }],
+    "mfaRequired": true,
+    "mfaVerified": false
+  },
+  "tokens": { "accessToken": "...", "refreshToken": "..." }
+}
+```
+
+**Important:** `mfaRequired` will be `true` because the user is a `tenant_admin`. FE should trigger the MFA flow before allowing access to admin features.
+
+**Register request body:**
+```json
+{
+  "country": "UK",
+  "firstName": "John",
+  "lastName": "Smith",
+  "email": "john@sunrisecare.co.uk",
+  "password": "SecurePass123!",
+  "confirmPassword": "SecurePass123!",
+  "acceptTerms": true,
+  "organizationName": "Sunrise Care Home",
+  "organizationSlug": "sunrise-care-home"
+}
+```
+
+- `organizationName` is **required**.
+- `organizationSlug` is **optional** — auto-generated from name if omitted.
+- If slug is taken, the BE returns `409 ORG_SLUG_TAKEN`.
+
+### 2.2 Staff Onboarding (3 methods)
+
+Staff never self-register through the main signup. They are always onboarded by their organization admin.
+
+#### Method A: Admin Provisions Staff Directly (from dashboard)
+
+Admin creates a staff account from the Users page. Staff receives an activation email.
+
+**Admin flow (FE):**
+1. Admin navigates to Users → Add Staff.
+2. Fills in: firstName, lastName, email, role (staff or sub_admin).
+3. `POST /api/v1/tenants/:tenantId/staff`
+4. Staff receives activation email with 6-digit code.
+5. Admin sees the new staff in the members list with status `invited`.
+
+**Staff activation flow (FE):**
+1. Staff receives email with 6-digit activation code.
+2. Staff visits activation page (e.g. `/activate`).
+3. Staff enters: email, code, new password, accept terms.
+4. `POST /api/v1/auth/staff-activate`
+5. Returns full `AuthResponse` — staff is logged in and in their care home.
+
+**Staff-activate request body:**
+```json
+{
+  "email": "jane@example.com",
+  "code": "482910",
+  "password": "SecurePass123!",
+  "confirmPassword": "SecurePass123!",
+  "acceptTerms": true
+}
+```
+
+**Staff-activate response:** Same `AuthResponse` shape as login (user + session + tokens).
+
+#### Method B: Org Invite Link (self-service with admin approval)
+
+Admin generates a reusable link. Staff registers via the link. Admin approves.
+
+**Admin flow (FE):**
+1. Admin navigates to Users → Invite Link.
+2. `POST /api/v1/tenants/:tenantId/invite-link` with optional `{ defaultRole, expiresInHours }`.
+3. Gets back a link code. FE constructs the URL: `https://app.zikel.com/join/<code>`.
+4. Admin shares link however they want (WhatsApp, print QR, email blast).
+5. Admin can list links: `GET /api/v1/tenants/:tenantId/invite-links`.
+6. Admin can revoke: `PATCH /api/v1/tenants/:tenantId/invite-links/:linkId/revoke`.
+
+**Staff self-registration flow (FE):**
+1. Staff clicks invite link → FE extracts the code from URL.
+2. `GET /api/v1/auth/join/:inviteCode` — validates link, returns org name + default role.
+3. FE shows: "Join **Sunrise Care Home** as **staff**" with registration form.
+4. Staff fills in details.
+5. `POST /api/v1/auth/join/:inviteCode` — creates account with `pending_approval` membership.
+6. Staff verifies email via `POST /api/v1/auth/verify-otp`.
+7. FE shows: "Your account is pending approval from the admin."
+
+**Admin approval flow (FE):**
+1. Admin sees pending members in Users page (status = `pending_approval`).
+2. Admin approves: `PATCH /api/v1/tenants/:tenantId/memberships/:membershipId` with `{ "status": "active" }`.
+3. Staff can now login normally.
+
+**Validate invite link response:**
+```json
+{
+  "success": true,
+  "data": {
+    "tenantName": "Sunrise Care Home",
+    "tenantSlug": "sunrise-care-home",
+    "defaultRole": "staff"
+  }
+}
+```
+
+**Join via invite link request body:**
+```json
+{
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "email": "jane@example.com",
+  "password": "SecurePass123!",
+  "confirmPassword": "SecurePass123!",
+  "acceptTerms": true
+}
+```
+
+#### Method C: CSV Bulk Upload (future — not yet implemented)
+
+Will be added later for large-scale staff onboarding.
+
+### 2.3 Membership Statuses
+
+FE must handle these membership statuses:
+
+| Status | Meaning | FE Behavior |
+|--------|---------|-------------|
+| `active` | Full access | Normal app usage |
+| `invited` | Admin-provisioned, awaiting activation | Show "Activate your account" prompt |
+| `pending_approval` | Self-registered via invite link, awaiting admin approval | Show "Pending approval" message |
+| `suspended` | Temporarily disabled by admin | Show "Account suspended" message |
+| `revoked` | Permanently removed | Treat as no membership |
+
+## 3. Non-Negotiable FE Requirements
+
+### 3.1 Session storage must include tenant + MFA context
 
 Store these from auth responses:
 
@@ -36,7 +190,7 @@ Store these from auth responses:
 
 `/auth/switch-tenant` returns a new access token only; keep existing refresh token.
 
-## 2.2 Implement tenant switch UX
+### 3.2 Implement tenant switch UX
 
 Flow:
 
@@ -46,7 +200,7 @@ Flow:
 4. Replace access token with returned token.
 5. Refetch tenant-scoped screens.
 
-## 2.3 Implement privileged MFA UX
+### 3.3 Implement privileged MFA UX
 
 Privileged session means:
 
@@ -63,7 +217,7 @@ FE flow:
 4. Replace access token with returned token.
 5. Retry blocked request once.
 
-## 2.4 Implement refresh-token rotation correctly
+### 3.4 Implement refresh-token rotation correctly
 
 `POST /api/v1/auth/refresh` rotates refresh tokens.
 
@@ -74,30 +228,7 @@ FE rule:
 3. Retry original request once.
 4. If refresh fails with `REFRESH_TOKEN_INVALID`, force logout.
 
-## 2.5 Integrate CAPTCHA on all public auth endpoints
-
-Backend now enforces CAPTCHA on public auth endpoints.
-
-Required FE behavior:
-
-- Get Turnstile token on each relevant submit.
-- Send token in header: `x-captcha-token: <token>`.
-- Handle:
-  - `403 CAPTCHA_REQUIRED`
-  - `403 CAPTCHA_INVALID`
-  - `503 CAPTCHA_NOT_CONFIGURED`
-
-Public auth endpoints requiring CAPTCHA:
-
-- `POST /api/v1/auth/register`
-- `GET /api/v1/auth/check-email`
-- `POST /api/v1/auth/verify-otp`
-- `POST /api/v1/auth/resend-otp`
-- `POST /api/v1/auth/login`
-- `POST /api/v1/auth/forgot-password`
-- `POST /api/v1/auth/reset-password`
-
-## 2.6 Handle tenant-isolation semantics properly
+### 3.5 Handle tenant-isolation semantics properly
 
 Many cross-tenant accesses intentionally return `404` to avoid data leakage.
 
@@ -108,16 +239,16 @@ FE should interpret some `404` as:
 
 Do not assume every `404` means record deleted.
 
-## 2.7 Support both validation error styles
+### 3.6 Support both validation error styles
 
 FE must surface both:
 
 - `400 FST_ERR_VALIDATION` (AJV/schema layer)
 - `422 VALIDATION_ERROR` (Zod/business validation)
 
-## 3. API Contract FE Must Follow
+## 4. API Contract FE Must Follow
 
-## 3.1 Base URLs
+### 4.1 Base URLs
 
 - API base: `/api/v1`
 - Infra/public endpoints:
@@ -125,19 +256,17 @@ FE must surface both:
   - `GET /ready`
   - `GET /assets/white-logo.svg`
 
-## 3.2 Headers
+### 4.2 Headers
 
 - JSON requests: `Content-Type: application/json`
 - Protected routes: `Authorization: Bearer <accessToken>`
-- CAPTCHA routes: `x-captcha-token: <turnstile-token>`
 
 CORS currently supports:
 
 - `Content-Type`
 - `Authorization`
-- `X-Captcha-Token`
 
-## 3.3 Response envelope
+### 4.3 Response envelope
 
 Success:
 
@@ -151,7 +280,7 @@ Error:
 { "success": false, "error": { "code": "...", "message": "...", "details": {} } }
 ```
 
-## 3.4 Pagination
+### 4.4 Pagination
 
 List endpoints usually return `meta` with:
 
@@ -160,55 +289,50 @@ List endpoints usually return `meta` with:
 - `pageSize`
 - `totalPages`
 
-## 4. Turnstile Integration (Frontend)
-
-Use Cloudflare Turnstile site key in FE.
-
-- FE env: `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (or framework equivalent)
-- Never expose `CAPTCHA_SECRET_KEY` in frontend.
-
-Implementation pattern:
-
-1. Render Turnstile widget in auth forms.
-2. On submit, ensure token is present.
-3. Attach `x-captcha-token` header.
-4. If token expired, refresh token and retry submit.
-
-For `GET /auth/check-email`, still attach `x-captcha-token` header.
-
 ## 5. Core UX Flows FE Should Implement
 
-## 5.1 Organization owner onboarding (self-serve)
+### 5.1 Care Home Owner Registration
 
-1. Optional precheck: `GET /auth/check-email`.
-2. Register: `POST /auth/register`.
-3. Verify OTP: `POST /auth/verify-otp`.
-4. If no memberships, prompt "Create organization".
-5. Create tenant: `POST /tenants/self-serve`.
-6. Call `POST /auth/switch-tenant` to ensure active tenant context.
-7. Enter app dashboard.
+1. Show registration form with personal details + organization name.
+2. Optional precheck: `GET /auth/check-email`.
+3. `POST /auth/register`.
+4. Move to OTP verification screen.
+5. `POST /auth/verify-otp`.
+6. User is now logged in with their org active. Route to dashboard.
+7. Trigger MFA flow (user is `tenant_admin`, so `mfaRequired=true`).
 
-## 5.2 Staff onboarding via invite
+### 5.2 Staff Activation (admin-provisioned)
 
-1. User registers/logs in and verifies email.
-2. Accept invite: `POST /tenants/invites/accept` with token.
-3. Switch tenant: `POST /auth/switch-tenant`.
-4. Load tenant-scoped modules.
+1. Staff receives activation email → clicks link → lands on `/activate` page.
+2. Staff enters email + 6-digit code + sets password.
+3. `POST /auth/staff-activate`.
+4. On success: store tokens + session, route to dashboard.
 
-## 5.3 Standard login flow
+### 5.3 Staff Join via Invite Link
+
+1. Staff clicks invite link → FE extracts code from URL.
+2. `GET /auth/join/:code` — show org name.
+3. Staff fills registration form.
+4. `POST /auth/join/:code`.
+5. Move to OTP verification screen.
+6. `POST /auth/verify-otp`.
+7. Show "Your account is pending approval" message. Staff cannot access the dashboard until approved.
+
+### 5.4 Standard Login
 
 1. `POST /auth/login`.
 2. Store user/session/tokens.
 3. If `session.mfaRequired=true` and `mfaVerified=false`, trigger MFA flow.
-4. Route user by role and tenant context.
+4. If membership status is `pending_approval`, show pending message.
+5. Route user by role and tenant context.
 
-## 5.4 Password reset flow
+### 5.5 Password Reset
 
 1. `POST /auth/forgot-password` (always generic success UI).
 2. `POST /auth/reset-password` with OTP.
 3. Force fresh login.
 
-## 5.5 Super-admin break-glass flow
+### 5.6 Super-admin Break-glass
 
 1. Start emergency context: `POST /audit/break-glass/access`.
 2. Perform scoped investigation actions.
@@ -218,7 +342,7 @@ For `GET /auth/check-email`, still attach `x-captcha-token` header.
 
 Each endpoint below includes business decision and FE use.
 
-## 6.1 Infrastructure
+### 6.1 Infrastructure
 
 | Endpoint | Business Decision | FE Usage |
 |---|---|---|
@@ -226,11 +350,14 @@ Each endpoint below includes business decision and FE use.
 | `GET /ready` | Service readiness including DB check. | Optional admin ops view. |
 | `GET /assets/white-logo.svg` | Public asset for email-safe rendering. | Usually no app usage needed. |
 
-## 6.2 Auth and Session
+### 6.2 Auth and Session
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
-| `POST /api/v1/auth/register` | Create pending account, issue email-verification OTP. | Submit signup form, then move to OTP step. |
+| `POST /api/v1/auth/register` | Creates user + organization + admin membership atomically. Issues email-verification OTP. Requires `organizationName`. | Signup form with org name field, then OTP step. |
+| `GET /api/v1/auth/join/:inviteCode` | Validates invite link, returns org name and default role. Public. | Pre-fill join page with org details. |
+| `POST /api/v1/auth/join/:inviteCode` | Staff self-registers via invite link. Creates account with `pending_approval` membership. | Join form, then OTP step, then pending message. |
+| `POST /api/v1/auth/staff-activate` | Activates pre-provisioned staff account. Staff sets password + verifies email in one step. Returns AuthResponse. | Activation page with email + code + password form. |
 | `GET /api/v1/auth/check-email` | Privacy-safe anti-enumeration precheck (always generic). | Use only for UX gating, not authoritative existence check. |
 | `POST /api/v1/auth/verify-otp` | Validate OTP, activate account, issue tokens + session. | Treat as authenticated login success. |
 | `POST /api/v1/auth/resend-otp` | Enforces cooldown and rotates OTP. | Resend button with countdown and cooldown handling. |
@@ -248,10 +375,10 @@ Important auth details:
 
 - Register country enum: `UK`, `Nigeria`
 - Password policy: min 12, upper/lower/number/special, no spaces
-- OTP: 6 digits, 10-minute expiry
+- OTP: 6 digits, 10-minute expiry (staff activation code: 7-day expiry)
 - Check-email currently returns generic `available` response by design
 
-## 6.3 Me (Profile and Preferences)
+### 6.3 Me (Profile and Preferences)
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -262,7 +389,7 @@ Important auth details:
 | `GET /api/v1/me/preferences` | Read language/timezone prefs. | Preferences page load. |
 | `PATCH /api/v1/me/preferences` | Update language/timezone prefs. | Preferences save. |
 
-## 6.4 Public Marketing Endpoints
+### 6.4 Public Marketing Endpoints
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -270,29 +397,83 @@ Important auth details:
 | `POST /api/v1/public/join-waitlist` | Public waitlist capture with rate limit. | Waitlist form submit. |
 | `POST /api/v1/public/contact-us` | Public contact capture with rate limit. | Contact form submit. |
 
-## 6.5 Tenants, Memberships, Invites
+### 6.5 Tenants, Memberships, Invites, Staff Provisioning
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
 | `GET /api/v1/tenants` | Super-admin tenant directory. | Platform admin tenant table. |
 | `GET /api/v1/tenants/:id` | Super-admin tenant details. | Tenant detail page. |
 | `POST /api/v1/tenants` | Super-admin tenant provisioning. | Platform provisioning wizard. |
-| `POST /api/v1/tenants/self-serve` | First-time organization onboarding for authenticated user. | Org creation step after initial signup. |
-| `GET /api/v1/tenants/:id/memberships` | Scoped membership list by actor permissions. | Membership management table. |
+| `POST /api/v1/tenants/:id/staff` | Admin provisions a staff account. Creates user + membership + sends activation email. | "Add Staff" form in Users page. |
+| `POST /api/v1/tenants/:id/invite-link` | Admin generates reusable invite link for self-service staff registration. | "Generate Invite Link" button in Users page. |
+| `GET /api/v1/tenants/:id/invite-links` | List active invite links for tenant. | Invite links management section. |
+| `PATCH /api/v1/tenants/:id/invite-links/:linkId/revoke` | Revoke an invite link. | Revoke CTA in invite links list. |
+| `GET /api/v1/tenants/:id/memberships` | Scoped membership list by actor permissions. | Membership management table. Filter by status to show pending_approval. |
 | `POST /api/v1/tenants/:id/memberships` | Scoped membership add by actor permissions. | Add member modal with role filtering. |
-| `PATCH /api/v1/tenants/:id/memberships/:membershipId` | Scoped membership updates. | Role/status edit flow with backend fallback handling. |
+| `PATCH /api/v1/tenants/:id/memberships/:membershipId` | Scoped membership updates. Used to approve pending members. | Role/status edit flow. Approve button for `pending_approval` members. |
 | `GET /api/v1/tenants/:id/invites` | Scoped invite list with filters. | Invite list page. |
 | `POST /api/v1/tenants/:id/invites` | Create tokenized invite and trigger invite email (best effort). | Invite create modal + token copy fallback UX. |
 | `PATCH /api/v1/tenants/:id/invites/:inviteId/revoke` | Scoped invite revoke. | Revoke CTA in invite list. |
 | `POST /api/v1/tenants/invites/accept` | Accept invite token for authenticated user. | Invite acceptance page/flow. |
 
-Invite role business rules:
+**Staff provisioning request body:**
+```json
+{
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "email": "jane@example.com",
+  "role": "staff"
+}
+```
 
-- `super_admin`: invite `tenant_admin`, `sub_admin`, `staff`
-- `tenant_admin`: invite `sub_admin`, `staff`
-- `sub_admin`: invite `staff`
+**Staff provisioning response:**
+```json
+{
+  "success": true,
+  "data": {
+    "user": { "id": "...", "email": "jane@example.com", "firstName": "Jane", "lastName": "Doe" },
+    "membership": { "id": "...", "tenantId": "...", "userId": "...", "role": "staff", "status": "invited", ... },
+    "tenantName": "Sunrise Care Home"
+  }
+}
+```
 
-## 6.6 Care Groups
+**Create invite link request body:**
+```json
+{
+  "defaultRole": "staff",
+  "expiresInHours": 168
+}
+```
+
+Both fields are optional. `defaultRole` defaults to `staff`. `expiresInHours` can be omitted for no expiry.
+
+**Invite link response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "...",
+    "tenantId": "...",
+    "tenantName": "Sunrise Care Home",
+    "code": "abc123def456",
+    "defaultRole": "staff",
+    "isActive": true,
+    "expiresAt": null,
+    "createdAt": "..."
+  }
+}
+```
+
+FE constructs the shareable URL: `https://app.zikel.com/join/{code}`
+
+Role permission rules:
+
+- `super_admin`: manage `tenant_admin`, `sub_admin`, `staff`
+- `tenant_admin`: manage `sub_admin`, `staff`
+- `sub_admin`: manage `staff`
+
+### 6.6 Care Groups
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -302,7 +483,7 @@ Invite role business rules:
 | `PATCH /api/v1/care-groups/:id` | Write restricted to global `admin`. | Admin-only edit flow. |
 | `DELETE /api/v1/care-groups/:id` | Soft deactivation. | Use "Deactivate" wording. |
 
-## 6.7 Homes
+### 6.7 Homes
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -312,7 +493,7 @@ Invite role business rules:
 | `PATCH /api/v1/homes/:id` | Same write restrictions. | Edit home flow. |
 | `DELETE /api/v1/homes/:id` | Soft deactivation. | Deactivate action. |
 
-## 6.8 Employees
+### 6.8 Employees
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -322,7 +503,7 @@ Invite role business rules:
 | `PATCH /api/v1/employees/:id` | Same write restrictions. | Edit employee flow. |
 | `DELETE /api/v1/employees/:id` | Soft deactivation. | Deactivate action. |
 
-## 6.9 Young People
+### 6.9 Young People
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -332,7 +513,7 @@ Invite role business rules:
 | `PATCH /api/v1/young-people/:id` | Same write restrictions. | Edit flow with nullable fields support. |
 | `DELETE /api/v1/young-people/:id` | Soft deactivation. | Deactivate action. |
 
-## 6.10 Vehicles
+### 6.10 Vehicles
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -346,7 +527,7 @@ Vehicle note:
 
 - `registration` is globally unique and normalized uppercase.
 
-## 6.11 Tasks
+### 6.11 Tasks
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -356,7 +537,7 @@ Vehicle note:
 | `PATCH /api/v1/tasks/:id` | Non-privileged updates are restricted. | Restrict reassignment/approval transitions in FE. |
 | `DELETE /api/v1/tasks/:id` | Archive behavior (soft delete). | Use "Archive task" UX text. |
 
-## 6.12 Summary
+### 6.12 Summary
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -367,7 +548,7 @@ Vehicle note:
 | `POST /api/v1/summary/tasks-to-approve/:id/approve` | Single task approval workflow. | Single-approve CTA. |
 | `GET /api/v1/summary/provisions` | Daily operations data grouped by home. | Daily provisions view. |
 
-## 6.13 Dashboard
+### 6.13 Dashboard
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -376,7 +557,7 @@ Vehicle note:
 | `POST /api/v1/dashboard/widgets` | Create user widget configuration. | Widget create flow. |
 | `DELETE /api/v1/dashboard/widgets/:id` | Scoped widget delete. | Delete CTA with 403/404 handling. |
 
-## 6.14 Announcements
+### 6.14 Announcements
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -387,14 +568,14 @@ Vehicle note:
 | `PATCH /api/v1/announcements/:id` | Write restricted to global `admin`. | Admin-only edit. |
 | `DELETE /api/v1/announcements/:id` | Archive behavior. | Use "Archive" wording. |
 
-## 6.15 AI
+### 6.15 AI
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
 | `POST /api/v1/ai/ask` | Tenant-aware AI assistant with provider fallback. | Assistant panel with source badge (`model` or `fallback`). |
 | `PATCH /api/v1/ai/access/:id` | Role-scoped AI access toggle. Allowed for global `admin`/`super_admin` and tenant role `tenant_admin`. | Admin user-management toggle for AI access. |
 
-## 6.16 Audit and Security
+### 6.16 Audit and Security
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -404,7 +585,7 @@ Vehicle note:
 | `POST /api/v1/audit/break-glass/access` | Super-admin emergency tenant access context. | Break-glass start flow with mandatory reason. |
 | `POST /api/v1/audit/break-glass/release` | Release emergency context. | Break-glass release CTA. |
 
-## 6.17 Integrations (Not a FE endpoint)
+### 6.17 Integrations (Not a FE endpoint)
 
 | Endpoint | Business Decision / Logic | FE Contract |
 |---|---|---|
@@ -428,8 +609,10 @@ Use this for hiding/disabling actions before backend rejection.
   - vehicle writes
 - Global admin/super_admin or tenant_admin:
   - AI access toggle endpoint
+  - Staff provisioning (`POST /tenants/:id/staff`)
+  - Invite link management
 - Scoped service-level rules:
-  - membership management
+  - membership management (including approving `pending_approval` members)
   - invite management
   - task approval and assignment restrictions
   - audit visibility boundaries
@@ -439,6 +622,7 @@ Use this for hiding/disabling actions before backend rejection.
 Auth/session:
 
 - `EMAIL_TAKEN` -> show duplicate email UI
+- `ORG_SLUG_TAKEN` -> suggest different organization name or slug
 - `OTP_INVALID` -> invalid/expired OTP message
 - `OTP_COOLDOWN` -> countdown UI
 - `INVALID_CREDENTIALS` -> login error
@@ -446,15 +630,25 @@ Auth/session:
 - `ACCOUNT_INACTIVE` -> disabled account state
 - `EMAIL_NOT_VERIFIED` -> route to verification
 - `REFRESH_TOKEN_INVALID` -> force logout
-- `TENANT_CONTEXT_REQUIRED` -> prompt tenant selection/onboarding
+- `TENANT_CONTEXT_REQUIRED` -> prompt tenant selection
 - `TENANT_ACCESS_DENIED` -> deny + offer tenant switch
 - `MFA_REQUIRED` -> launch MFA flow
 - `MFA_NOT_REQUIRED` -> hide MFA prompt if shown unnecessarily
+- `ACTIVATION_INVALID` -> invalid email or activation code
+- `ALREADY_ACTIVATED` -> redirect to login
+
+Invite link:
+
+- `INVITE_LINK_NOT_FOUND` -> invalid or non-existent link
+- `INVITE_LINK_REVOKED` -> link has been deactivated
+- `INVITE_LINK_EXPIRED` -> link has expired
+- `TENANT_INACTIVE` -> organization is no longer active
 
 Tenant/invite:
 
 - `TENANT_SLUG_TAKEN`
 - `TENANT_MEMBERSHIP_EXISTS`
+- `TENANT_MEMBERSHIP_FORBIDDEN`
 - `TENANT_INVITE_EXISTS`
 - `TENANT_INVITE_FORBIDDEN`
 - `TENANT_INVITE_NOT_FOUND`
@@ -484,6 +678,9 @@ Generic:
 Not exhaustive, but important for UX:
 
 - `POST /auth/register` -> 5/min
+- `POST /auth/join/:inviteCode` -> 5/min
+- `POST /auth/staff-activate` -> 10/min
+- `GET /auth/join/:inviteCode` -> 20/min
 - `GET /auth/check-email` -> 20/min
 - `POST /auth/verify-otp` -> 10/min
 - `POST /auth/resend-otp` -> 5/min
@@ -494,20 +691,47 @@ Not exhaustive, but important for UX:
 - `POST /auth/forgot-password` -> 5/min
 - `POST /auth/reset-password` -> 5/min
 - `POST /me/change-password` -> 5/min
+- `POST /tenants/:id/staff` -> 20/min
 - `POST /ai/ask` -> 20/min
 - Public forms (`book-demo`, `join-waitlist`, `contact-us`) -> 10 per 10 minutes
 
-## 10. FE Delivery Checklist
+## 10. FE Pages Required
 
+Based on the new flows, FE needs these pages/screens:
+
+### Public (no auth)
+- **Registration page** — personal details + organization name + password
+- **OTP verification page** — 6-digit code input
+- **Login page** — email + password
+- **Forgot password page** — email input
+- **Reset password page** — email + OTP + new password
+- **Staff activation page** (`/activate`) — email + 6-digit code + new password
+- **Join via invite link page** (`/join/:code`) — validates link, shows org name, registration form
+- **Pending approval page** — shown after invite-link join when membership is `pending_approval`
+
+### Authenticated (dashboard)
+- **MFA verification modal/page** — triggered when `mfaRequired && !mfaVerified`
+- **Users page** — list members, filter by status (`active`, `invited`, `pending_approval`)
+  - Add Staff form (provisions account)
+  - Approve/reject pending members
+  - Generate/manage invite links
+- **Tenant switcher** — shown when user has multiple memberships
+
+## 11. FE Delivery Checklist
+
+- [ ] Registration form includes `organizationName` field
+- [ ] No "create organization" step after OTP verify (org is created during registration)
+- [ ] Staff activation page (`/activate`) implemented
+- [ ] Join via invite link page (`/join/:code`) implemented with link validation
+- [ ] Pending approval state handled (show message, block dashboard access)
+- [ ] Users page shows `pending_approval` members with approve/reject actions
+- [ ] Invite link generation + copy/share UX implemented
 - [ ] API client supports bearer auth + refresh rotation + single retry
 - [ ] Session store persists `session` object, not only token/user
 - [ ] Tenant switcher implemented using `/auth/switch-tenant`
 - [ ] Privileged MFA flow implemented (`challenge` -> `verify` -> retry)
-- [ ] Turnstile widget integrated and token sent as `x-captcha-token`
-- [ ] Public auth forms handle CAPTCHA-specific errors
 - [ ] Role-based UI gating aligned with matrix above
 - [ ] Task and approval UIs enforce non-privileged restrictions
 - [ ] Invite lifecycle UI implemented (create/list/revoke/accept)
 - [ ] Audit + security alerts views implemented for admin personas
 - [ ] 400/422/429 error UX patterns standardized
-

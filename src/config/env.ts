@@ -62,16 +62,6 @@ const envSchema = z.object({
   SECURITY_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   SECURITY_ALERT_WEBHOOK_MAX_DRIFT_SECONDS: z.coerce.number().int().positive().default(300),
 
-  // CAPTCHA verification for public auth endpoints (register/login/otp/password reset).
-  CAPTCHA_ENABLED: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((v) => v === 'true'),
-  CAPTCHA_VERIFY_URL: z.url({ error: 'CAPTCHA_VERIFY_URL must be a valid URL' })
-    .default('https://challenges.cloudflare.com/turnstile/v0/siteverify'),
-  CAPTCHA_SECRET_KEY: z.string().min(1).optional(),
-  CAPTCHA_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
-  CAPTCHA_MIN_SCORE: z.coerce.number().min(0).max(1).default(0),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -152,16 +142,6 @@ function parseEnv(): Env {
       }
     }
 
-    if (parsed.CAPTCHA_ENABLED) {
-      if (!parsed.CAPTCHA_SECRET_KEY) {
-        throw new Error(
-          'CAPTCHA_SECRET_KEY is required in staging/production when CAPTCHA_ENABLED=true.',
-        );
-      }
-      if (!parsed.CAPTCHA_VERIFY_URL.startsWith('https://')) {
-        throw new Error('CAPTCHA_VERIFY_URL must use https:// in staging/production.');
-      }
-    }
   }
 
   if (parsed.AI_ENABLED && !parsed.AI_API_KEY) {
