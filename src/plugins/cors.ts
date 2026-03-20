@@ -8,7 +8,7 @@ export default fp(async (fastify) => {
   await fastify.register(cors, {
     origin: env.NODE_ENV === 'production' ? origins : true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Captcha-Token'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
   });
 });
