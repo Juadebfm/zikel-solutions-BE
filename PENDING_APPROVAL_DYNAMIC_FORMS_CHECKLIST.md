@@ -83,8 +83,8 @@ This checklist tracks the backend implementation for:
 
 ## Phase 6: Validation + Deploy
 
-- [ ] Add/extend tests for list filters and dynamic detail endpoint
-- [ ] Verify build + tests pass
-- [ ] Push changes to `main`
-- [ ] Deploy to Fly
-- [ ] Verify live endpoints and expected counts/states
+- [x] Add/extend tests for list filters and dynamic detail endpoint
+- [x] Verify build + tests pass
+- [x] Push changes to `main`
+- [x] Deploy to Fly
+- [x] Verify live endpoints and expected counts/states
