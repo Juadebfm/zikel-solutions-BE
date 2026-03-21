@@ -134,6 +134,16 @@ function slugify(input: string): string {
     .slice(0, 120);
 }
 
+function parseUniqueConstraintTarget(metaTarget: unknown): string[] {
+  if (Array.isArray(metaTarget)) {
+    return metaTarget.map((item) => String(item).toLowerCase());
+  }
+  if (typeof metaTarget === 'string') {
+    return [metaTarget.toLowerCase()];
+  }
+  return [];
+}
+
 /**
  * Strips sensitive fields from a Prisma User before sending it over the wire.
  * Returns a plain object so it serialises cleanly to JSON.
@@ -372,13 +382,14 @@ export async function register(body: RegisterBody) {
       error instanceof Prisma.PrismaClientKnownRequestError &&
       error.code === 'P2002'
     ) {
-      const target = (error.meta?.target as string[]) ?? [];
-      if (target.includes('slug')) {
+      const target = parseUniqueConstraintTarget(error.meta?.target);
+      if (target.some((entry) => entry.includes('slug'))) {
         throw httpError(409, 'ORG_SLUG_TAKEN', 'An organization with this slug already exists. Please choose a different name or slug.');
       }
-      if (target.includes('email')) {
+      if (target.some((entry) => entry.includes('email'))) {
         throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
       }
+      throw httpError(409, 'REGISTRATION_CONFLICT', 'Unable to complete registration because this account or organization already exists.');
     }
     throw error;
   }
