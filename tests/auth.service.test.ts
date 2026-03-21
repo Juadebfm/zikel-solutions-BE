@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@prisma/client';
 
 const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.hoisted(() => ({
   mockPrisma: {
@@ -150,6 +151,62 @@ describe('auth.service', () => {
       message: 'Account created, but OTP delivery failed. Please use resend.',
     });
     expect(new Date(result.resendAvailableAt).toString()).not.toBe('Invalid Date');
+  });
+
+  it('register maps Prisma email unique conflicts when target is a constraint name', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.$transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test-client',
+        meta: { target: 'User_email_key' },
+      }),
+    );
+
+    await expect(
+      authService.register({
+        country: 'UK',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        email: 'jane@example.com',
+        password: 'Password123!',
+        confirmPassword: 'Password123!',
+        acceptTerms: true,
+        organizationName: 'Sunset Care',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'EMAIL_TAKEN',
+      message: 'An account with this email already exists.',
+    });
+  });
+
+  it('register maps unknown unique conflicts to a stable registration conflict', async () => {
+    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.$transaction.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+        code: 'P2002',
+        clientVersion: 'test-client',
+        meta: { target: 'tenant_name_unique' },
+      }),
+    );
+
+    await expect(
+      authService.register({
+        country: 'UK',
+        firstName: 'Jane',
+        lastName: 'Doe',
+        email: 'jane@example.com',
+        password: 'Password123!',
+        confirmPassword: 'Password123!',
+        acceptTerms: true,
+        organizationName: 'Sunset Care',
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'REGISTRATION_CONFLICT',
+      message: 'Unable to complete registration because this account or organization already exists.',
+    });
   });
 
   it('resend OTP returns delivery status and next resend time', async () => {
