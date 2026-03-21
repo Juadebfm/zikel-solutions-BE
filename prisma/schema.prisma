@@ -211,6 +211,7 @@ model Tenant {
   slug        String   @unique
   country     Country  @default(UK)
   isActive    Boolean  @default(true)
+  mfaSetupCompletedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

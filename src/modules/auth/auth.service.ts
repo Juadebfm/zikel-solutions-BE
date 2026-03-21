@@ -244,6 +244,7 @@ async function resolveAuthSessionContext(args: {
         select: {
           name: true,
           slug: true,
+          mfaSetupCompletedAt: true,
         },
       },
     },
@@ -258,14 +259,15 @@ async function resolveAuthSessionContext(args: {
   }));
 
   const preferredMembership = args.preferredTenantId
-    ? mappedMemberships.find((membership) => membership.tenantId === args.preferredTenantId) ?? null
+    ? memberships.find((membership) => membership.tenantId === args.preferredTenantId) ?? null
     : null;
   const currentMembership = effectiveActiveTenantId
-    ? mappedMemberships.find((membership) => membership.tenantId === effectiveActiveTenantId) ?? null
+    ? memberships.find((membership) => membership.tenantId === effectiveActiveTenantId) ?? null
     : null;
-  const selectedMembership = preferredMembership ?? currentMembership ?? mappedMemberships[0] ?? null;
+  const selectedMembership = preferredMembership ?? currentMembership ?? memberships[0] ?? null;
   const resolvedActiveTenantId = selectedMembership?.tenantId ?? null;
-  const mfaRequired = selectedMembership?.tenantRole === TenantRole.tenant_admin;
+  const mfaSetupCompleted = Boolean(selectedMembership?.tenant.mfaSetupCompletedAt);
+  const mfaRequired = selectedMembership?.role === TenantRole.tenant_admin && !mfaSetupCompleted;
   const mfaVerified = !mfaRequired;
 
   if (effectiveActiveTenantId !== resolvedActiveTenantId) {
@@ -277,7 +279,7 @@ async function resolveAuthSessionContext(args: {
 
   return {
     activeTenantId: resolvedActiveTenantId,
-    activeTenantRole: selectedMembership?.tenantRole ?? null,
+    activeTenantRole: selectedMembership?.role ?? null,
     memberships: mappedMemberships,
     mfaRequired,
     mfaVerified,
@@ -840,8 +842,9 @@ export async function verifyMfaChallenge(actorUserId: string, body: VerifyMfaCha
     throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
   }
 
-  await prisma.$transaction([
-    prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }),
+  const verifiedAt = new Date();
+  const ops: Prisma.PrismaPromise<unknown>[] = [
+    prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: verifiedAt } }),
     prisma.auditLog.create({
       data: {
         userId: user.id,
@@ -855,7 +858,18 @@ export async function verifyMfaChallenge(actorUserId: string, body: VerifyMfaCha
         },
       },
     }),
-  ]);
+  ];
+
+  if (session.activeTenantId && session.activeTenantRole === TenantRole.tenant_admin) {
+    ops.push(
+      prisma.tenant.updateMany({
+        where: { id: session.activeTenantId, mfaSetupCompletedAt: null },
+        data: { mfaSetupCompletedAt: verifiedAt },
+      }),
+    );
+  }
+
+  await prisma.$transaction(ops);
 
   return {
     user: { ...safeUser(user), activeTenantId: session.activeTenantId },
