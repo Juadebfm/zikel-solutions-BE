@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
   echo "Usage: $0 <BASE_URL> <ADMIN_ACCESS_TOKEN>"
-  echo "Example: $0 https://zikel-solutions-be.onrender.com <jwt>"
+  echo "Example: $0 https://zikel-solutions-be-kpotja.fly.dev <jwt>"
   exit 1
 fi
 
