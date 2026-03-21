@@ -528,124 +528,258 @@ async function main() {
     assigneeId: southEmployee.id,
   });
 
-  // Due today = 16 (manager scope)
-  const dueTodayTasks: Array<{
+  type ScheduledSeedTask = {
     title: string;
+    formGroup: string;
     personId: string | null;
     assigneeId: string;
     details: string;
-  }> = [
+  };
+
+  const pushScheduledBatch = (
+    dayOffset: number,
+    bucketLabel: string,
+    batch: ScheduledSeedTask[],
+  ) => {
+    batch.forEach((task, index) => {
+      const hour = 9 + Math.floor(index / 2);
+      const minute = index % 2 === 0 ? 0 : 30;
+      pushTask({
+        title: task.title,
+        details:
+          `${bucketLabel}. Form Group: ${task.formGroup}. ${task.details}`,
+        dueDate: atDay(now, dayOffset, hour, minute),
+        createdAt: atDay(now, -1, 8 + (index % 4), 15),
+        assigneeId: task.assigneeId,
+        youngPersonId: task.personId,
+        priority: index % 5 === 0 ? TaskPriority.high : TaskPriority.medium,
+      });
+    });
+  };
+
+  // Task explorer-like dated batches (10 today, 10 tomorrow, 10 next tomorrow).
+  const dueTodayTasks: ScheduledSeedTask[] = [
     {
-      title: 'Daily Summary For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: northEmployee.id,
-      details: 'Daily summary and support review for Juadeb Gabriel.',
-    },
-    {
-      title: 'Weekly Menu Planner For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: southEmployee.id,
-      details: 'Menu planning update and dietary check.',
-    },
-    {
-      title: 'Activity Planner For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: northEmployee.id,
-      details: 'Activity planning and engagement goals.',
-    },
-    {
-      title: 'Young Person Meeting For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: southEmployee.id,
-      details: 'Weekly young person meeting prep notes.',
-    },
-    {
-      title: 'Daily Education For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: northEmployee.id,
-      details: 'Education attendance and progress capture.',
-    },
-    {
-      title: 'Daily Placement Review For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: southEmployee.id,
-      details: 'Placement review and welfare checks.',
-    },
-    {
-      title: 'Contact Family Update For JUADEB GABRIEL',
-      personId: ypNorth.id,
-      assigneeId: northEmployee.id,
-      details: 'Family communication log update.',
-    },
-    {
-      title: 'Daily Note For GABRIEL FEMI',
-      personId: ypSouth.id,
-      assigneeId: southEmployee.id,
-      details: 'Daily note and emotional wellbeing update.',
-    },
-    {
-      title: 'Education Attendance Check For GABRIEL FEMI',
-      personId: ypSouth.id,
-      assigneeId: northEmployee.id,
-      details: 'Attendance confirmation with follow-up actions.',
-    },
-    {
-      title: 'Room Safety Walkthrough',
+      title: 'Waking Night Cleaning Schedule',
+      formGroup: 'Daily Cleaning Schedule',
       personId: null,
       assigneeId: southEmployee.id,
-      details: 'Room safety spot-check across Fortuna Homes.',
+      details: 'Waking night cleaning checklist for Fortuna Homes.',
     },
     {
-      title: 'Nutrition Plan Review',
+      title: 'Daily PM checks',
+      formGroup: 'Daily PM sharps checks',
       personId: null,
       assigneeId: northEmployee.id,
-      details: 'Nutrition planning checkpoint and shopping list review.',
+      details: 'PM sharps and room risk checks.',
     },
     {
-      title: 'Medication Prompt Audit',
+      title: 'Daily Handover',
+      formGroup: 'Daily Handover',
       personId: ypSouth.id,
-      assigneeId: southEmployee.id,
-      details: 'Medication prompts and MAR note checks.',
-    },
-    {
-      title: 'Daily Behaviour Support Notes',
-      personId: ypNorth.id,
       assigneeId: northEmployee.id,
-      details: 'Behaviour support implementation notes.',
+      details: 'End-of-shift handover quality notes.',
     },
     {
-      title: 'Daily Hygiene Support Record',
+      title: 'Activity Planner',
+      formGroup: 'Weekly Activity Planner',
       personId: ypSouth.id,
       assigneeId: southEmployee.id,
-      details: 'Personal care support record completion.',
+      details: 'Daily activity plan update and targets.',
     },
     {
-      title: 'Daily Engagement Tracker',
-      personId: ypNorth.id,
+      title: 'Weekly Menu Planner',
+      formGroup: 'Weekly Menu',
+      personId: ypSouth.id,
       assigneeId: northEmployee.id,
-      details: 'Engagement tracker and wellbeing check.',
+      details: 'Menu adjustments and dietary preference checks.',
     },
     {
-      title: 'Family Contact Outcome Notes',
+      title: 'Young Person Meeting',
+      formGroup: 'Young Person(s) Meeting',
       personId: ypSouth.id,
       assigneeId: southEmployee.id,
-      details: 'Outcome notes from family contact window.',
+      details: 'Prepare and log young person meeting notes.',
+    },
+    {
+      title: 'Daily Activity',
+      formGroup: 'Activity',
+      personId: ypSouth.id,
+      assigneeId: northEmployee.id,
+      details: 'Daily engagement and activity participation record.',
+    },
+    {
+      title: 'Daily Keywork Session',
+      formGroup: 'Keyworker Session',
+      personId: ypNorth.id,
+      assigneeId: southEmployee.id,
+      details: 'Keywork session notes and action points.',
+    },
+    {
+      title: 'Daily Education',
+      formGroup: 'Education/Work',
+      personId: ypSouth.id,
+      assigneeId: northEmployee.id,
+      details: 'Education/work attendance and support notes.',
+    },
+    {
+      title: 'Daily Summary',
+      formGroup: 'Daily Summary',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'End-of-day summary and wellbeing review.',
     },
   ];
 
-  dueTodayTasks.forEach((task, index) => {
-    const hour = 9 + Math.floor(index / 2);
-    const minute = index % 2 === 0 ? 0 : 30;
-    pushTask({
-      title: task.title,
-      details: task.details,
-      dueDate: atDay(now, 0, hour, minute),
-      createdAt: atDay(now, -1, 8 + (index % 4), 15),
-      assigneeId: task.assigneeId,
-      youngPersonId: task.personId,
-      priority: index % 5 === 0 ? TaskPriority.high : TaskPriority.medium,
-    });
-  });
+  const dueTomorrowTasks: ScheduledSeedTask[] = [
+    {
+      title: 'Morning Medication Round',
+      formGroup: 'Medication Prompt Audit',
+      personId: ypNorth.id,
+      assigneeId: northEmployee.id,
+      details: 'Morning medication prompts and MAR audit.',
+    },
+    {
+      title: 'Evening Keywork Session',
+      formGroup: 'Keyworker Session',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Evening keywork follow-up and check-in.',
+    },
+    {
+      title: 'Family Contact Prep',
+      formGroup: 'Contact Log',
+      personId: ypNorth.id,
+      assigneeId: northEmployee.id,
+      details: 'Prepare contact agenda and outcomes template.',
+    },
+    {
+      title: 'Education Plan Review',
+      formGroup: 'Education/Work',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Review next-step education support plan.',
+    },
+    {
+      title: 'Activity Risk Assessment',
+      formGroup: 'Activity',
+      personId: ypNorth.id,
+      assigneeId: northEmployee.id,
+      details: 'Risk assess planned activities and transport.',
+    },
+    {
+      title: 'Placement Plan Update',
+      formGroup: 'Placement Review',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Update placement objectives and progress.',
+    },
+    {
+      title: 'Daily Finance AM Check',
+      formGroup: 'Young Person Finance AM Check',
+      personId: ypNorth.id,
+      assigneeId: northEmployee.id,
+      details: 'Morning finance balance and receipt checks.',
+    },
+    {
+      title: 'Daily Finance PM Check',
+      formGroup: 'Young Person Finance PM Check',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Evening finance reconciliation check.',
+    },
+    {
+      title: 'Vehicle Safety Spot-check',
+      formGroup: 'Weekly vehicle check',
+      personId: null,
+      assigneeId: northEmployee.id,
+      details: 'Vehicle safety and readiness spot-check.',
+    },
+    {
+      title: 'Incident Documentation QA',
+      formGroup: 'Incident Record Quality Assurance',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Review incident logs for completeness.',
+    },
+  ];
+
+  const dueNextTomorrowTasks: ScheduledSeedTask[] = [
+    {
+      title: 'Daily Cleaning Compliance',
+      formGroup: 'Daily Cleaning Schedule',
+      personId: null,
+      assigneeId: southEmployee.id,
+      details: 'Compliance check for shared-area cleaning.',
+    },
+    {
+      title: 'Nutrition Plan Check-in',
+      formGroup: 'Weekly Menu',
+      personId: ypNorth.id,
+      assigneeId: northEmployee.id,
+      details: 'Nutrition plan check-in and shopping updates.',
+    },
+    {
+      title: 'Young Person Goal Review',
+      formGroup: 'Young Person(s) Meeting',
+      personId: ypSouth.id,
+      assigneeId: southEmployee.id,
+      details: 'Goal review and target-setting support.',
+    },
+    {
+      title: 'Room Safety Walkthrough',
+      formGroup: 'Room Safety',
+      personId: null,
+      assigneeId: northEmployee.id,
+      details: 'Room-by-room safety walkthrough.',
+    },
+    {
+      title: 'Education Attendance Follow-up',
+      formGroup: 'Education/Work',
+      personId: ypNorth.id,
+      assigneeId: southEmployee.id,
+      details: 'Follow-up on attendance and support actions.',
+    },
+    {
+      title: 'Behaviour Support Notes',
+      formGroup: 'Behaviour Support',
+      personId: ypSouth.id,
+      assigneeId: northEmployee.id,
+      details: 'Complete behaviour support implementation notes.',
+    },
+    {
+      title: 'Hygiene Support Record',
+      formGroup: 'Personal Care',
+      personId: ypNorth.id,
+      assigneeId: southEmployee.id,
+      details: 'Complete hygiene and personal care records.',
+    },
+    {
+      title: 'Family Contact Outcome Notes',
+      formGroup: 'Contact Log',
+      personId: ypSouth.id,
+      assigneeId: northEmployee.id,
+      details: 'Record outcomes from recent family contact.',
+    },
+    {
+      title: 'Daily Engagement Tracker',
+      formGroup: 'Activity',
+      personId: ypNorth.id,
+      assigneeId: southEmployee.id,
+      details: 'Track engagement and wellbeing indicators.',
+    },
+    {
+      title: 'End-of-day Summary',
+      formGroup: 'Daily Summary',
+      personId: ypSouth.id,
+      assigneeId: northEmployee.id,
+      details: 'Complete end-of-day summary and handover notes.',
+    },
+  ];
+
+  pushScheduledBatch(0, 'Due today', dueTodayTasks);
+  pushScheduledBatch(1, 'Due tomorrow', dueTomorrowTasks);
+  pushScheduledBatch(2, 'Due next tomorrow', dueNextTomorrowTasks);
 
   // Pending approval = 13 (tenant-wide queue, seeded from admin so they stay in approval column)
   const pendingApprovalTitles = [
