@@ -11,6 +11,7 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
     },
     tenant: {
       create: vi.fn(),
+      updateMany: vi.fn(),
     },
     tenantMembership: {
       findMany: vi.fn(),
@@ -267,6 +268,33 @@ describe('auth.service', () => {
     });
   });
 
+  it('rejects MFA challenge when tenant already completed one-time MFA setup', async () => {
+    const tenantAdmin = makeUser({
+      id: 'tenant_admin_1',
+      role: 'staff',
+      activeTenantId: 'tenant_1',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(tenantAdmin);
+    mockPrisma.tenantMembership.findMany.mockResolvedValueOnce([
+      {
+        tenantId: 'tenant_1',
+        role: 'tenant_admin',
+        tenant: {
+          name: 'Cadnamart',
+          slug: 'cadnamart',
+          mfaSetupCompletedAt: new Date('2026-03-21T13:46:38.804Z'),
+        },
+      },
+    ]);
+
+    await expect(authService.requestMfaChallenge('tenant_admin_1')).rejects.toMatchObject({
+      code: 'MFA_NOT_REQUIRED',
+    });
+    expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
+  });
+
   it('verifies MFA challenge and returns session with mfaVerified=true', async () => {
     const superAdmin = makeUser({
       id: 'super_1',
@@ -292,6 +320,76 @@ describe('auth.service', () => {
       where: { id: 'otp_mfa_1' },
       data: { usedAt: expect.any(Date) },
     });
+  });
+
+  it('marks tenant MFA setup as completed after first successful tenant-admin verification', async () => {
+    const tenantAdmin = makeUser({
+      id: 'tenant_admin_1',
+      role: 'staff',
+      activeTenantId: 'tenant_1',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(tenantAdmin);
+    mockPrisma.tenantMembership.findMany.mockResolvedValueOnce([
+      {
+        tenantId: 'tenant_1',
+        role: 'tenant_admin',
+        tenant: {
+          name: 'Cadnamart',
+          slug: 'cadnamart',
+          mfaSetupCompletedAt: null,
+        },
+      },
+    ]);
+    mockPrisma.otpCode.findFirst.mockResolvedValueOnce({ id: 'otp_mfa_2' });
+    mockPrisma.otpCode.update.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+    mockPrisma.tenant.updateMany.mockResolvedValueOnce({ count: 1 });
+
+    const result = await authService.verifyMfaChallenge('tenant_admin_1', { code: '654321' });
+
+    expect(result).toMatchObject({
+      user: { id: 'tenant_admin_1' },
+      session: {
+        activeTenantId: 'tenant_1',
+        activeTenantRole: 'tenant_admin',
+        mfaVerified: true,
+      },
+    });
+    expect(mockPrisma.tenant.updateMany).toHaveBeenCalledWith({
+      where: { id: 'tenant_1', mfaSetupCompletedAt: null },
+      data: { mfaSetupCompletedAt: expect.any(Date) },
+    });
+  });
+
+  it('rejects MFA verify when tenant one-time MFA setup is already completed', async () => {
+    const tenantAdmin = makeUser({
+      id: 'tenant_admin_1',
+      role: 'staff',
+      activeTenantId: 'tenant_1',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(tenantAdmin);
+    mockPrisma.tenantMembership.findMany.mockResolvedValueOnce([
+      {
+        tenantId: 'tenant_1',
+        role: 'tenant_admin',
+        tenant: {
+          name: 'Cadnamart',
+          slug: 'cadnamart',
+          mfaSetupCompletedAt: new Date('2026-03-21T13:46:38.804Z'),
+        },
+      },
+    ]);
+
+    await expect(
+      authService.verifyMfaChallenge('tenant_admin_1', { code: '123456' }),
+    ).rejects.toMatchObject({
+      code: 'MFA_NOT_REQUIRED',
+    });
+    expect(mockPrisma.otpCode.findFirst).not.toHaveBeenCalled();
   });
 
   it('verifies OTP using email identifier and issues tokens', async () => {
