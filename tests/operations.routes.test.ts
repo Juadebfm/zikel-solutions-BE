@@ -152,11 +152,47 @@ describe('New module routes', () => {
     });
   });
 
-  it('blocks privileged tenant-admin session when MFA is not verified', async () => {
+  it('allows privileged tenant-admin read access when MFA is not verified', async () => {
+    mockTenantContext('admin_1', 'admin', 'tenant_admin');
+    mockPrisma.vehicle.count.mockResolvedValueOnce(1);
+    mockPrisma.vehicle.findMany.mockResolvedValueOnce([
+      {
+        id: 'veh_2',
+        tenantId: 'tenant_1',
+        registration: 'DEF 456',
+        make: 'Nissan',
+        model: 'Qashqai',
+        year: 2021,
+        colour: 'White',
+        isActive: true,
+        nextServiceDue: null,
+        motDue: null,
+        createdAt: new Date('2026-03-12T09:00:00.000Z'),
+        updatedAt: new Date('2026-03-12T09:00:00.000Z'),
+      },
+    ]);
+
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/vehicles',
       headers: authHeader('admin_1', 'admin', 'tenant_admin', false),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [{ id: 'veh_2', registration: 'DEF 456' }],
+    });
+  });
+
+  it('blocks privileged tenant-admin write access when MFA is not verified', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/vehicles',
+      headers: authHeader('admin_1', 'admin', 'tenant_admin', false),
+      payload: {
+        registration: 'GHI 789',
+      },
     });
 
     expect(res.statusCode).toBe(403);
