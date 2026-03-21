@@ -95,7 +95,7 @@ staff → cannot manage anyone
 **Rule:** `Tenant.slug` has a `@unique` constraint. When auto-generating slugs from org name during registration, we handle collisions by returning `409 ORG_SLUG_TAKEN` so the user can choose a different name or slug.
 
 ### 10. MFA Requirement
-**Rule:** `tenant_admin` requires MFA. After registration, the new admin will have `mfaRequired: true` in their session. The frontend handles this — do NOT change MFA logic.
+**Rule:** `tenant_admin` requires MFA for privileged **mutating** actions. After registration, the new admin will have `mfaRequired: true` in their session. Read-only dashboard/bootstrap access is allowed pre-MFA so the frontend can nudge completion, but write endpoints remain blocked until MFA is verified.
 
 ### 11. Audit Logging
 **Rule:** Every new action must have an audit log entry. Follow existing patterns:
