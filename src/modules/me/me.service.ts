@@ -1,22 +1,21 @@
-import { AuditAction, Prisma, UserRole } from '@prisma/client';
+import { AuditAction, MembershipStatus, Prisma, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
 import type { ChangePasswordBody, UpdateMeBody, UpdatePreferencesBody } from './me.schema.js';
 
-const ROLE_PERMISSIONS: Record<
-  UserRole,
-  {
-    canViewAllHomes: boolean;
-    canViewAllYoungPeople: boolean;
-    canViewAllEmployees: boolean;
-    canApproveIOILogs: boolean;
-    canManageUsers: boolean;
-    canManageSettings: boolean;
-    canViewReports: boolean;
-    canExportData: boolean;
-  }
-> = {
+type PermissionSet = {
+  canViewAllHomes: boolean;
+  canViewAllYoungPeople: boolean;
+  canViewAllEmployees: boolean;
+  canApproveIOILogs: boolean;
+  canManageUsers: boolean;
+  canManageSettings: boolean;
+  canViewReports: boolean;
+  canExportData: boolean;
+};
+
+const GLOBAL_ROLE_PERMISSIONS: Record<UserRole, PermissionSet> = {
   super_admin: {
     canViewAllHomes: true,
     canViewAllYoungPeople: true,
@@ -56,6 +55,39 @@ const ROLE_PERMISSIONS: Record<
     canManageSettings: true,
     canViewReports: true,
     canExportData: true,
+  },
+};
+
+const TENANT_ROLE_PERMISSIONS: Record<TenantRole, PermissionSet> = {
+  tenant_admin: {
+    canViewAllHomes: true,
+    canViewAllYoungPeople: true,
+    canViewAllEmployees: true,
+    canApproveIOILogs: true,
+    canManageUsers: true,
+    canManageSettings: true,
+    canViewReports: true,
+    canExportData: true,
+  },
+  sub_admin: {
+    canViewAllHomes: true,
+    canViewAllYoungPeople: true,
+    canViewAllEmployees: true,
+    canApproveIOILogs: true,
+    canManageUsers: true,
+    canManageSettings: false,
+    canViewReports: true,
+    canExportData: true,
+  },
+  staff: {
+    canViewAllHomes: false,
+    canViewAllYoungPeople: false,
+    canViewAllEmployees: false,
+    canApproveIOILogs: false,
+    canManageUsers: false,
+    canManageSettings: false,
+    canViewReports: false,
+    canExportData: false,
   },
 };
 
@@ -223,14 +255,34 @@ export async function changeMyPassword(userId: string, body: ChangePasswordBody)
 export async function getMyPermissions(userId: string) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { role: true },
+    select: { role: true, activeTenantId: true },
   });
 
   if (!user) {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  return ROLE_PERMISSIONS[user.role];
+  if (user.role === UserRole.super_admin) {
+    return GLOBAL_ROLE_PERMISSIONS[user.role];
+  }
+
+  if (user.activeTenantId) {
+    const membership = await prisma.tenantMembership.findFirst({
+      where: {
+        userId,
+        tenantId: user.activeTenantId,
+        status: MembershipStatus.active,
+        tenant: { isActive: true },
+      },
+      select: { role: true },
+    });
+
+    if (membership) {
+      return TENANT_ROLE_PERMISSIONS[membership.role];
+    }
+  }
+
+  return GLOBAL_ROLE_PERMISSIONS[user.role];
 }
 
 export async function getMyPreferences(userId: string) {
