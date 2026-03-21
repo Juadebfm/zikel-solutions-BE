@@ -8,7 +8,11 @@ import {
   SummaryListQuerySchema,
   approveTaskBodyJson,
   batchApproveBodyJson,
+  tasksToApproveItemJson,
+  taskToApproveDetailJson,
+  tasksToApproveQueryJson,
   todoItemJson,
+  pendingApprovalLabelsJson,
   provisionHomeJson,
   provisionsResponseExample,
 } from './summary.schema.js';
@@ -124,19 +128,20 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.get('/tasks-to-approve', {
     schema: {
       tags: ['Summary'],
-      summary: 'Tasks pending my approval',
+      summary: 'Items awaiting my approval',
       description:
         'Returns tasks with approvalStatus = pending_approval that the current user has permission to approve. ' +
         'Users without approval permission receive a 403.',
-      querystring: { $ref: 'PaginatedQuery#' },
+      querystring: tasksToApproveQueryJson,
       response: {
         200: {
           type: 'object',
-          required: ['success', 'data', 'meta'],
+          required: ['success', 'data', 'meta', 'labels'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'array', items: { $ref: 'Task#' } },
+            data: { type: 'array', items: tasksToApproveItemJson },
             meta: { $ref: 'PaginationMeta#' },
+            labels: pendingApprovalLabelsJson,
           },
         },
         401: { $ref: 'ApiError#' },
@@ -155,8 +160,38 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const userId = (request.user as JwtPayload).sub;
-      const { data, meta } = await summaryService.listTasksToApprove(userId, parse.data);
-      return reply.send({ success: true, data, meta });
+      const { data, meta, labels } = await summaryService.listTasksToApprove(userId, parse.data);
+      return reply.send({ success: true, data, meta, labels });
+    },
+  });
+
+  // ── GET /summary/tasks-to-approve/:id ─────────────────────────────────────
+  fastify.get('/tasks-to-approve/:id', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Task approval detail',
+      description:
+        'Returns a single pending-approval task with metadata and dynamic submission payload for detail rendering.',
+      params: { $ref: 'CuidParam#' },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: taskToApproveDetailJson,
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        404: { description: 'Task not found.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await summaryService.getTaskToApproveDetail(userId, id);
+      return reply.send({ success: true, data });
     },
   });
 

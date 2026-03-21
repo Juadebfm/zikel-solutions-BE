@@ -5,12 +5,31 @@ import { z } from 'zod';
 
 // ─── Zod schemas ──────────────────────────────────────────────────────────────
 
+const QueryDateSchema = z
+  .union([z.string().datetime(), z.string().date(), z.date()])
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    return value instanceof Date ? value : new Date(value);
+  });
+
 export const SummaryListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   sortBy: z.string().optional(),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
   search: z.string().optional(),
+  formGroup: z.string().max(120).optional(),
+  taskDateFrom: QueryDateSchema,
+  taskDateTo: QueryDateSchema,
+}).superRefine((value, ctx) => {
+  if (value.taskDateFrom && value.taskDateTo && value.taskDateFrom > value.taskDateTo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['taskDateFrom'],
+      message: '`taskDateFrom` cannot be after `taskDateTo`.',
+    });
+  }
 });
 
 export const ApproveTaskBodySchema = z.object({
@@ -49,6 +68,29 @@ export const batchApproveBodyJson = {
   },
 } as const;
 
+export const tasksToApproveQueryJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    page: { type: 'integer', minimum: 1, default: 1 },
+    pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    sortBy: { type: 'string' },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
+    search: { type: 'string' },
+    formGroup: { type: 'string', maxLength: 120 },
+    taskDateFrom: {
+      type: 'string',
+      format: 'date-time',
+      description: 'Filter tasks with due date on/after this timestamp.',
+    },
+    taskDateTo: {
+      type: 'string',
+      format: 'date-time',
+      description: 'Filter tasks with due date on/before this timestamp.',
+    },
+  },
+} as const;
+
 // ─── Response shape schemas (for OpenAPI inline definitions) ──────────────────
 
 export const todoItemJson = {
@@ -67,6 +109,125 @@ export const todoItemJson = {
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     assignee: { type: 'string', nullable: true },
     dueDate: { type: 'string', format: 'date-time', nullable: true },
+  },
+} as const;
+
+export const tasksToApproveItemJson = {
+  type: 'object',
+  required: [
+    'id',
+    'taskRef',
+    'title',
+    'formGroup',
+    'approvalStatus',
+    'approvalStatusLabel',
+    'taskDate',
+    'submittedOn',
+    'updatedOn',
+    'approvers',
+  ],
+  properties: {
+    id: { type: 'string' },
+    taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
+    title: { type: 'string' },
+    formGroup: { type: 'string', nullable: true },
+    approvalStatus: {
+      type: 'string',
+      enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
+    },
+    approvalStatusLabel: { type: 'string', example: 'Awaiting Approval' },
+    homeOrSchool: { type: 'string', nullable: true },
+    relatedTo: { type: 'string', nullable: true },
+    taskDate: { type: 'string', format: 'date-time', nullable: true },
+    submittedOn: { type: 'string', format: 'date-time' },
+    submittedBy: { type: 'string', nullable: true },
+    updatedOn: { type: 'string', format: 'date-time' },
+    updatedBy: { type: 'string', nullable: true },
+    approvers: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
+
+export const pendingApprovalLabelsJson = {
+  type: 'object',
+  required: [
+    'pendingApprovalTitle',
+    'configuredInformation',
+    'formName',
+    'logStatuses',
+    'status',
+    'homeOrSchool',
+    'relatesTo',
+    'taskDate',
+    'originallyRecordedOn',
+    'originallyRecordedBy',
+    'lastUpdatedOn',
+    'lastUpdatedBy',
+    'pendingApprovalStatus',
+    'resetGrid',
+  ],
+  properties: {
+    pendingApprovalTitle: { type: 'string', example: 'Items Awaiting Approval' },
+    configuredInformation: { type: 'string', example: 'Current Filters' },
+    formName: { type: 'string', example: 'Form' },
+    logStatuses: { type: 'string', example: 'Submission Status' },
+    status: { type: 'string', example: 'Approval Status' },
+    homeOrSchool: { type: 'string', example: 'Home / School' },
+    relatesTo: { type: 'string', example: 'Related To' },
+    taskDate: { type: 'string', example: 'Due Date' },
+    originallyRecordedOn: { type: 'string', example: 'Submitted On' },
+    originallyRecordedBy: { type: 'string', example: 'Submitted By' },
+    lastUpdatedOn: { type: 'string', example: 'Updated On' },
+    lastUpdatedBy: { type: 'string', example: 'Updated By' },
+    pendingApprovalStatus: { type: 'string', example: 'Awaiting Approval' },
+    resetGrid: { type: 'string', example: 'Reset table' },
+  },
+} as const;
+
+export const taskToApproveDetailJson = {
+  type: 'object',
+  required: [
+    'id',
+    'taskRef',
+    'title',
+    'formName',
+    'formGroup',
+    'approvalStatus',
+    'approvalStatusLabel',
+    'meta',
+    'labels',
+    'renderPayload',
+  ],
+  properties: {
+    id: { type: 'string' },
+    taskRef: { type: 'string' },
+    title: { type: 'string' },
+    formName: { type: 'string', nullable: true },
+    formGroup: { type: 'string', nullable: true },
+    approvalStatus: {
+      type: 'string',
+      enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
+    },
+    approvalStatusLabel: { type: 'string' },
+    meta: {
+      type: 'object',
+      required: ['taskId', 'taskRef', 'submittedOn', 'updatedOn', 'approvers'],
+      properties: {
+        taskId: { type: 'string' },
+        taskRef: { type: 'string' },
+        homeOrSchool: { type: 'string', nullable: true },
+        relatedTo: { type: 'string', nullable: true },
+        taskDate: { type: 'string', format: 'date-time', nullable: true },
+        submittedOn: { type: 'string', format: 'date-time' },
+        submittedBy: { type: 'string', nullable: true },
+        updatedOn: { type: 'string', format: 'date-time' },
+        updatedBy: { type: 'string', nullable: true },
+        approvers: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    labels: pendingApprovalLabelsJson,
+    renderPayload: {
+      description: 'Dynamic submitted form payload for rendering the form detail page.',
+    },
   },
 } as const;
 

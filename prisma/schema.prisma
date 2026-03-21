@@ -479,11 +479,38 @@ model Vehicle {
   @@index([registration])
 }
 
+// ─── Form Templates ───────────────────────────────────────────────────────────
+
+model FormTemplate {
+  id          String    @id @default(cuid())
+  key         String    @unique
+  name        String
+  description String?
+  group       String
+  schemaJson  Json
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tasks       Task[]
+
+  @@index([name])
+  @@index([group])
+  @@index([isActive])
+}
+
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
 model Task {
   id               String             @id @default(cuid())
   tenantId         String
+  formTemplateKey  String?
+  formName         String?
+  formGroup        String?
+  submissionPayload Json?
+  submittedAt      DateTime?
+  submittedById    String?
+  updatedById      String?
   title            String
   description      String?
   status           TaskStatus         @default(pending)
@@ -502,16 +529,21 @@ model Task {
   updatedAt        DateTime           @updatedAt
 
   tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  formTemplate     FormTemplate?      @relation(fields: [formTemplateKey], references: [key], onDelete: SetNull)
   assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
   approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
   youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
 
   @@index([tenantId])
+  @@index([formTemplateKey])
+  @@index([formGroup])
   @@index([status, priority])
   @@index([approvalStatus])
   @@index([assigneeId])
   @@index([dueDate])
   @@index([createdById])
+  @@index([submittedById])
+  @@index([updatedById])
   @@index([deletedAt])
 }
 
