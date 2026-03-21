@@ -115,9 +115,19 @@ function buildPaginationMeta(total: number, page: number, pageSize: number) {
   };
 }
 
+function toTaskRef(task: { id: string; createdAt: Date }) {
+  const year = task.createdAt.getUTCFullYear();
+  const month = String(task.createdAt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(task.createdAt.getUTCDate()).padStart(2, '0');
+  const alphanumericId = task.id.replace(/[^a-zA-Z0-9]/g, '');
+  const suffix = alphanumericId.slice(-6).toUpperCase().padStart(6, '0');
+  return `TSK-${year}${month}${day}-${suffix}`;
+}
+
 function toTodoItem(
   task: {
     id: string;
+    createdAt: Date;
     title: string;
     status: TaskStatus;
     approvalStatus: TaskApprovalStatus;
@@ -129,6 +139,7 @@ function toTodoItem(
 ) {
   return {
     id: task.id,
+    taskRef: toTaskRef(task),
     title: task.title,
     relation: task.youngPerson
       ? `${task.youngPerson.firstName} ${task.youngPerson.lastName}`
@@ -287,7 +298,10 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
   ]);
 
   return {
-    data: rows,
+    data: rows.map((row) => ({
+      ...row,
+      taskRef: toTaskRef(row),
+    })),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
   };
 }
@@ -408,7 +422,7 @@ export async function getTodayProvisions(userId: string) {
 
   const homes = canApprove(user)
     ? await prisma.home.findMany({
-        where: { tenantId: user.tenantId },
+        where: { tenantId: user.tenantId, isActive: true },
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
       })
@@ -417,6 +431,7 @@ export async function getTodayProvisions(userId: string) {
           where: {
             id: user.employee.homeId,
             tenantId: user.tenantId,
+            isActive: true,
           },
           select: { id: true, name: true },
         })

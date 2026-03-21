@@ -327,6 +327,11 @@ export const TaskSchema = {
   required: ['id', 'title', 'status', 'approvalStatus', 'priority', 'createdAt', 'updatedAt'],
   properties: {
     id: { type: 'string' },
+    taskRef: {
+      type: 'string',
+      description: 'Friendly display reference for UI usage.',
+      example: 'TSK-20260321-HM5T7F',
+    },
     title: { type: 'string' },
     description: { type: 'string', nullable: true },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },

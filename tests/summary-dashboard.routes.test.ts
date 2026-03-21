@@ -206,6 +206,106 @@ describe('Summary routes', () => {
       ],
     });
   });
+
+  it('GET /api/v1/summary/todos includes a friendly taskRef', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(1);
+    mockPrisma.task.findMany.mockResolvedValueOnce([
+      {
+        id: 'task_abc123',
+        createdAt: new Date('2026-03-20T10:15:00.000Z'),
+        title: 'Daily Summary For JUADEB GABRIEL',
+        status: 'pending',
+        approvalStatus: 'not_required',
+        priority: 'medium',
+        dueDate: new Date('2026-03-21T10:00:00.000Z'),
+        youngPerson: {
+          firstName: 'Juadeb',
+          lastName: 'Gabriel',
+        },
+        assignee: {
+          user: {
+            firstName: 'Gabriel',
+            lastName: 'Femi',
+          },
+        },
+      },
+    ]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/todos',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [
+        {
+          id: 'task_abc123',
+          taskRef: 'TSK-20260320-ABC123',
+          title: 'Daily Summary For JUADEB GABRIEL',
+          relation: 'Juadeb Gabriel',
+        },
+      ],
+    });
+  });
+
+  it('GET /api/v1/summary/tasks-to-approve includes a friendly taskRef', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(1);
+    mockPrisma.task.findMany.mockResolvedValueOnce([
+      {
+        id: 'task_zyx987',
+        tenantId: 'tenant_1',
+        title: 'Daily Cleaning Schedule',
+        description: 'Pending manager approval for today.',
+        status: 'pending',
+        approvalStatus: 'pending_approval',
+        priority: 'high',
+        dueDate: new Date('2026-03-21T14:00:00.000Z'),
+        completedAt: null,
+        rejectionReason: null,
+        approvedAt: null,
+        assigneeId: 'emp_1',
+        approvedById: null,
+        youngPersonId: 'yp_1',
+        createdById: 'admin_1',
+        createdAt: new Date('2026-03-20T11:00:00.000Z'),
+        updatedAt: new Date('2026-03-20T11:00:00.000Z'),
+      },
+    ]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/tasks-to-approve',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [
+        {
+          id: 'task_zyx987',
+          taskRef: 'TSK-20260320-ZYX987',
+          title: 'Daily Cleaning Schedule',
+          approvalStatus: 'pending_approval',
+        },
+      ],
+    });
+  });
 });
 
 describe('Dashboard routes', () => {
