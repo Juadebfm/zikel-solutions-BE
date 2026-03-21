@@ -4,6 +4,7 @@ import {
   TaskApprovalStatus,
   TaskStatus,
   UserRole,
+  type TaskPriority,
   type Prisma,
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
@@ -29,6 +30,34 @@ const TODO_SORTABLE_FIELDS = new Set([
   'updatedAt',
 ]);
 const REWARD_POINTS_PER_COMPLETED_TASK = 10;
+const ACTIVE_WORKFLOW_STATUSES: TaskStatus[] = [TaskStatus.pending, TaskStatus.in_progress];
+const EXCLUDED_APPROVAL_BUCKET_STATUSES: TaskApprovalStatus[] = [
+  TaskApprovalStatus.pending_approval,
+  TaskApprovalStatus.rejected,
+];
+const APPROVAL_STATUS_LABELS: Record<TaskApprovalStatus, string> = {
+  not_required: 'Not Required',
+  pending_approval: 'Awaiting Approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  processing: 'Processing',
+};
+const PENDING_APPROVAL_LABELS = {
+  pendingApprovalTitle: 'Items Awaiting Approval',
+  configuredInformation: 'Current Filters',
+  formName: 'Form',
+  logStatuses: 'Submission Status',
+  status: 'Approval Status',
+  homeOrSchool: 'Home / School',
+  relatesTo: 'Related To',
+  taskDate: 'Due Date',
+  originallyRecordedOn: 'Submitted On',
+  originallyRecordedBy: 'Submitted By',
+  lastUpdatedOn: 'Updated On',
+  lastUpdatedBy: 'Updated By',
+  pendingApprovalStatus: 'Awaiting Approval',
+  resetGrid: 'Reset table',
+} as const;
 
 function getTodayBounds() {
   const start = new Date();
@@ -124,6 +153,106 @@ function toTaskRef(task: { id: string; createdAt: Date }) {
   return `TSK-${year}${month}${day}-${suffix}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function parseApprovers(payload: Prisma.JsonValue | null): string[] {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return [];
+
+  const approverNames = payloadObj.approverNames;
+  if (Array.isArray(approverNames)) {
+    return approverNames.filter((item): item is string => typeof item === 'string');
+  }
+
+  const approvers = payloadObj.approvers;
+  if (Array.isArray(approvers)) {
+    return approvers.filter((item): item is string => typeof item === 'string');
+  }
+  if (typeof approvers === 'string') {
+    return approvers
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+async function getUserNameMap(userIds: string[]) {
+  if (userIds.length === 0) return new Map<string, string>();
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: userIds } },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+    },
+  });
+
+  return new Map(users.map((user) => [user.id, `${user.firstName} ${user.lastName}`.trim()]));
+}
+
+type TaskToApproveRow = {
+  id: string;
+  createdAt: Date;
+  updatedAt: Date;
+  title: string;
+  formName: string | null;
+  formGroup: string | null;
+  submissionPayload: Prisma.JsonValue | null;
+  approvalStatus: TaskApprovalStatus;
+  status: TaskStatus;
+  priority: TaskPriority;
+  dueDate: Date | null;
+  submittedAt: Date | null;
+  submittedById: string | null;
+  updatedById: string | null;
+  createdById: string | null;
+  youngPerson: {
+    firstName: string;
+    lastName: string;
+    home: { name: string } | null;
+  } | null;
+  assignee: {
+    user: { firstName: string; lastName: string };
+    home: { name: string } | null;
+  } | null;
+};
+
+function toTasksToApproveItem(row: TaskToApproveRow, userNameMap: Map<string, string>) {
+  const submittedBy =
+    (row.submittedById ? userNameMap.get(row.submittedById) : null)
+    ?? (row.createdById ? userNameMap.get(row.createdById) : null)
+    ?? null;
+  const updatedBy =
+    (row.updatedById ? userNameMap.get(row.updatedById) : null)
+    ?? submittedBy
+    ?? null;
+
+  return {
+    id: row.id,
+    taskRef: toTaskRef(row),
+    title: row.title,
+    formGroup: row.formGroup ?? row.formName ?? null,
+    approvalStatus: row.approvalStatus,
+    approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
+    homeOrSchool: row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null,
+    relatedTo: row.youngPerson
+      ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
+      : null,
+    taskDate: row.dueDate,
+    submittedOn: row.submittedAt ?? row.createdAt,
+    submittedBy,
+    updatedOn: row.updatedAt,
+    updatedBy,
+    approvers: parseApprovers(row.submissionPayload),
+  };
+}
+
 function toTodoItem(
   task: {
     id: string;
@@ -163,19 +292,24 @@ export async function getSummaryStats(userId: string) {
   const withScope = (extra: Prisma.TaskWhereInput): Prisma.TaskWhereInput => ({
     AND: [scope, extra],
   });
+  const normalWorkflowApprovalScope: Prisma.TaskWhereInput = {
+    approvalStatus: { notIn: EXCLUDED_APPROVAL_BUCKET_STATUSES },
+  };
 
   const [overdue, dueToday, pendingApproval, rejected, draft, future, comments, completedTasks] =
     await Promise.all([
       prisma.task.count({
         where: withScope({
+          ...normalWorkflowApprovalScope,
+          status: { in: ACTIVE_WORKFLOW_STATUSES },
           dueDate: { lt: start },
-          status: { notIn: [TaskStatus.completed, TaskStatus.cancelled] },
         }),
       }),
       prisma.task.count({
         where: withScope({
+          ...normalWorkflowApprovalScope,
+          status: { in: ACTIVE_WORKFLOW_STATUSES },
           dueDate: { gte: start, lte: end },
-          status: { notIn: [TaskStatus.completed, TaskStatus.cancelled] },
         }),
       }),
       prisma.task.count({
@@ -191,10 +325,18 @@ export async function getSummaryStats(userId: string) {
         where: withScope({ approvalStatus: TaskApprovalStatus.rejected }),
       }),
       prisma.task.count({
-        where: withScope({ status: TaskStatus.pending, dueDate: null }),
+        where: withScope({
+          ...normalWorkflowApprovalScope,
+          status: TaskStatus.pending,
+          dueDate: null,
+        }),
       }),
       prisma.task.count({
-        where: withScope({ dueDate: { gt: end } }),
+        where: withScope({
+          ...normalWorkflowApprovalScope,
+          status: { in: ACTIVE_WORKFLOW_STATUSES },
+          dueDate: { gt: end },
+        }),
       }),
       prisma.announcement.count({
         where: {
@@ -275,8 +417,9 @@ export async function listOverdueTodos(userId: string, query: SummaryListQuery) 
   const filters: Prisma.TaskWhereInput[] = [
     scope,
     {
+      approvalStatus: { notIn: EXCLUDED_APPROVAL_BUCKET_STATUSES },
+      status: { in: ACTIVE_WORKFLOW_STATUSES },
       dueDate: { lt: start },
-      status: { notIn: [TaskStatus.completed, TaskStatus.cancelled] },
     },
   ];
 
@@ -334,8 +477,24 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
       OR: [
         { title: { contains: query.search, mode: 'insensitive' } },
         { description: { contains: query.search, mode: 'insensitive' } },
+        { formName: { contains: query.search, mode: 'insensitive' } },
+        { formGroup: { contains: query.search, mode: 'insensitive' } },
       ],
     });
+  }
+  if (query.formGroup) {
+    filters.push({
+      OR: [
+        { formGroup: { contains: query.formGroup, mode: 'insensitive' } },
+        { formName: { contains: query.formGroup, mode: 'insensitive' } },
+      ],
+    });
+  }
+  if (query.taskDateFrom) {
+    filters.push({ dueDate: { gte: query.taskDateFrom } });
+  }
+  if (query.taskDateTo) {
+    filters.push({ dueDate: { lte: query.taskDateTo } });
   }
 
   const where: Prisma.TaskWhereInput = { AND: filters };
@@ -346,15 +505,117 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
       orderBy: buildTaskOrderBy(query),
       skip,
       take: query.pageSize,
+      include: {
+        youngPerson: {
+          select: {
+            firstName: true,
+            lastName: true,
+            home: { select: { name: true } },
+          },
+        },
+        assignee: {
+          select: {
+            user: {
+              select: { firstName: true, lastName: true },
+            },
+            home: { select: { name: true } },
+          },
+        },
+      },
     }),
   ]);
 
+  const userIds = [
+    ...new Set(
+      rows.flatMap((row) => [row.submittedById, row.updatedById, row.createdById]).filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  const userNameMap = await getUserNameMap(userIds);
+
   return {
-    data: rows.map((row) => ({
-      ...row,
-      taskRef: toTaskRef(row),
-    })),
+    data: rows.map((row) => toTasksToApproveItem(row as TaskToApproveRow, userNameMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
+    labels: PENDING_APPROVAL_LABELS,
+  };
+}
+
+export async function getTaskToApproveDetail(userId: string, taskId: string) {
+  const user = await getUserContext(userId);
+  if (!canApprove(user)) {
+    throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
+  }
+
+  const row = await prisma.task.findFirst({
+    where: {
+      id: taskId,
+      tenantId: user.tenantId,
+      deletedAt: null,
+      approvalStatus: TaskApprovalStatus.pending_approval,
+    },
+    include: {
+      youngPerson: {
+        select: {
+          firstName: true,
+          lastName: true,
+          home: { select: { name: true } },
+        },
+      },
+      assignee: {
+        select: {
+          user: {
+            select: { firstName: true, lastName: true },
+          },
+          home: { select: { name: true } },
+        },
+      },
+    },
+  });
+
+  if (!row) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  const userIds = [
+    ...new Set([row.submittedById, row.updatedById, row.createdById].filter((id): id is string => Boolean(id))),
+  ];
+  const userNameMap = await getUserNameMap(userIds);
+  const submittedBy =
+    (row.submittedById ? userNameMap.get(row.submittedById) : null)
+    ?? (row.createdById ? userNameMap.get(row.createdById) : null)
+    ?? null;
+  const updatedBy =
+    (row.updatedById ? userNameMap.get(row.updatedById) : null)
+    ?? submittedBy
+    ?? null;
+  const approvers = parseApprovers(row.submissionPayload);
+  const relatedTo = row.youngPerson
+    ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
+    : null;
+  const homeOrSchool = row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null;
+
+  return {
+    id: row.id,
+    taskRef: toTaskRef(row),
+    title: row.title,
+    formName: row.formName ?? null,
+    formGroup: row.formGroup ?? row.formName ?? null,
+    approvalStatus: row.approvalStatus,
+    approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
+    meta: {
+      taskId: row.id,
+      taskRef: toTaskRef(row),
+      homeOrSchool,
+      relatedTo,
+      taskDate: row.dueDate,
+      submittedOn: row.submittedAt ?? row.createdAt,
+      submittedBy,
+      updatedOn: row.updatedAt,
+      updatedBy,
+      approvers,
+    },
+    labels: PENDING_APPROVAL_LABELS,
+    // Keep per-form field labels/value structure as submitted (dynamic, no hardcoded rewrite).
+    renderPayload: row.submissionPayload ?? { sections: [] },
   };
 }
 

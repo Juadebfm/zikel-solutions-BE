@@ -5,6 +5,7 @@ const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
     user: {
       findUnique: vi.fn(),
+      findMany: vi.fn(),
     },
     tenant: {
       findUnique: vi.fn(),
@@ -18,6 +19,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     task: {
       count: vi.fn(),
       findMany: vi.fn(),
+      findFirst: vi.fn(),
       findUnique: vi.fn(),
       update: vi.fn(),
     },
@@ -69,6 +71,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.user.findMany.mockResolvedValue([]);
 });
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
@@ -139,6 +142,51 @@ describe('Summary routes', () => {
         comments: 7,
         rewards: 90,
       },
+    });
+
+    const overdueWhere = mockPrisma.task.count.mock.calls[0]?.[0]?.where;
+    const dueTodayWhere = mockPrisma.task.count.mock.calls[1]?.[0]?.where;
+    const draftWhere = mockPrisma.task.count.mock.calls[4]?.[0]?.where;
+    const futureWhere = mockPrisma.task.count.mock.calls[5]?.[0]?.where;
+
+    expect(overdueWhere).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          status: { in: ['pending', 'in_progress'] },
+          approvalStatus: { notIn: ['pending_approval', 'rejected'] },
+          dueDate: { lt: expect.any(Date) },
+        }),
+      ]),
+    });
+    expect(dueTodayWhere).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          status: { in: ['pending', 'in_progress'] },
+          approvalStatus: { notIn: ['pending_approval', 'rejected'] },
+          dueDate: {
+            gte: expect.any(Date),
+            lte: expect.any(Date),
+          },
+        }),
+      ]),
+    });
+    expect(draftWhere).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          status: 'pending',
+          approvalStatus: { notIn: ['pending_approval', 'rejected'] },
+          dueDate: null,
+        }),
+      ]),
+    });
+    expect(futureWhere).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          status: { in: ['pending', 'in_progress'] },
+          approvalStatus: { notIn: ['pending_approval', 'rejected'] },
+          dueDate: { gt: expect.any(Date) },
+        }),
+      ]),
     });
   });
 
@@ -328,26 +376,49 @@ describe('Summary routes', () => {
         },
       ],
     });
+
+    const overdueWhere = mockPrisma.task.findMany.mock.calls[0]?.[0]?.where;
+    expect(overdueWhere).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          status: { in: ['pending', 'in_progress'] },
+          approvalStatus: { notIn: ['pending_approval', 'rejected'] },
+          dueDate: { lt: expect.any(Date) },
+        }),
+      ]),
+    });
   });
 
-  it('GET /api/v1/summary/tasks-to-approve includes a friendly taskRef', async () => {
+  it('GET /api/v1/summary/tasks-to-approve returns table-ready approval rows', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.user.findMany.mockResolvedValueOnce([
+      { id: 'admin_1', firstName: 'Ruhman', lastName: 'Akoto' },
+      { id: 'manager_1', firstName: 'Izu', lastName: 'Obani' },
+    ]);
     mockPrisma.task.count.mockResolvedValueOnce(1);
     mockPrisma.task.findMany.mockResolvedValueOnce([
       {
         id: 'task_zyx987',
         tenantId: 'tenant_1',
+        formName: 'Daily Cleaning Schedule',
+        formGroup: 'Daily Cleaning Schedule',
+        submissionPayload: {
+          approverNames: ['Sonia Akoto', 'Izu Obani'],
+        },
         title: 'Daily Cleaning Schedule',
         description: 'Pending manager approval for today.',
         status: 'pending',
         approvalStatus: 'pending_approval',
         priority: 'high',
         dueDate: new Date('2026-03-21T14:00:00.000Z'),
+        submittedAt: new Date('2026-03-21T12:23:00.000Z'),
+        submittedById: 'admin_1',
+        updatedById: 'manager_1',
         completedAt: null,
         rejectionReason: null,
         approvedAt: null,
@@ -357,6 +428,18 @@ describe('Summary routes', () => {
         createdById: 'admin_1',
         createdAt: new Date('2026-03-20T11:00:00.000Z'),
         updatedAt: new Date('2026-03-20T11:00:00.000Z'),
+        youngPerson: {
+          firstName: 'Juadeb',
+          lastName: 'Gabriel',
+          home: { name: 'Fortuna Homes' },
+        },
+        assignee: {
+          user: {
+            firstName: 'Gabriel',
+            lastName: 'Femi',
+          },
+          home: { name: 'Fortuna Homes' },
+        },
       },
     ]);
 
@@ -369,14 +452,161 @@ describe('Summary routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       success: true,
+      labels: {
+        pendingApprovalTitle: 'Items Awaiting Approval',
+        configuredInformation: 'Current Filters',
+        status: 'Approval Status',
+        pendingApprovalStatus: 'Awaiting Approval',
+        resetGrid: 'Reset table',
+      },
       data: [
         {
           id: 'task_zyx987',
           taskRef: 'TSK-20260320-ZYX987',
           title: 'Daily Cleaning Schedule',
+          formGroup: 'Daily Cleaning Schedule',
           approvalStatus: 'pending_approval',
+          approvalStatusLabel: 'Awaiting Approval',
+          homeOrSchool: 'Fortuna Homes',
+          relatedTo: 'Juadeb Gabriel',
+          submittedBy: 'Ruhman Akoto',
+          updatedBy: 'Izu Obani',
+          approvers: ['Sonia Akoto', 'Izu Obani'],
         },
       ],
+    });
+  });
+
+  it('GET /api/v1/summary/tasks-to-approve applies form/date/search filters', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url:
+        '/api/v1/summary/tasks-to-approve'
+        + '?formGroup=Daily%20Cleaning%20Schedule'
+        + '&taskDateFrom=2026-03-21T00:00:00.000Z'
+        + '&taskDateTo=2026-03-21T23:59:59.999Z'
+        + '&search=cleaning',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const findManyArgs = mockPrisma.task.findMany.mock.calls[0]?.[0];
+    expect(findManyArgs.where).toMatchObject({
+      AND: expect.arrayContaining([
+        expect.objectContaining({
+          OR: expect.arrayContaining([
+            { formGroup: { contains: 'Daily Cleaning Schedule', mode: 'insensitive' } },
+          ]),
+        }),
+        { dueDate: { gte: new Date('2026-03-21T00:00:00.000Z') } },
+        { dueDate: { lte: new Date('2026-03-21T23:59:59.999Z') } },
+      ]),
+    });
+  });
+
+  it('GET /api/v1/summary/tasks-to-approve/:id returns dynamic detail payload', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_1494',
+      tenantId: 'tenant_1',
+      formTemplateKey: 'weekly-menu',
+      formName: 'Weekly Menu Planner',
+      formGroup: 'Weekly Menu',
+      title: 'Weekly Menu - 21/03/2026',
+      description: 'Pending approval item',
+      status: 'pending',
+      approvalStatus: 'pending_approval',
+      priority: 'medium',
+      dueDate: new Date('2026-03-21T09:16:00.000Z'),
+      submittedAt: new Date('2026-03-21T16:18:00.000Z'),
+      submittedById: 'user_submitter_1',
+      updatedById: 'user_updater_1',
+      submissionPayload: {
+        approverNames: ['Sonia Akoto', 'Izu Obani'],
+        sections: [
+          {
+            title: 'Monday',
+            fields: [
+              { label: 'Breakfast', type: 'text', value: 'Corn flakes and smoothie' },
+            ],
+          },
+        ],
+      },
+      completedAt: null,
+      rejectionReason: null,
+      approvedAt: null,
+      assigneeId: 'emp_1',
+      approvedById: null,
+      youngPersonId: 'yp_1',
+      createdById: 'user_submitter_1',
+      createdAt: new Date('2026-03-21T16:18:00.000Z'),
+      updatedAt: new Date('2026-03-21T16:20:00.000Z'),
+      youngPerson: {
+        firstName: 'Juadeb',
+        lastName: 'Gabriel',
+        home: { name: 'Fortuna Homes' },
+      },
+      assignee: {
+        user: { firstName: 'Gabriel', lastName: 'Femi' },
+        home: { name: 'Fortuna Homes' },
+      },
+    });
+    mockPrisma.user.findMany.mockResolvedValueOnce([
+      { id: 'user_submitter_1', firstName: 'Ruhman', lastName: 'Akoto' },
+      { id: 'user_updater_1', firstName: 'Jubilee', lastName: 'Penn' },
+    ]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/tasks-to-approve/task_1494',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        id: 'task_1494',
+        taskRef: 'TSK-20260321-SK1494',
+        formName: 'Weekly Menu Planner',
+        formGroup: 'Weekly Menu',
+        approvalStatusLabel: 'Awaiting Approval',
+        meta: {
+          homeOrSchool: 'Fortuna Homes',
+          relatedTo: 'Juadeb Gabriel',
+          submittedBy: 'Ruhman Akoto',
+          updatedBy: 'Jubilee Penn',
+          approvers: ['Sonia Akoto', 'Izu Obani'],
+        },
+        labels: {
+          pendingApprovalTitle: 'Items Awaiting Approval',
+          formName: 'Form',
+          homeOrSchool: 'Home / School',
+          taskDate: 'Due Date',
+          pendingApprovalStatus: 'Awaiting Approval',
+        },
+        renderPayload: {
+          sections: [
+            {
+              title: 'Monday',
+            },
+          ],
+        },
+      },
     });
   });
 });

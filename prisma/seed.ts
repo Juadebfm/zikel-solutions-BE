@@ -4,6 +4,7 @@
  */
 import bcrypt from 'bcryptjs';
 import {
+  Prisma,
   PrismaClient,
   UserRole,
   TenantRole,
@@ -27,6 +28,236 @@ function atDay(base: Date, dayOffset: number, hour: number, minute = 0): Date {
   dt.setDate(dt.getDate() + dayOffset);
   dt.setHours(hour, minute, 0, 0);
   return dt;
+}
+
+type SeedFormTemplate = {
+  key: string;
+  name: string;
+  group: string;
+  description: string;
+  schemaJson: Prisma.InputJsonValue;
+};
+
+const seedApprovers = ['Sonia Akoto', 'Izu Obani', 'Kwadwo Opoku-Adomako', 'Matilda Howarth'];
+
+function toTemplateKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/\//g, ' ')
+    .replace(/\(/g, ' ')
+    .replace(/\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+const rawFormTemplateCatalog: Array<{
+  name: string;
+  group: string;
+  description: string;
+}> = [
+  { name: 'Activity', group: 'Daily Operations', description: 'Daily engagement and participation record.' },
+  { name: 'Contact Form', group: 'Communication', description: 'Record contact and important discussion outcomes.' },
+  { name: 'Daily Cleaning Schedule', group: 'Household Checks', description: 'Routine home cleaning checklist.' },
+  { name: 'Daily Handover', group: 'Shift Handover', description: 'Critical handover notes for the next team.' },
+  { name: 'Daily Ligature Check', group: 'Safety Checks', description: 'Routine ligature risk check log.' },
+  { name: 'Daily Summary', group: 'Daily Operations', description: 'Daily overview of care, behaviour, and outcomes.' },
+  { name: 'Education/Work', group: 'Education', description: 'Education/work attendance and support notes.' },
+  { name: 'Incident', group: 'Incidents', description: 'Incident recording and follow-up details.' },
+  { name: 'Incident Record Quality Assurance', group: 'Incidents', description: 'QA review for incident records.' },
+  { name: 'Keyworker Session', group: 'Keywork', description: 'Structured keyworker session notes and actions.' },
+  { name: 'Medication Prompt Audit', group: 'Medication', description: 'Medication prompt and compliance checks.' },
+  { name: 'Placement Review', group: 'Placement', description: 'Placement objective progress and updates.' },
+  { name: 'Room Safety', group: 'Safety Checks', description: 'Room safety walkthrough checks.' },
+  { name: 'Support Plan Amendment Review', group: 'Care Planning', description: 'Review and approve support plan updates.' },
+  { name: 'Weekly Activity Planner', group: 'Planning', description: 'Weekly activity planning and targets.' },
+  { name: 'Weekly Coshh Check', group: 'Safety Checks', description: 'COSHH safety and stock checks.' },
+  { name: 'Weekly Menu', group: 'Nutrition', description: 'Weekly meals and dietary planning details.' },
+  { name: 'Weekly vehicle check', group: 'Transport', description: 'Vehicle safety and readiness checks.' },
+  { name: 'Waking Night Summary', group: 'Shift Handover', description: 'Night-shift summary and actions.' },
+  { name: 'Young Person Finance AM Check', group: 'Finance', description: 'Morning young person finance check.' },
+  { name: 'Young Person Finance PM Check', group: 'Finance', description: 'Evening young person finance check.' },
+  { name: 'Young Person(s) Meeting', group: 'Meetings', description: 'Young person meeting agenda and outcomes.' },
+  { name: 'Daily PM sharps checks', group: 'Safety Checks', description: 'PM sharps safety check log.' },
+  { name: 'Daily AM sharps check', group: 'Safety Checks', description: 'AM sharps safety check log.' },
+  { name: 'Medication Error Follow-up', group: 'Medication', description: 'Follow-up record for medication errors.' },
+  { name: 'Daily Cash Log Verification', group: 'Finance', description: 'Cash log verification record.' },
+  { name: 'Daily Room Check Sign-off', group: 'Household Checks', description: 'Daily room checks and sign-off.' },
+  { name: 'End Of Shift Handover Validation', group: 'Shift Handover', description: 'Validation checklist for handover quality.' },
+  { name: 'Missing Signature Review', group: 'Compliance', description: 'Review and resolve missing signatures.' },
+  { name: 'Behaviour Support', group: 'Care Planning', description: 'Behaviour support implementation notes.' },
+  { name: 'Personal Care', group: 'Daily Operations', description: 'Personal care and hygiene support notes.' },
+  { name: 'Contact Log', group: 'Communication', description: 'Contact preparation and outcome entries.' },
+  { name: 'Risk Assessment (activity/task)', group: 'Risk', description: 'Activity/task risk assessment details.' },
+  { name: 'Rewards Form', group: 'Rewards', description: 'Reward entries and justifications.' },
+  { name: 'Safe and well check', group: 'Safety Checks', description: 'Safe and well checks for residents.' },
+];
+
+const seedFormTemplates: SeedFormTemplate[] = rawFormTemplateCatalog.map((entry) => ({
+  key: toTemplateKey(entry.name),
+  name: entry.name,
+  group: entry.group,
+  description: entry.description,
+  schemaJson: {
+    version: 1,
+    renderer: 'dynamic',
+    sections: [
+      {
+        key: 'details',
+        title: `${entry.name} Details`,
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', required: true },
+          { key: 'notes', label: 'Notes', type: 'textarea', required: false },
+          { key: 'signature', label: 'Signature', type: 'signature', required: false },
+        ],
+      },
+    ],
+  },
+}));
+
+const formTemplateByName = new Map(
+  seedFormTemplates.map((template) => [template.name.toLowerCase(), template] as const),
+);
+
+function resolveTemplateByName(formName?: string | null) {
+  if (!formName) return null;
+  return formTemplateByName.get(formName.toLowerCase()) ?? null;
+}
+
+function buildWeeklyMenuPayload() {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: 'Weekly Menu',
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'recorded_time', label: 'Recorded Time', type: 'time', value: '09:16' },
+          { key: 'monday_breakfast', label: 'Monday Breakfast', type: 'text', value: 'A bowl of corn flakes and smoothie' },
+          { key: 'monday_lunch', label: 'Monday Lunch', type: 'text', value: 'Chicken wrap with fruit salad' },
+          { key: 'monday_dinner', label: 'Monday Dinner', type: 'text', value: 'Baked salmon, rice, and vegetables' },
+          { key: 'yp_input', label: 'Children/Young People have had an input in the menu', type: 'radio', value: 'No', options: ['Yes', 'No'] },
+          {
+            key: 'yp_input_notes',
+            label: 'If No, Please provide details',
+            type: 'textarea',
+            value: 'Resident requested fewer spicy meals and more familiar comfort food this week.',
+          },
+        ],
+      },
+    ],
+  } as const;
+}
+
+function buildDailyCleaningPayload() {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: 'Daily Cleaning Schedule',
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'time', label: 'Time', type: 'time', value: '08:31' },
+          { key: 'vacuum_lounge', label: 'Vacuum Office, stairs, Lounge and Dining Area', type: 'select', value: 'Yes', options: ['Yes', 'No'] },
+          { key: 'mop_kitchen', label: 'Mop Kitchen, Dining Area and Rear Entry', type: 'select', value: 'Yes', options: ['Yes', 'No'] },
+          { key: 'bathrooms_cleaned', label: 'Clean all bathrooms and mop', type: 'select', value: 'Yes', options: ['Yes', 'No'] },
+          { key: 'dishwasher', label: 'Dish washer empty and clean?', type: 'select', value: 'Yes', options: ['Yes', 'No'] },
+          { key: 'maintenance_issue', label: 'Any issue to be reported as maintenance?', type: 'select', value: 'No', options: ['Yes', 'No'] },
+          { key: 'signature', label: 'Signature', type: 'signature', value: 'data:image/png;base64,seed-signature-cleaning' },
+        ],
+      },
+    ],
+  } as const;
+}
+
+function buildLigaturePayload() {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: 'Daily Ligature Check',
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'time', label: 'Time', type: 'time', value: '08:18' },
+          { key: 'ligature_cutter', label: 'Is there a ligature cutter present within the home?', type: 'radio', value: 'Yes', options: ['Yes', 'No'] },
+          { key: 'hotspots', label: 'Areas checked', type: 'multiselect', value: ['Kitchen', 'Bathrooms', 'Bedrooms'], options: ['Kitchen', 'Bathrooms', 'Bedrooms', 'Garden', 'Office'] },
+          { key: 'follow_up', label: 'Follow-up action required', type: 'textarea', value: 'No additional action required today.' },
+          { key: 'signature', label: 'Signature', type: 'signature', value: 'data:image/png;base64,seed-signature-ligature' },
+        ],
+      },
+    ],
+  } as const;
+}
+
+function buildFinanceCheckPayload(amOrPm: 'AM' | 'PM') {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: `Young Person Finance ${amOrPm} Check`,
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'shift', label: 'Shift', type: 'text', value: amOrPm },
+          { key: 'opening_balance', label: 'Opening Balance', type: 'currency', value: 42.5 },
+          { key: 'transactions', label: 'Transactions', type: 'table', value: [
+            { item: 'Travel top-up', amount: -5.0, recordedBy: 'Gabriel Femi' },
+            { item: 'Pocket money', amount: -10.0, recordedBy: 'Amina Okafor' },
+          ] },
+          { key: 'closing_balance', label: 'Closing Balance', type: 'currency', value: 27.5 },
+          { key: 'variance', label: 'Variance', type: 'currency', value: 0.0 },
+          { key: 'signature', label: 'Signature', type: 'signature', value: `data:image/png;base64,seed-signature-finance-${amOrPm.toLowerCase()}` },
+        ],
+      },
+    ],
+  } as const;
+}
+
+function buildContactFormPayload() {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: 'Contact Form',
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'contact_type', label: 'Contact Type', type: 'select', value: 'Phone', options: ['Phone', 'Face to Face', 'Virtual'] },
+          { key: 'participants', label: 'Participants', type: 'multiselect', value: ['Juadeb Gabriel', 'Social Worker', 'Keyworker'], options: ['Juadeb Gabriel', 'Social Worker', 'Keyworker', 'Parent/Carer'] },
+          {
+            key: 'discussion',
+            label: 'Discussion Summary',
+            type: 'textarea',
+            value: 'Discussed progress in education attendance and agreed a revised evening routine.',
+          },
+          {
+            key: 'actions',
+            label: 'Action Items',
+            type: 'repeater',
+            value: [
+              { owner: 'Gabriel Femi', action: 'Share attendance update by Monday', dueDate: '2026-03-23' },
+              { owner: 'Social Worker', action: 'Confirm next review date', dueDate: '2026-03-25' },
+            ],
+          },
+        ],
+      },
+    ],
+  } as const;
+}
+
+function buildGenericPendingPayload(formName: string, notes: string) {
+  return {
+    approverNames: seedApprovers,
+    sections: [
+      {
+        title: formName,
+        fields: [
+          { key: 'date', label: 'Date', type: 'date', value: '2026-03-21' },
+          { key: 'summary', label: 'Summary', type: 'text', value: formName },
+          { key: 'notes', label: 'Notes', type: 'textarea', value: notes },
+          { key: 'signature', label: 'Signature', type: 'signature', value: 'data:image/png;base64,seed-signature-generic' },
+        ],
+      },
+    ],
+  } as const;
 }
 
 async function main() {
@@ -351,6 +582,27 @@ async function main() {
     },
   });
 
+  for (const template of seedFormTemplates) {
+    await prisma.formTemplate.upsert({
+      where: { key: template.key },
+      update: {
+        name: template.name,
+        group: template.group,
+        description: template.description,
+        schemaJson: template.schemaJson,
+        isActive: true,
+      },
+      create: {
+        key: template.key,
+        name: template.name,
+        group: template.group,
+        description: template.description,
+        schemaJson: template.schemaJson,
+        isActive: true,
+      },
+    });
+  }
+
   // Reset previous showcase seed data for a deterministic rerun.
   await prisma.employeeShift.deleteMany({
     where: {
@@ -457,6 +709,13 @@ async function main() {
 
   const tasksData: Array<{
     tenantId: string;
+    formTemplateKey: string | null;
+    formName: string | null;
+    formGroup: string | null;
+    submissionPayload: Prisma.InputJsonValue | null;
+    submittedAt: Date | null;
+    submittedById: string | null;
+    updatedById: string | null;
     title: string;
     description: string;
     status: TaskStatus;
@@ -475,10 +734,18 @@ async function main() {
   }> = [];
 
   const pushTask = (input: {
+    formTemplateKey?: string | null;
+    formName?: string | null;
+    formGroup?: string | null;
+    submissionPayload?: Prisma.InputJsonValue | null;
+    submittedAt?: Date | null;
+    submittedById?: string | null;
+    updatedById?: string | null;
     title: string;
     details: string;
     dueDate: Date | null;
     createdAt: Date;
+    updatedAt?: Date;
     createdById?: string;
     status?: TaskStatus;
     approvalStatus?: TaskApprovalStatus;
@@ -489,8 +756,17 @@ async function main() {
     approvedAt?: Date | null;
     rejectionReason?: string | null;
   }) => {
+    const template = resolveTemplateByName(input.formName ?? input.formGroup);
+
     tasksData.push({
       tenantId: tenant.id,
+      formTemplateKey: input.formTemplateKey ?? template?.key ?? null,
+      formName: input.formName ?? input.formGroup ?? template?.name ?? null,
+      formGroup: input.formGroup ?? input.formName ?? template?.name ?? null,
+      submissionPayload: input.submissionPayload ?? null,
+      submittedAt: input.submittedAt ?? null,
+      submittedById: input.submittedById ?? null,
+      updatedById: input.updatedById ?? null,
       title: input.title,
       description: `${seedMarker} ${input.details}`,
       status: input.status ?? TaskStatus.pending,
@@ -505,7 +781,7 @@ async function main() {
       youngPersonId: input.youngPersonId ?? ypNorth.id,
       createdById: input.createdById ?? managerUser.id,
       createdAt: input.createdAt,
-      updatedAt: input.createdAt,
+      updatedAt: input.updatedAt ?? input.createdAt,
     });
   };
 
@@ -548,6 +824,8 @@ async function main() {
         title: task.title,
         details:
           `${bucketLabel}. Form Group: ${task.formGroup}. ${task.details}`,
+        formName: task.formGroup,
+        formGroup: task.formGroup,
         dueDate: atDay(now, dayOffset, hour, minute),
         createdAt: atDay(now, -1, 8 + (index % 4), 15),
         assigneeId: task.assigneeId,
@@ -781,37 +1059,258 @@ async function main() {
   pushScheduledBatch(1, 'Due tomorrow', dueTomorrowTasks);
   pushScheduledBatch(2, 'Due next tomorrow', dueNextTomorrowTasks);
 
-  // Pending approval = 13 (tenant-wide queue, seeded from admin so they stay in approval column)
-  const pendingApprovalTitles = [
-    'Daily Cleaning Schedule',
-    'Young Person Finance PM Check',
-    'Young Person Finance AM Check',
-    'Young Person Finance AM Check',
-    'Daily Ligature Check',
-    'Medication Error Follow-up',
-    'End Of Shift Handover Validation',
-    'Missing Signature Review',
-    'Daily Cash Log Verification',
-    'Incident Record Quality Assurance',
-    'Support Plan Amendment Review',
-    'Daily Room Check Sign-off',
-    'Contact Log Approval',
+  // Pending approval = 13 across mixed form types with dynamic payloads for list + detail drill-down.
+  const pendingApprovalSeeds: Array<{
+    title: string;
+    formName: string;
+    details: string;
+    dueDate: Date;
+    createdAt: Date;
+    submittedAt: Date;
+    updatedAt: Date;
+    submittedById: string;
+    updatedById: string;
+    priority: TaskPriority;
+    assigneeId: string;
+    youngPersonId: string | null;
+    payload: Prisma.InputJsonValue;
+  }> = [
+    {
+      title: 'Weekly Menu - 21/03/2026',
+      formName: 'Weekly Menu',
+      details: 'Weekly menu entry submitted for manager approval.',
+      dueDate: atDay(now, 0, 9, 16),
+      createdAt: atDay(now, -1, 16, 18),
+      submittedAt: atDay(now, 0, 16, 18),
+      updatedAt: atDay(now, 0, 16, 18),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: northEmployee.id,
+      youngPersonId: ypNorth.id,
+      payload: buildWeeklyMenuPayload(),
+    },
+    {
+      title: 'Daily Cleaning Schedule - 21/03/2026',
+      formName: 'Daily Cleaning Schedule',
+      details: 'Daily cleaning checklist submitted for review.',
+      dueDate: atDay(now, 0, 8, 31),
+      createdAt: atDay(now, -1, 12, 23),
+      submittedAt: atDay(now, 0, 12, 23),
+      updatedAt: atDay(now, 0, 12, 23),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: southEmployee.id,
+      youngPersonId: null,
+      payload: buildDailyCleaningPayload(),
+    },
+    {
+      title: 'Young Person Finance Check PM 21/03/2026',
+      formName: 'Young Person Finance PM Check',
+      details: 'PM finance entry waiting for approval.',
+      dueDate: atDay(now, 0, 18, 10),
+      createdAt: atDay(now, -1, 10, 45),
+      submittedAt: atDay(now, 0, 10, 45),
+      updatedAt: atDay(now, 0, 12, 5),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: northEmployee.id,
+      youngPersonId: ypSouth.id,
+      payload: buildFinanceCheckPayload('PM'),
+    },
+    {
+      title: 'Young Person Finance Check AM 21/03/2026',
+      formName: 'Young Person Finance AM Check',
+      details: 'AM finance entry waiting for approval.',
+      dueDate: atDay(now, 0, 8, 5),
+      createdAt: atDay(now, -1, 10, 15),
+      submittedAt: atDay(now, 0, 10, 15),
+      updatedAt: atDay(now, 0, 11, 50),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: southEmployee.id,
+      youngPersonId: ypNorth.id,
+      payload: buildFinanceCheckPayload('AM'),
+    },
+    {
+      title: 'Daily Ligature Check 21/03/2026',
+      formName: 'Daily Ligature Check',
+      details: 'Ligature safety check submitted for approval.',
+      dueDate: atDay(now, 0, 8, 18),
+      createdAt: atDay(now, -1, 11, 2),
+      submittedAt: atDay(now, 0, 11, 2),
+      updatedAt: atDay(now, 0, 11, 30),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: northEmployee.id,
+      youngPersonId: null,
+      payload: buildLigaturePayload(),
+    },
+    {
+      title: 'Contact Form - Supervised by social worker',
+      formName: 'Contact Form',
+      details: 'Contact log submitted and awaiting approval.',
+      dueDate: atDay(now, -2, 11, 20),
+      createdAt: atDay(now, -2, 10, 5),
+      submittedAt: atDay(now, -2, 10, 10),
+      updatedAt: atDay(now, 0, 9, 45),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: southEmployee.id,
+      youngPersonId: ypNorth.id,
+      payload: buildContactFormPayload(),
+    },
+    {
+      title: 'Waking Night Summary - 20/03/2026',
+      formName: 'Waking Night Summary',
+      details: 'Night summary submitted for manager review.',
+      dueDate: atDay(now, -1, 6, 30),
+      createdAt: atDay(now, -1, 7, 10),
+      submittedAt: atDay(now, -1, 7, 30),
+      updatedAt: atDay(now, 0, 10, 40),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: northEmployee.id,
+      youngPersonId: ypSouth.id,
+      payload: buildGenericPendingPayload(
+        'Waking Night Summary',
+        'Night observations recorded. No incidents requiring escalation.',
+      ),
+    },
+    {
+      title: 'Daily AM sharps check 21/03/2026',
+      formName: 'Daily AM sharps check',
+      details: 'AM sharps checklist submitted for sign-off.',
+      dueDate: atDay(now, 0, 9, 0),
+      createdAt: atDay(now, -1, 8, 45),
+      submittedAt: atDay(now, 0, 8, 50),
+      updatedAt: atDay(now, 0, 10, 5),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: southEmployee.id,
+      youngPersonId: null,
+      payload: buildGenericPendingPayload(
+        'Daily AM sharps check',
+        'Sharps in designated locations checked and verified as secure.',
+      ),
+    },
+    {
+      title: 'Keyworker Session 20/03/2026',
+      formName: 'Keyworker Session',
+      details: 'Keyworker session entry awaiting approval.',
+      dueDate: atDay(now, -1, 15, 30),
+      createdAt: atDay(now, -1, 15, 40),
+      submittedAt: atDay(now, -1, 15, 41),
+      updatedAt: atDay(now, 0, 9, 5),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: northEmployee.id,
+      youngPersonId: ypSouth.id,
+      payload: buildGenericPendingPayload(
+        'Keyworker Session',
+        'Discussed school anxiety triggers and agreed calming routine.',
+      ),
+    },
+    {
+      title: 'Weekly Coshh Check 15/03/2026',
+      formName: 'Weekly Coshh Check',
+      details: 'COSHH check submitted and awaiting review.',
+      dueDate: atDay(now, -6, 10, 0),
+      createdAt: atDay(now, -6, 10, 10),
+      submittedAt: atDay(now, -6, 10, 20),
+      updatedAt: atDay(now, 0, 8, 20),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: southEmployee.id,
+      youngPersonId: null,
+      payload: buildGenericPendingPayload(
+        'Weekly Coshh Check',
+        'All cleaning agents accounted for and safely locked.',
+      ),
+    },
+    {
+      title: 'End Of Shift Handover Validation',
+      formName: 'End Of Shift Handover Validation',
+      details: 'Shift handover validation submitted for review.',
+      dueDate: atDay(now, 1, 9, 30),
+      createdAt: atDay(now, -1, 21, 0),
+      submittedAt: atDay(now, -1, 21, 5),
+      updatedAt: atDay(now, 0, 13, 0),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: northEmployee.id,
+      youngPersonId: null,
+      payload: buildGenericPendingPayload(
+        'End Of Shift Handover Validation',
+        'Handover confirmed complete with risk and medication updates.',
+      ),
+    },
+    {
+      title: 'Support Plan Amendment Review',
+      formName: 'Support Plan Amendment Review',
+      details: 'Support plan amendment submitted for approval.',
+      dueDate: atDay(now, 2, 14, 0),
+      createdAt: atDay(now, -1, 17, 20),
+      submittedAt: atDay(now, -1, 17, 25),
+      updatedAt: atDay(now, 0, 14, 5),
+      submittedById: staffSouthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.high,
+      assigneeId: southEmployee.id,
+      youngPersonId: ypNorth.id,
+      payload: buildGenericPendingPayload(
+        'Support Plan Amendment Review',
+        'Updated evening routine and de-escalation prompts submitted.',
+      ),
+    },
+    {
+      title: 'Daily Room Check Sign-off',
+      formName: 'Daily Room Check Sign-off',
+      details: 'Room checks completed and submitted for approval.',
+      dueDate: atDay(now, 3, 10, 45),
+      createdAt: atDay(now, -1, 19, 10),
+      submittedAt: atDay(now, -1, 19, 20),
+      updatedAt: atDay(now, 0, 15, 30),
+      submittedById: staffNorthUser.id,
+      updatedById: managerUser.id,
+      priority: TaskPriority.medium,
+      assigneeId: northEmployee.id,
+      youngPersonId: ypSouth.id,
+      payload: buildGenericPendingPayload(
+        'Daily Room Check Sign-off',
+        'Bedrooms and common areas inspected; no hazards identified.',
+      ),
+    },
   ];
 
-  pendingApprovalTitles.forEach((title, index) => {
-    const isToday = index < 5;
+  pendingApprovalSeeds.forEach((task) => {
     pushTask({
-      title,
-      details: isToday
-        ? 'Pending manager approval for today.'
-        : 'Pending manager approval scheduled ahead.',
-      dueDate: isToday ? atDay(now, 0, 14 + index, 0) : atDay(now, index - 3, 10, 30),
-      createdAt: atDay(now, -1, 11, index),
+      title: task.title,
+      details: task.details,
+      formName: task.formName,
+      formGroup: task.formName,
+      submissionPayload: task.payload,
+      dueDate: task.dueDate,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      submittedAt: task.submittedAt,
+      submittedById: task.submittedById,
+      updatedById: task.updatedById,
       createdById: adminUser.id,
       approvalStatus: TaskApprovalStatus.pending_approval,
-      priority: index < 5 ? TaskPriority.high : TaskPriority.medium,
-      assigneeId: index % 2 === 0 ? northEmployee.id : southEmployee.id,
-      youngPersonId: index % 3 === 0 ? null : index % 2 === 0 ? ypSouth.id : ypNorth.id,
+      priority: task.priority,
+      assigneeId: task.assigneeId,
+      youngPersonId: task.youngPersonId,
     });
   });
 
@@ -872,6 +1371,7 @@ async function main() {
     `Seeded showcase timeline from ${seedStart.toISOString().slice(0, 10)} `
     + `with ${eventsData.length} events, ${shiftsData.length} shifts, ${tasksData.length} tasks.`,
   );
+  console.log(`Form templates upserted: ${seedFormTemplates.length}.`);
   console.log(
     `Core entities: tenant(${tenant.id}), admin(${adminUser.id}), manager(${managerUser.id}), homes(${northHome.id}, ${southHome.id}).`,
   );
