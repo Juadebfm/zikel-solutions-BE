@@ -141,7 +141,8 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['Auth'],
       summary: 'Get my permissions',
-      description: 'Returns resolved permissions for the authenticated user role.',
+      description:
+        'Returns effective permissions for the authenticated user in the active tenant context when available (falls back to global role otherwise).',
       response: {
         200: {
           type: 'object',
