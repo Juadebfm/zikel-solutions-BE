@@ -96,7 +96,7 @@ staff → cannot manage anyone
 
 ### 10. MFA Requirement
 **Rule:** `tenant_admin` requires MFA for privileged **mutating** actions. After registration, the new admin will have `mfaRequired: true` in their session. Read-only dashboard/bootstrap access is allowed pre-MFA so the frontend can nudge completion, but write endpoints remain blocked until MFA is verified.
-
+ok
 ### 11. Audit Logging
 **Rule:** Every new action must have an audit log entry. Follow existing patterns:
 - `AuditAction.register` for registration
