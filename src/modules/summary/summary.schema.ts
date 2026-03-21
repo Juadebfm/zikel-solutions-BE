@@ -53,9 +53,10 @@ export const batchApproveBodyJson = {
 
 export const todoItemJson = {
   type: 'object',
-  required: ['id', 'title', 'status', 'approvalStatus', 'priority'],
+  required: ['id', 'taskRef', 'title', 'status', 'approvalStatus', 'priority'],
   properties: {
     id: { type: 'string' },
+    taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
     title: { type: 'string' },
     relation: { type: 'string', nullable: true, description: 'Related young person name or home' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
