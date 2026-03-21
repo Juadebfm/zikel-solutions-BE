@@ -26,6 +26,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "db:archive-probe-accounts": "node scripts/archive-probe-accounts.mjs",
     "typecheck": "tsc --noEmit"
   },
   "prisma": {

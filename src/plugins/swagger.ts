@@ -116,12 +116,8 @@ List endpoints accept \`page\`, \`pageSize\` (max 100), \`sortBy\`, \`sortOrder\
           description: 'Local development',
         },
         {
-          url: 'https://zikel-solutions-staging.fly.dev',
-          description: 'Staging (Fly.io)',
-        },
-        {
-          url: 'https://zikel-solutions.fly.dev',
-          description: 'Production (Fly.io)',
+          url: env.PUBLIC_BASE_URL,
+          description: 'Canonical public deployment',
         },
       ],
       tags: TAGS.map((t) => ({ name: t.name, description: t.description })),

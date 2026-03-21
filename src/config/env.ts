@@ -34,7 +34,7 @@ const envSchema = z.object({
 
   // Public backend URL used for email-safe hosted assets (e.g. logo SVG).
   PUBLIC_BASE_URL: z.url({ error: 'PUBLIC_BASE_URL must be a valid URL' })
-    .default('https://zikel-solutions-be.onrender.com'),
+    .default('https://zikel-solutions-be-kpotja.fly.dev'),
 
   // AI (provider-backed with fallback)
   AI_ENABLED: z
