@@ -266,6 +266,58 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
   };
 }
 
+export async function listOverdueTodos(userId: string, query: SummaryListQuery) {
+  const user = await getUserContext(userId);
+  const scope = buildPersonalTaskScope(user);
+  const skip = (query.page - 1) * query.pageSize;
+  const { start } = getTodayBounds();
+
+  const filters: Prisma.TaskWhereInput[] = [
+    scope,
+    {
+      dueDate: { lt: start },
+      status: { notIn: [TaskStatus.completed, TaskStatus.cancelled] },
+    },
+  ];
+
+  if (query.search) {
+    filters.push({
+      OR: [
+        { title: { contains: query.search, mode: 'insensitive' } },
+        { description: { contains: query.search, mode: 'insensitive' } },
+      ],
+    });
+  }
+
+  const where: Prisma.TaskWhereInput = { AND: filters };
+  const [total, rows] = await Promise.all([
+    prisma.task.count({ where }),
+    prisma.task.findMany({
+      where,
+      orderBy: buildTaskOrderBy(query),
+      skip,
+      take: query.pageSize,
+      include: {
+        youngPerson: {
+          select: { firstName: true, lastName: true },
+        },
+        assignee: {
+          select: {
+            user: {
+              select: { firstName: true, lastName: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+
+  return {
+    data: rows.map((row) => toTodoItem(row)),
+    meta: buildPaginationMeta(total, query.page, query.pageSize),
+  };
+}
+
 export async function listTasksToApprove(userId: string, query: SummaryListQuery) {
   const user = await getUserContext(userId);
   if (!canApprove(user)) {

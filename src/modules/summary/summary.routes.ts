@@ -82,6 +82,44 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
+  // ── GET /summary/overdue-tasks ────────────────────────────────────────────
+  fastify.get('/overdue-tasks', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'My overdue tasks',
+      description:
+        'Returns only personal overdue tasks for the authenticated user (due date before today, excluding completed/cancelled).',
+      querystring: { $ref: 'PaginatedQuery#' },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data', 'meta'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'array', items: todoItemJson },
+            meta: { $ref: 'PaginationMeta#' },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = SummaryListQuerySchema.safeParse(request.query);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { data, meta } = await summaryService.listOverdueTodos(userId, parse.data);
+      return reply.send({ success: true, data, meta });
+    },
+  });
+
   // ── GET /summary/tasks-to-approve ─────────────────────────────────────────
   fastify.get('/tasks-to-approve', {
     schema: {

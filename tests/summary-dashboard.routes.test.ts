@@ -257,6 +257,79 @@ describe('Summary routes', () => {
     });
   });
 
+  it('GET /api/v1/summary/overdue-tasks returns only overdue rows with taskRef', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(2);
+    mockPrisma.task.findMany.mockResolvedValueOnce([
+      {
+        id: 'task_old001',
+        createdAt: new Date('2026-03-19T08:00:00.000Z'),
+        title: 'Overdue Safeguarding Follow-up',
+        status: 'pending',
+        approvalStatus: 'not_required',
+        priority: 'high',
+        dueDate: new Date('2026-03-20T10:00:00.000Z'),
+        youngPerson: {
+          firstName: 'Juadeb',
+          lastName: 'Gabriel',
+        },
+        assignee: {
+          user: {
+            firstName: 'Gabriel',
+            lastName: 'Femi',
+          },
+        },
+      },
+      {
+        id: 'task_old002',
+        createdAt: new Date('2026-03-19T09:00:00.000Z'),
+        title: 'Overdue Incident Documentation',
+        status: 'pending',
+        approvalStatus: 'not_required',
+        priority: 'urgent',
+        dueDate: new Date('2026-03-20T11:00:00.000Z'),
+        youngPerson: {
+          firstName: 'Gabriel',
+          lastName: 'Femi',
+        },
+        assignee: {
+          user: {
+            firstName: 'Gabriel',
+            lastName: 'Femi',
+          },
+        },
+      },
+    ]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/overdue-tasks',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [
+        {
+          id: 'task_old001',
+          taskRef: 'TSK-20260319-OLD001',
+          title: 'Overdue Safeguarding Follow-up',
+        },
+        {
+          id: 'task_old002',
+          taskRef: 'TSK-20260319-OLD002',
+          title: 'Overdue Incident Documentation',
+        },
+      ],
+    });
+  });
+
   it('GET /api/v1/summary/tasks-to-approve includes a friendly taskRef', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
