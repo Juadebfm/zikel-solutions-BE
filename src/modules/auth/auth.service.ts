@@ -2,7 +2,7 @@ import { randomInt } from 'crypto';
 import { Prisma, OtpPurpose, AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { sendOtpEmail } from '../../lib/email.js';
-import { generateRefreshToken, refreshExpiresAt } from '../../lib/tokens.js';
+import { generateRefreshToken, refreshExpiresAt, refreshIdleExpiresAt } from '../../lib/tokens.js';
 import { httpError } from '../../lib/errors.js';
 import { reconcileExpiredBreakGlassAccess } from '../../lib/break-glass.js';
 import {
@@ -192,6 +192,22 @@ function safeUser(user: {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
+}
+
+async function createRefreshTokenForUser(args: {
+  userId: string;
+  absoluteExpiresAt?: Date;
+}) {
+  const refreshToken = generateRefreshToken();
+  await prisma.refreshToken.create({
+    data: {
+      userId: args.userId,
+      token: refreshToken,
+      expiresAt: args.absoluteExpiresAt ?? refreshExpiresAt(),
+      idleExpiresAt: refreshIdleExpiresAt(),
+    },
+  });
+  return refreshToken;
 }
 
 export interface AuthSessionMembership {
@@ -568,10 +584,7 @@ export async function staffActivate(body: StaffActivateBody) {
   // Fetch updated user for session
   const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
 
-  const refreshToken = generateRefreshToken();
-  await prisma.refreshToken.create({
-    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
-  });
+  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
 
   const session = await resolveAuthSessionContext({
     userId: updatedUser.id,
@@ -630,10 +643,7 @@ export async function verifyOtp(body: VerifyOtpBody) {
     });
   }
 
-  const refreshToken = generateRefreshToken();
-  await prisma.refreshToken.create({
-    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
-  });
+  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
 
   await prisma.auditLog.create({
     data: { userId: user.id, action: AuditAction.otp_verified },
@@ -949,10 +959,7 @@ export async function login(body: LoginBody) {
     },
   });
 
-  const refreshToken = generateRefreshToken();
-  await prisma.refreshToken.create({
-    data: { userId: user.id, token: refreshToken, expiresAt: refreshExpiresAt() },
-  });
+  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
 
   await prisma.auditLog.create({
     data: { userId: user.id, action: AuditAction.login },
@@ -1104,7 +1111,13 @@ export async function refreshAccessToken(body: RefreshBody) {
     include: { user: true },
   });
 
-  if (!stored || stored.revokedAt !== null || stored.expiresAt < new Date()) {
+  const now = new Date();
+  if (
+    !stored ||
+    stored.revokedAt !== null ||
+    stored.expiresAt < now ||
+    stored.idleExpiresAt < now
+  ) {
     throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid or expired.');
   }
 
@@ -1113,18 +1126,20 @@ export async function refreshAccessToken(body: RefreshBody) {
   }
 
   const newRawToken = generateRefreshToken();
+  const nextIdleExpiry = refreshIdleExpiresAt();
 
   // Atomic rotation: revoke the old token and create the new one in a single transaction.
   await prisma.$transaction([
     prisma.refreshToken.update({
       where: { id: stored.id },
-      data: { revokedAt: new Date() },
+      data: { revokedAt: now },
     }),
     prisma.refreshToken.create({
       data: {
         userId: stored.userId,
         token: newRawToken,
-        expiresAt: refreshExpiresAt(),
+        expiresAt: stored.expiresAt,
+        idleExpiresAt: nextIdleExpiry,
       },
     }),
   ]);
