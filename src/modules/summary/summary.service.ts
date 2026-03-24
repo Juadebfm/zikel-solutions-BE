@@ -10,7 +10,7 @@ import {
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import type { BatchApproveBody, SummaryListQuery } from './summary.schema.js';
+import type { BatchApproveBody, ReviewTaskBody, SummaryListQuery } from './summary.schema.js';
 
 type UserContext = {
   id: string;
@@ -153,6 +153,56 @@ function toTaskRef(task: { id: string; createdAt: Date }) {
   return `TSK-${year}${month}${day}-${suffix}`;
 }
 
+async function getReviewMap(userId: string, taskIds: string[]) {
+  if (taskIds.length === 0) return new Map<string, Date>();
+  const rows = await prisma.taskReviewEvent.findMany({
+    where: {
+      userId,
+      taskId: { in: taskIds },
+    },
+    select: {
+      taskId: true,
+      reviewedAt: true,
+    },
+  });
+  return new Map(rows.map((row) => [row.taskId, row.reviewedAt]));
+}
+
+async function ensureActorReviewedAllPendingApprovals(user: UserContext) {
+  const pendingRows = await prisma.task.findMany({
+    where: {
+      tenantId: user.tenantId,
+      deletedAt: null,
+      approvalStatus: TaskApprovalStatus.pending_approval,
+    },
+    select: { id: true },
+  });
+
+  if (pendingRows.length === 0) {
+    return;
+  }
+
+  const pendingTaskIds = pendingRows.map((row) => row.id);
+  const reviews = await prisma.taskReviewEvent.findMany({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.id,
+      taskId: { in: pendingTaskIds },
+    },
+    select: { taskId: true },
+  });
+
+  const reviewedTaskIds = new Set(reviews.map((row) => row.taskId));
+  const hasUnreviewed = pendingTaskIds.some((taskId) => !reviewedTaskIds.has(taskId));
+  if (hasUnreviewed) {
+    throw httpError(
+      409,
+      'REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE',
+      'Please review the item(s) before acknowledging.',
+    );
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -223,7 +273,11 @@ type TaskToApproveRow = {
   } | null;
 };
 
-function toTasksToApproveItem(row: TaskToApproveRow, userNameMap: Map<string, string>) {
+function toTasksToApproveItem(
+  row: TaskToApproveRow,
+  userNameMap: Map<string, string>,
+  reviewMap: Map<string, Date>,
+) {
   const submittedBy =
     (row.submittedById ? userNameMap.get(row.submittedById) : null)
     ?? (row.createdById ? userNameMap.get(row.createdById) : null)
@@ -232,6 +286,7 @@ function toTasksToApproveItem(row: TaskToApproveRow, userNameMap: Map<string, st
     (row.updatedById ? userNameMap.get(row.updatedById) : null)
     ?? submittedBy
     ?? null;
+  const reviewedAt = reviewMap.get(row.id) ?? null;
 
   return {
     id: row.id,
@@ -250,6 +305,8 @@ function toTasksToApproveItem(row: TaskToApproveRow, userNameMap: Map<string, st
     updatedOn: row.updatedAt,
     updatedBy,
     approvers: parseApprovers(row.submissionPayload),
+    reviewedByCurrentUser: reviewedAt !== null,
+    reviewedAt,
   };
 }
 
@@ -530,10 +587,14 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
       rows.flatMap((row) => [row.submittedById, row.updatedById, row.createdById]).filter((id): id is string => Boolean(id)),
     ),
   ];
-  const userNameMap = await getUserNameMap(userIds);
+  const taskIds = rows.map((row) => row.id);
+  const [userNameMap, reviewMap] = await Promise.all([
+    getUserNameMap(userIds),
+    getReviewMap(user.id, taskIds),
+  ]);
 
   return {
-    data: rows.map((row) => toTasksToApproveItem(row as TaskToApproveRow, userNameMap)),
+    data: rows.map((row) => toTasksToApproveItem(row as TaskToApproveRow, userNameMap, reviewMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
     labels: PENDING_APPROVAL_LABELS,
   };
@@ -578,7 +639,17 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
   const userIds = [
     ...new Set([row.submittedById, row.updatedById, row.createdById].filter((id): id is string => Boolean(id))),
   ];
-  const userNameMap = await getUserNameMap(userIds);
+  const [userNameMap, reviewRow] = await Promise.all([
+    getUserNameMap(userIds),
+    prisma.taskReviewEvent.findFirst({
+      where: {
+        tenantId: user.tenantId,
+        taskId: row.id,
+        userId: user.id,
+      },
+      select: { reviewedAt: true },
+    }),
+  ]);
   const submittedBy =
     (row.submittedById ? userNameMap.get(row.submittedById) : null)
     ?? (row.createdById ? userNameMap.get(row.createdById) : null)
@@ -592,6 +663,7 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
     ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
     : null;
   const homeOrSchool = row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null;
+  const reviewedAt = reviewRow?.reviewedAt ?? null;
 
   return {
     id: row.id,
@@ -616,6 +688,72 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
     labels: PENDING_APPROVAL_LABELS,
     // Keep per-form field labels/value structure as submitted (dynamic, no hardcoded rewrite).
     renderPayload: row.submissionPayload ?? { sections: [] },
+    reviewedByCurrentUser: reviewedAt !== null,
+    reviewedAt,
+  };
+}
+
+export async function recordTaskReviewEvent(userId: string, taskId: string, body: ReviewTaskBody) {
+  const user = await getUserContext(userId);
+  if (!canApprove(user)) {
+    throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
+  }
+
+  const existing = await prisma.task.findFirst({
+    where: {
+      id: taskId,
+      tenantId: user.tenantId,
+      deletedAt: null,
+      approvalStatus: TaskApprovalStatus.pending_approval,
+    },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  const reviewedAt = new Date();
+  const review = await prisma.taskReviewEvent.upsert({
+    where: {
+      taskId_userId: {
+        taskId,
+        userId: user.id,
+      },
+    },
+    update: {
+      action: body.action,
+      reviewedAt,
+    },
+    create: {
+      tenantId: user.tenantId,
+      taskId,
+      userId: user.id,
+      action: body.action,
+      reviewedAt,
+    },
+    select: {
+      action: true,
+      reviewedAt: true,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: user.tenantId,
+      userId: user.id,
+      action: AuditAction.record_accessed,
+      entityType: 'task_approval_review',
+      entityId: taskId,
+      metadata: { action: body.action },
+    },
+  });
+
+  return {
+    taskId,
+    reviewedByCurrentUser: true as const,
+    reviewedAt: review.reviewedAt,
+    action: review.action,
   };
 }
 
@@ -634,6 +772,8 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
   if (existing.approvalStatus !== TaskApprovalStatus.pending_approval) {
     throw httpError(409, 'INVALID_TASK_STATE', 'Task is not in pending_approval state.');
   }
+
+  await ensureActorReviewedAllPendingApprovals(user);
 
   const updated = await prisma.task.update({
     where: { id: taskId },
@@ -663,6 +803,10 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
   const user = await getUserContext(userId);
   if (!canApprove(user)) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
+  }
+
+  if (body.action === 'approve') {
+    await ensureActorReviewedAllPendingApprovals(user);
   }
 
   const tasks = await prisma.task.findMany({

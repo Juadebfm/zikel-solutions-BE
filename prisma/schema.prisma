@@ -199,6 +199,7 @@ model User {
   employees      Employee[]
   widgets        Widget[]
   announcementReads AnnouncementRead[]
+  taskReviewEvents TaskReviewEvent[]
 
   @@index([email])
   @@index([role])
@@ -231,6 +232,7 @@ model Tenant {
   widgets     Widget[]
   auditLogs   AuditLog[]
   securityAlertDeliveries SecurityAlertDelivery[]
+  taskReviewEvents TaskReviewEvent[]
 
   @@index([name])
   @@index([isActive])
@@ -305,6 +307,7 @@ model RefreshToken {
   userId    String
   token     String    @unique
   expiresAt DateTime
+  idleExpiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime  @default(now())
 
@@ -312,6 +315,7 @@ model RefreshToken {
 
   @@index([userId])
   @@index([token])
+  @@index([idleExpiresAt])
 }
 
 model OtpCode {
@@ -533,6 +537,7 @@ model Task {
   assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
   approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
   youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
+  reviewEvents     TaskReviewEvent[]
 
   @@index([tenantId])
   @@index([formTemplateKey])
@@ -545,6 +550,25 @@ model Task {
   @@index([submittedById])
   @@index([updatedById])
   @@index([deletedAt])
+}
+
+model TaskReviewEvent {
+  id         String   @id @default(cuid())
+  tenantId   String
+  taskId     String
+  userId     String
+  action     String
+  reviewedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([tenantId, userId, reviewedAt])
+  @@index([taskId])
 }
 
 // ─── Announcements ────────────────────────────────────────────────────────────

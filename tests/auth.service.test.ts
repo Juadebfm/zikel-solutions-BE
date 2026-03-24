@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@prisma/client';
 
-const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.hoisted(() => ({
+const {
+  mockPrisma,
+  sendOtpEmail,
+  generateRefreshToken,
+  refreshExpiresAt,
+  refreshIdleExpiresAt,
+} = vi.hoisted(() => ({
   mockPrisma: {
     user: {
       findUnique: vi.fn(),
@@ -38,11 +44,16 @@ const { mockPrisma, sendOtpEmail, generateRefreshToken, refreshExpiresAt } = vi.
   sendOtpEmail: vi.fn(),
   generateRefreshToken: vi.fn(() => 'refresh-token'),
   refreshExpiresAt: vi.fn(() => new Date('2030-01-01T00:00:00.000Z')),
+  refreshIdleExpiresAt: vi.fn(() => new Date('2030-01-01T00:15:00.000Z')),
 }));
 
 vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 vi.mock('../src/lib/email.js', () => ({ sendOtpEmail }));
-vi.mock('../src/lib/tokens.js', () => ({ generateRefreshToken, refreshExpiresAt }));
+vi.mock('../src/lib/tokens.js', () => ({
+  generateRefreshToken,
+  refreshExpiresAt,
+  refreshIdleExpiresAt,
+}));
 vi.mock('../src/modules/tenants/tenants.service.js', () => ({
   resolveInviteLinkByCode: vi.fn(),
 }));

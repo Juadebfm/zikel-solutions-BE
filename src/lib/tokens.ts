@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import { env } from '../config/env.js';
 
 /** Parses a duration string like "7d", "15m", "1h", "30s" to milliseconds. */
-function parseExpiryMs(expiry: string): number {
+export function parseExpiryMs(expiry: string): number {
   const units: Record<string, number> = {
     s: 1_000,
     m: 60 * 1_000,
@@ -22,4 +22,9 @@ export function generateRefreshToken(): string {
 /** Returns the Date at which a newly issued refresh token should expire. */
 export function refreshExpiresAt(): Date {
   return new Date(Date.now() + parseExpiryMs(env.JWT_REFRESH_EXPIRY));
+}
+
+/** Returns the Date at which refresh inactivity timeout should expire. */
+export function refreshIdleExpiresAt(): Date {
+  return new Date(Date.now() + parseExpiryMs(env.SESSION_IDLE_TIMEOUT));
 }

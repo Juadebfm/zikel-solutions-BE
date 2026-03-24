@@ -390,7 +390,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       tags: ['Auth'],
       summary: 'Login with email and password',
       description:
-        'Authenticates the user. On success returns an access token (15 min) and refresh token (7 days). ' +
+        'Authenticates the user. On success returns an access token (5 min) and refresh token (12 hours absolute, 15 minutes inactivity). ' +
         'Enforces account lockout after repeated failed attempts.',
       security: [],
       body: loginBodyJson,
@@ -529,7 +529,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Rotate refresh token and issue a new access token',
       description:
         'Validates the provided refresh token. On success, atomically revokes the old token and ' +
-        'issues a new access token + rotated refresh token. ' +
+        'issues a new access token + rotated refresh token while preserving the original absolute session expiry. ' +
         'Implements single-use token rotation — a token can only be used once. ' +
         'This endpoint does NOT require an Authorization header.',
       security: [],

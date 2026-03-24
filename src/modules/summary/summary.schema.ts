@@ -42,6 +42,10 @@ export const BatchApproveBodySchema = z.object({
   rejectionReason: z.string().max(500).optional(),
 });
 
+export const ReviewTaskBodySchema = z.object({
+  action: z.enum(['view_detail', 'open_document', 'open_task']).default('view_detail'),
+});
+
 // ─── JSON Schemas ─────────────────────────────────────────────────────────────
 
 export const approveTaskBodyJson = {
@@ -65,6 +69,19 @@ export const batchApproveBodyJson = {
     },
     action: { type: 'string', enum: ['approve', 'reject'] },
     rejectionReason: { type: 'string', maxLength: 500 },
+  },
+} as const;
+
+export const reviewTaskBodyJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['view_detail', 'open_document', 'open_task'],
+      default: 'view_detail',
+      description: 'How the actor reviewed the task prior to acknowledgement.',
+    },
   },
 } as const;
 
@@ -125,6 +142,8 @@ export const tasksToApproveItemJson = {
     'submittedOn',
     'updatedOn',
     'approvers',
+    'reviewedByCurrentUser',
+    'reviewedAt',
   ],
   properties: {
     id: { type: 'string' },
@@ -144,6 +163,8 @@ export const tasksToApproveItemJson = {
     updatedOn: { type: 'string', format: 'date-time' },
     updatedBy: { type: 'string', nullable: true },
     approvers: { type: 'array', items: { type: 'string' } },
+    reviewedByCurrentUser: { type: 'boolean' },
+    reviewedAt: { type: 'string', format: 'date-time', nullable: true },
   },
 } as const;
 
@@ -196,6 +217,8 @@ export const taskToApproveDetailJson = {
     'meta',
     'labels',
     'renderPayload',
+    'reviewedByCurrentUser',
+    'reviewedAt',
   ],
   properties: {
     id: { type: 'string' },
@@ -228,6 +251,8 @@ export const taskToApproveDetailJson = {
     renderPayload: {
       description: 'Dynamic submitted form payload for rendering the form detail page.',
     },
+    reviewedByCurrentUser: { type: 'boolean' },
+    reviewedAt: { type: 'string', format: 'date-time', nullable: true },
   },
 } as const;
 
@@ -304,3 +329,4 @@ export const provisionsResponseExample = [
 export type SummaryListQuery = z.infer<typeof SummaryListQuerySchema>;
 export type ApproveTaskBody = z.infer<typeof ApproveTaskBodySchema>;
 export type BatchApproveBody = z.infer<typeof BatchApproveBodySchema>;
+export type ReviewTaskBody = z.infer<typeof ReviewTaskBodySchema>;

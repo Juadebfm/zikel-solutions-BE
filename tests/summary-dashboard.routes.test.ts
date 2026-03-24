@@ -23,6 +23,11 @@ const { mockPrisma } = vi.hoisted(() => ({
       findUnique: vi.fn(),
       update: vi.fn(),
     },
+    taskReviewEvent: {
+      findMany: vi.fn(),
+      findFirst: vi.fn(),
+      upsert: vi.fn(),
+    },
     announcement: {
       count: vi.fn(),
     },
@@ -72,6 +77,8 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.user.findMany.mockResolvedValue([]);
+  mockPrisma.taskReviewEvent.findMany.mockResolvedValue([]);
+  mockPrisma.taskReviewEvent.findFirst.mockResolvedValue(null);
 });
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
@@ -472,6 +479,8 @@ describe('Summary routes', () => {
           submittedBy: 'Ruhman Akoto',
           updatedBy: 'Izu Obani',
           approvers: ['Sonia Akoto', 'Izu Obani'],
+          reviewedByCurrentUser: false,
+          reviewedAt: null,
         },
       ],
     });
@@ -599,6 +608,8 @@ describe('Summary routes', () => {
           taskDate: 'Due Date',
           pendingApprovalStatus: 'Awaiting Approval',
         },
+        reviewedByCurrentUser: false,
+        reviewedAt: null,
         renderPayload: {
           sections: [
             {
@@ -606,6 +617,133 @@ describe('Summary routes', () => {
             },
           ],
         },
+      },
+    });
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/:id/review-events records review state', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_1494',
+      approvalStatus: 'pending_approval',
+    });
+    mockPrisma.taskReviewEvent.upsert.mockResolvedValueOnce({
+      action: 'open_document',
+      reviewedAt: new Date('2026-03-23T10:01:00.000Z'),
+    });
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/task_1494/review-events',
+      headers: authHeader(),
+      payload: { action: 'open_document' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        taskId: 'task_1494',
+        reviewedByCurrentUser: true,
+        action: 'open_document',
+      },
+    });
+    expect(mockPrisma.taskReviewEvent.upsert).toHaveBeenCalledWith({
+      where: {
+        taskId_userId: {
+          taskId: 'task_1494',
+          userId: 'user_1',
+        },
+      },
+      update: {
+        action: 'open_document',
+        reviewedAt: expect.any(Date),
+      },
+      create: {
+        tenantId: 'tenant_1',
+        taskId: 'task_1494',
+        userId: 'user_1',
+        action: 'open_document',
+        reviewedAt: expect.any(Date),
+      },
+      select: {
+        action: true,
+        reviewedAt: true,
+      },
+    });
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/:id/approve blocks acknowledge when any popup item is unreviewed', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_1',
+      approvalStatus: 'pending_approval',
+    });
+    mockPrisma.task.findMany.mockResolvedValueOnce([
+      { id: 'task_1' },
+      { id: 'task_2' },
+    ]);
+    mockPrisma.taskReviewEvent.findMany.mockResolvedValueOnce([
+      { taskId: 'task_1' },
+    ]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/task_1/approve',
+      headers: authHeader(),
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: {
+        code: 'REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE',
+        message: 'Please review the item(s) before acknowledging.',
+      },
+    });
+    expect(mockPrisma.task.update).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/process-batch blocks approve submit when popup has unreviewed items', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findMany.mockResolvedValueOnce([
+      { id: 'task_1' },
+      { id: 'task_2' },
+    ]);
+    mockPrisma.taskReviewEvent.findMany.mockResolvedValueOnce([
+      { taskId: 'task_1' },
+    ]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/process-batch',
+      headers: authHeader(),
+      payload: { taskIds: ['task_1'], action: 'approve' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: {
+        code: 'REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE',
+        message: 'Please review the item(s) before acknowledging.',
       },
     });
   });

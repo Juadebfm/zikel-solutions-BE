@@ -5,9 +5,11 @@ import * as summaryService from './summary.service.js';
 import {
   ApproveTaskBodySchema,
   BatchApproveBodySchema,
+  ReviewTaskBodySchema,
   SummaryListQuerySchema,
   approveTaskBodyJson,
   batchApproveBodyJson,
+  reviewTaskBodyJson,
   tasksToApproveItemJson,
   taskToApproveDetailJson,
   tasksToApproveQueryJson,
@@ -195,6 +197,57 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
+  // ── POST /summary/tasks-to-approve/:id/review-events ──────────────────────
+  fastify.post('/tasks-to-approve/:id/review-events', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Record that actor reviewed an item before acknowledgement',
+      description:
+        'Persists a review event for the current user on the target pending-approval task. ' +
+        'Frontend should call this when user opens detail, downloads document, or navigates into task content.',
+      params: { $ref: 'CuidParam#' },
+      body: reviewTaskBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['taskId', 'reviewedByCurrentUser', 'reviewedAt', 'action'],
+              properties: {
+                taskId: { type: 'string' },
+                reviewedByCurrentUser: { type: 'boolean', enum: [true] },
+                reviewedAt: { type: 'string', format: 'date-time' },
+                action: { type: 'string', enum: ['view_detail', 'open_document', 'open_task'] },
+              },
+            },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        404: { description: 'Task not found.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ReviewTaskBodySchema.safeParse(request.body ?? {});
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await summaryService.recordTaskReviewEvent(userId, id, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
   // ── POST /summary/tasks-to-approve/process-batch ──────────────────────────
   fastify.post('/tasks-to-approve/process-batch', {
     schema: {
@@ -232,6 +285,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         },
         401: { $ref: 'ApiError#' },
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        409: { description: 'Review is required before acknowledge submit.', $ref: 'ApiError#' },
         422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },
@@ -274,7 +328,11 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
         401: { $ref: 'ApiError#' },
         403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
         404: { description: 'Task not found.', $ref: 'ApiError#' },
-        409: { description: 'Task is not in pending_approval state.', $ref: 'ApiError#' },
+        409: {
+          description:
+            'Task is not in pending_approval state, or review is required before acknowledgement.',
+          $ref: 'ApiError#',
+        },
         422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },
