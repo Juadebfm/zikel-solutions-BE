@@ -83,7 +83,7 @@ Admin creates a staff account from the Users page. Staff receives an activation 
 **Admin flow (FE):**
 1. Admin navigates to Users → Add Staff.
 2. Fills in: firstName, lastName, email, role (staff or sub_admin).
-3. `POST /api/v1/tenants/:tenantId/staff`
+3. `POST /api/v1/tenants/:id/staff`
 4. Staff receives activation email with 6-digit code.
 5. Admin sees the new staff in the members list with status `invited`.
 
@@ -113,11 +113,11 @@ Admin generates a reusable link. Staff registers via the link. Admin approves.
 
 **Admin flow (FE):**
 1. Admin navigates to Users → Invite Link.
-2. `POST /api/v1/tenants/:tenantId/invite-link` with optional `{ defaultRole, expiresInHours }`.
+2. `POST /api/v1/tenants/:id/invite-link` with optional `{ defaultRole, expiresInHours }`.
 3. Gets back a link code. FE constructs the URL: `https://app.zikel.com/join/<code>`.
 4. Admin shares link however they want (WhatsApp, print QR, email blast).
-5. Admin can list links: `GET /api/v1/tenants/:tenantId/invite-links`.
-6. Admin can revoke: `PATCH /api/v1/tenants/:tenantId/invite-links/:linkId/revoke`.
+5. Admin can list links: `GET /api/v1/tenants/:id/invite-links`.
+6. Admin can revoke: `PATCH /api/v1/tenants/:id/invite-links/:linkId/revoke`.
 
 **Staff self-registration flow (FE):**
 1. Staff clicks invite link → FE extracts the code from URL.
@@ -130,7 +130,7 @@ Admin generates a reusable link. Staff registers via the link. Admin approves.
 
 **Admin approval flow (FE):**
 1. Admin sees pending members in Users page (status = `pending_approval`).
-2. Admin approves: `PATCH /api/v1/tenants/:tenantId/memberships/:membershipId` with `{ "status": "active" }`.
+2. Admin approves: `PATCH /api/v1/tenants/:id/memberships/:membershipId` with `{ "status": "active" }`.
 3. Staff can now login normally.
 
 **Validate invite link response:**
@@ -718,6 +718,8 @@ Based on the new flows, FE needs these pages/screens:
 - **Tenant switcher** — shown when user has multiple memberships
 
 ## 11. FE Delivery Checklist
+
+This checklist is FE-owned. Backend endpoints for these flows are already present in this repository.
 
 - [ ] Registration form includes `organizationName` field
 - [ ] No "create organization" step after OTP verify (org is created during registration)

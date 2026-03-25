@@ -1,7 +1,7 @@
 # Acknowledgements Workflow Spec
 
-Last verified: 2026-03-23  
-Status: Separate workstream from FE RBAC playbook
+Last verified: 2026-03-24  
+Status: Backend enforcement implemented; FE RBAC playbook remains a separate workstream
 
 ## Purpose
 
@@ -18,7 +18,7 @@ This spec covers:
 
 - frontend behavior and validation
 - current backend integration path
-- backend enhancements required for strict enforcement
+- current backend-enforced review gate behavior
 
 This spec does not change the RBAC reference document.
 
@@ -68,6 +68,7 @@ Note: there is no dedicated `acknowledged` enum in current DB schema.
 
 - List pending approvals: `GET /api/v1/summary/tasks-to-approve`
 - Get item detail: `GET /api/v1/summary/tasks-to-approve/:id`
+- Record review evidence: `POST /api/v1/summary/tasks-to-approve/:id/review-events`
 - Single approve: `POST /api/v1/summary/tasks-to-approve/:id/approve`
 - Batch approve/reject: `POST /api/v1/summary/tasks-to-approve/process-batch`
 
@@ -123,49 +124,31 @@ Validation message when blocked:
 
 ## Enforcement Strategy
 
-## Phase 1 (immediate, no backend change)
+Current backend enforcement:
 
-- Enforce review-before-acknowledge in FE only.
-- Use existing approve endpoints.
-- Risk: a malicious client could bypass FE gating.
-
-## Phase 2 (recommended, strict backend enforcement)
-
-Add server-side proof of review so approve endpoints can enforce prerequisite.
-
-Recommended additions:
-
-1. Persist review events tied to task + user + timestamp + action type.
-2. Add endpoint to record review event:
-   - `POST /api/v1/summary/tasks-to-approve/:id/review-events`
-3. Add item fields in list/detail for current user:
+1. Review events are persisted per task + user via `POST /api/v1/summary/tasks-to-approve/:id/review-events`.
+2. List/detail payloads expose current-user review status:
    - `reviewedByCurrentUser: boolean`
    - `reviewedAt: string | null`
-4. Update approve endpoints to reject when not reviewed by actor:
-   - error code: `REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`
-5. Enforce global review gate server-side:
-   - reject approve/batch approve if any item in the actor's popup dataset is still unreviewed.
-6. Update batch response failed reasons for review-gate violations.
+3. Approve and batch-approve enforce a server-side review gate.
+4. If review prerequisite is not met, backend returns:
+   - `409 REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`
 
 ## Error Handling Contract
 
 - `403 FORBIDDEN`: user is not approver role
 - `403 MFA_REQUIRED`: complete MFA then retry submit
 - `409 INVALID_TASK_STATE`: item no longer pending
+- `409 REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`: review prerequisite not satisfied
 - `422 VALIDATION_ERROR`: bad payload
-- `REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE` (phase 2 target): must review first
 
 ## Audit Expectations
 
 Current audit coverage:
 
+- review-event recording writes `task_approval_review`
 - single approve writes `task_approval`
 - batch approve writes `task_approval_batch`
-
-Phase 2 extension:
-
-- add explicit review-event audit trail
-- include actor, timestamp, review action type, and tenant context
 
 ## Acceptance Criteria
 

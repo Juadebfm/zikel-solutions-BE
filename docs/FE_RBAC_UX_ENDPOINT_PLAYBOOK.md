@@ -1,6 +1,6 @@
 # FE RBAC, UX, and Endpoint Playbook
 
-Last verified: 2026-03-23  
+Last verified: 2026-03-24  
 Backend source: `src/routes`, `src/modules/*`, middleware, Prisma schema, and shared schemas.
 
 ## Purpose
@@ -267,6 +267,7 @@ Summary:
 - `GET /api/v1/summary/provisions`
 - `GET /api/v1/summary/tasks-to-approve` (approver roles only)
 - `GET /api/v1/summary/tasks-to-approve/:id` (approver roles only)
+- `POST /api/v1/summary/tasks-to-approve/:id/review-events` (approver roles only)
 - `POST /api/v1/summary/tasks-to-approve/process-batch` (approver roles only)
 - `POST /api/v1/summary/tasks-to-approve/:id/approve` (approver roles only)
 
@@ -328,7 +329,8 @@ Common error codes FE must branch on:
    - staff provisioning
    - invite links
 5. Complete approvals workspace:
-   - pending queue list, detail, single approve, batch process
+   - pending queue list, detail, review-event capture, single approve, batch process
+   - respect backend review gate (`REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`) before approve/batch approve
    - dynamic form rendering from `renderPayload`
 
 ## 8) Reference Files
