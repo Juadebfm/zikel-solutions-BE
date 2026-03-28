@@ -26,6 +26,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:izu-rich": "node scripts/seed-izu-rich-data.mjs",
     "db:archive-probe-accounts": "node scripts/archive-probe-accounts.mjs",
     "typecheck": "tsc --noEmit"
   },
@@ -43,6 +44,8 @@
   },
   "homepage": "https://github.com/Juadebfm/zikel-solutions-BE#readme",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1018.0",
+    "@aws-sdk/s3-request-presigner": "^3.1018.0",
     "@fastify/cors": "^11.2.0",
     "@fastify/helmet": "^13.0.2",
     "@fastify/jwt": "^10.0.0",

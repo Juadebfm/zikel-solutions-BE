@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import type { CreateHomeBody, ListHomesQuery, UpdateHomeBody } from './homes.schema.js';
 
 function mapHome(home: {
@@ -11,10 +12,13 @@ function mapHome(home: {
   name: string;
   address: string | null;
   capacity: number | null;
+  avatarFileId: string | null;
+  avatarUrl: string | null;
+  details: Prisma.JsonValue | null;
   isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
-  careGroup: { id: string; name: string } | null;
+  careGroup?: { id: string; name: string } | null;
 }) {
   return {
     id: home.id,
@@ -23,6 +27,9 @@ function mapHome(home: {
     name: home.name,
     address: home.address,
     capacity: home.capacity,
+    avatarFileId: home.avatarFileId,
+    avatarUrl: home.avatarUrl,
+    details: home.details,
     isActive: home.isActive,
     createdAt: home.createdAt,
     updatedAt: home.updatedAt,
@@ -122,6 +129,9 @@ export async function getHome(actorId: string, id: string) {
 export async function createHome(actorId: string, body: CreateHomeBody) {
   const tenant = await requireTenantContext(actorId);
   await ensureCareGroupExists(body.careGroupId, tenant.tenantId);
+  if (body.avatarFileId) {
+    await assertUploadedFilesBelongToTenant(tenant.tenantId, [body.avatarFileId]);
+  }
 
   const home = await prisma.home.create({
     data: {
@@ -130,6 +140,9 @@ export async function createHome(actorId: string, body: CreateHomeBody) {
       name: body.name,
       address: body.address ?? null,
       capacity: body.capacity ?? null,
+      ...(body.avatarFileId ? { avatarFileId: body.avatarFileId } : {}),
+      avatarUrl: body.avatarUrl ?? null,
+      details: (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
     },
     include: { careGroup: { select: { id: true, name: true } } },
   });
@@ -160,12 +173,24 @@ export async function updateHome(actorId: string, id: string, body: UpdateHomeBo
   if (body.careGroupId !== undefined) {
     await ensureCareGroupExists(body.careGroupId, tenant.tenantId);
   }
+  if (body.avatarFileId) {
+    await assertUploadedFilesBelongToTenant(tenant.tenantId, [body.avatarFileId]);
+  }
 
   const updateData: Prisma.HomeUpdateInput = {};
   if (body.careGroupId !== undefined) updateData.careGroup = { connect: { id: body.careGroupId } };
   if (body.name !== undefined) updateData.name = body.name;
   if (body.address !== undefined) updateData.address = body.address;
   if (body.capacity !== undefined) updateData.capacity = body.capacity;
+  if (body.avatarFileId !== undefined) {
+    updateData.avatarFile = body.avatarFileId === null
+      ? { disconnect: true }
+      : { connect: { id: body.avatarFileId } };
+  }
+  if (body.avatarUrl !== undefined) updateData.avatarUrl = body.avatarUrl;
+  if (body.details !== undefined) {
+    updateData.details = (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
+  }
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
   const updated = await prisma.home.update({

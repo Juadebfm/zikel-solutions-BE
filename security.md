@@ -103,3 +103,11 @@ Review method used static inspection of all route modules, auth middleware usage
 ## Priority Remediation Plan
 
 1. Optional hardening implemented: webhook requests now require `HMAC-SHA256` signature + timestamp validation.
+
+
+
+
+
+
+flyctl secrets set RESEND_API_KEY=<REDACTED> RESEND_FROM_EMAIL=noreply@mail.zikelsolutions.com -a zikel-solutions-be-kpotja
+flyctl deploy -a zikel-solutions-be-kpotja

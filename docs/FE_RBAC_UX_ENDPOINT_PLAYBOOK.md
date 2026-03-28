@@ -266,10 +266,20 @@ Summary:
 - `GET /api/v1/summary/overdue-tasks`
 - `GET /api/v1/summary/provisions`
 - `GET /api/v1/summary/tasks-to-approve` (approver roles only)
+  - default `scope=all`: full pending queue (including reviewed/non-overdue)
+  - `scope=gate`: unreviewed overdue items (dashboard-blocking set)
+  - `scope=popup`: unreviewed upcoming/undated items (non-blocking reminders)
 - `GET /api/v1/summary/tasks-to-approve/:id` (approver roles only)
 - `POST /api/v1/summary/tasks-to-approve/:id/review-events` (approver roles only)
 - `POST /api/v1/summary/tasks-to-approve/process-batch` (approver roles only)
 - `POST /api/v1/summary/tasks-to-approve/:id/approve` (approver roles only)
+  - approve endpoints now accept optional `signatureFileId` for acknowledgement evidence
+
+Uploads (`/api/v1/uploads`):
+
+- `POST /api/v1/uploads/sessions` (create presigned PUT session)
+- `POST /api/v1/uploads/:id/complete` (finalize upload)
+- `GET /api/v1/uploads/:id/download-url` (signed read URL)
 
 Dashboard:
 
@@ -330,8 +340,16 @@ Common error codes FE must branch on:
    - invite links
 5. Complete approvals workspace:
    - pending queue list, detail, review-event capture, single approve, batch process
+   - signature upload path:
+     - create upload session
+     - PUT file to presigned URL
+     - complete upload
+     - pass `signatureFileId` to `approve` or `process-batch`
    - respect backend review gate (`REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`) before approve/batch approve
    - dynamic form rendering from `renderPayload`
+   - if present, render `renderPayload.referenceLinks[]` (document/task instruction links)
+   - route by `category` first (`document` download flow, `task log` in-app navigation)
+   - show reviewer name from `reviewedByCurrentUserName`
 
 ## 8) Reference Files
 

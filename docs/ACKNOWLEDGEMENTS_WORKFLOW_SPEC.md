@@ -66,7 +66,9 @@ Note: there is no dedicated `acknowledged` enum in current DB schema.
 
 ## Current Backend Endpoints (usable now)
 
-- List pending approvals: `GET /api/v1/summary/tasks-to-approve`
+- List pending approvals (overdue blocking set): `GET /api/v1/summary/tasks-to-approve?scope=gate`
+- List non-blocking non-overdue reminders: `GET /api/v1/summary/tasks-to-approve?scope=popup`
+- Full pending queue (admin table views only): `GET /api/v1/summary/tasks-to-approve?scope=all`
 - Get item detail: `GET /api/v1/summary/tasks-to-approve/:id`
 - Record review evidence: `POST /api/v1/summary/tasks-to-approve/:id/review-events`
 - Single approve: `POST /api/v1/summary/tasks-to-approve/:id/approve`
@@ -77,7 +79,17 @@ Batch request for acknowledge:
 ```json
 {
   "taskIds": ["task_1", "task_2"],
-  "action": "approve"
+  "action": "approve",
+  "signatureFileId": "file_sig_123"
+}
+```
+
+Single acknowledge request now supports optional signature evidence:
+
+```json
+{
+  "comment": "Approved",
+  "signatureFileId": "file_sig_123"
 }
 ```
 
@@ -119,7 +131,7 @@ Validation message when blocked:
    - submit still blocked until all popup rows are reviewed.
 8. If pagination is used, review state must be tracked across pages; global gate is satisfied only when all rows across the popup dataset are reviewed.
 9. Use batch endpoint for submit to support one-click acknowledge.
-10. Refresh pending list and stats after submit.
+10. Refresh pending list (`scope=gate`) and stats after submit.
 11. Handle `MFA_REQUIRED` retry flow if applicable.
 
 ## Enforcement Strategy
@@ -130,6 +142,8 @@ Current backend enforcement:
 2. List/detail payloads expose current-user review status:
    - `reviewedByCurrentUser: boolean`
    - `reviewedAt: string | null`
+   - `reviewedByCurrentUserName: string | null`
+   - `category: "document" | "task log"`
 3. Approve and batch-approve enforce a server-side review gate.
 4. If review prerequisite is not met, backend returns:
    - `409 REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`
@@ -141,6 +155,7 @@ Current backend enforcement:
 - `409 INVALID_TASK_STATE`: item no longer pending
 - `409 REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`: review prerequisite not satisfied
 - `422 VALIDATION_ERROR`: bad payload
+- `422 INVALID_FILE_REFERENCE`: provided `signatureFileId` is not uploaded/available in tenant scope
 
 ## Audit Expectations
 

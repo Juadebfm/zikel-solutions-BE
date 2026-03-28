@@ -104,6 +104,47 @@ enum TaskPriority {
   urgent
 }
 
+enum TaskCategory {
+  task_log
+  document
+  system_link
+  checklist
+  incident
+  other
+}
+
+enum TaskReferenceType {
+  entity
+  upload
+  internal_route
+  external_url
+  document_url
+}
+
+enum TaskReferenceEntityType {
+  tenant
+  care_group
+  home
+  young_person
+  vehicle
+  employee
+  task
+}
+
+enum UploadPurpose {
+  signature
+  task_attachment
+  task_document
+  announcement_image
+  general
+}
+
+enum UploadStatus {
+  pending
+  uploaded
+  failed
+}
+
 // ─── Public / Marketing ───────────────────────────────────────────────────────
 
 enum ServiceOfInterest {
@@ -200,6 +241,7 @@ model User {
   widgets        Widget[]
   announcementReads AnnouncementRead[]
   taskReviewEvents TaskReviewEvent[]
+  uploadedFiles  UploadedFile[] @relation("UserUploadedFiles")
 
   @@index([email])
   @@index([role])
@@ -228,11 +270,13 @@ model Tenant {
   youngPeople YoungPerson[]
   vehicles    Vehicle[]
   tasks       Task[]
+  taskReferences TaskReference[]
   announcements Announcement[]
   widgets     Widget[]
   auditLogs   AuditLog[]
   securityAlertDeliveries SecurityAlertDelivery[]
   taskReviewEvents TaskReviewEvent[]
+  uploadedFiles UploadedFile[]
 
   @@index([name])
   @@index([isActive])
@@ -358,19 +402,26 @@ model Home {
   name        String
   address     String?
   capacity    Int?
+  avatarFileId String?
+  avatarUrl   String?
+  details     Json?
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   careGroup   CareGroup   @relation(fields: [careGroupId], references: [id])
+  avatarFile  UploadedFile? @relation("HomeAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
   employees   Employee[]
   youngPeople YoungPerson[]
+  vehicles    Vehicle[]
+  tasks       Task[]
   events      HomeEvent[]
   shifts      EmployeeShift[]
 
   @@index([tenantId])
   @@index([careGroupId])
+  @@index([avatarFileId])
 }
 
 // ─── Employees ────────────────────────────────────────────────────────────────
@@ -466,11 +517,15 @@ model YoungPerson {
 model Vehicle {
   id             String    @id @default(cuid())
   tenantId       String
+  homeId         String?
   registration   String    @unique
   make           String?
   model          String?
   year           Int?
   colour         String?
+  avatarFileId   String?
+  avatarUrl      String?
+  details        Json?
   isActive       Boolean   @default(true)
   nextServiceDue DateTime?
   motDue         DateTime?
@@ -478,9 +533,14 @@ model Vehicle {
   updatedAt      DateTime  @updatedAt
 
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home           Home?     @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  avatarFile     UploadedFile? @relation("VehicleAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  tasks          Task[]
 
   @@index([tenantId])
   @@index([registration])
+  @@index([homeId])
+  @@index([avatarFileId])
 }
 
 // ─── Form Templates ───────────────────────────────────────────────────────────
@@ -508,10 +568,12 @@ model FormTemplate {
 model Task {
   id               String             @id @default(cuid())
   tenantId         String
+  category         TaskCategory       @default(task_log)
   formTemplateKey  String?
   formName         String?
   formGroup        String?
   submissionPayload Json?
+  signatureFileId  String?
   submittedAt      DateTime?
   submittedById    String?
   updatedById      String?
@@ -526,6 +588,8 @@ model Task {
   approvedAt       DateTime?
   assigneeId       String?
   approvedById     String?
+  homeId           String?
+  vehicleId        String?
   youngPersonId    String?
   createdById      String?
   deletedAt        DateTime?
@@ -536,7 +600,11 @@ model Task {
   formTemplate     FormTemplate?      @relation(fields: [formTemplateKey], references: [key], onDelete: SetNull)
   assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
   approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
+  home             Home?              @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  vehicle          Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
+  signatureFile    UploadedFile?      @relation("TaskSignatureFile", fields: [signatureFileId], references: [id], onDelete: SetNull)
+  references       TaskReference[]
   reviewEvents     TaskReviewEvent[]
 
   @@index([tenantId])
@@ -544,7 +612,11 @@ model Task {
   @@index([formGroup])
   @@index([status, priority])
   @@index([approvalStatus])
+  @@index([category])
   @@index([assigneeId])
+  @@index([homeId])
+  @@index([vehicleId])
+  @@index([signatureFileId])
   @@index([dueDate])
   @@index([createdById])
   @@index([submittedById])
@@ -569,6 +641,61 @@ model TaskReviewEvent {
   @@unique([taskId, userId])
   @@index([tenantId, userId, reviewedAt])
   @@index([taskId])
+}
+
+model TaskReference {
+  id         String                  @id @default(cuid())
+  tenantId   String
+  taskId     String
+  type       TaskReferenceType
+  entityType TaskReferenceEntityType?
+  entityId   String?
+  fileId     String?
+  url        String?
+  label      String?
+  metadata   Json?
+  createdAt  DateTime                @default(now())
+  updatedAt  DateTime                @updatedAt
+
+  tenant     Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task       Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  file       UploadedFile?           @relation("TaskReferenceFile", fields: [fileId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, taskId])
+  @@index([tenantId, type])
+  @@index([entityType, entityId])
+  @@index([fileId])
+}
+
+model UploadedFile {
+  id             String       @id @default(cuid())
+  tenantId       String
+  uploadedById   String?
+  storageKey     String       @unique
+  originalName   String
+  contentType    String
+  sizeBytes      Int
+  purpose        UploadPurpose @default(general)
+  status         UploadStatus  @default(pending)
+  checksumSha256 String?
+  etag           String?
+  metadata       Json?
+  uploadedAt     DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy     User?        @relation("UserUploadedFiles", fields: [uploadedById], references: [id], onDelete: SetNull)
+  homeAvatars    Home[]       @relation("HomeAvatarFile")
+  vehicleAvatars Vehicle[]    @relation("VehicleAvatarFile")
+  taskSignatures Task[]       @relation("TaskSignatureFile")
+  taskReferences TaskReference[] @relation("TaskReferenceFile")
+
+  @@index([tenantId, purpose, status])
+  @@index([tenantId, createdAt])
+  @@index([uploadedById])
+  @@index([deletedAt])
 }
 
 // ─── Announcements ────────────────────────────────────────────────────────────

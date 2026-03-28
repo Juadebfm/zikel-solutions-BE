@@ -15,13 +15,14 @@ const QueryDateSchema = z
 
 export const SummaryListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  pageSize: z.coerce.number().int().min(1).max(500).default(20),
   sortBy: z.string().optional(),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
   search: z.string().optional(),
   formGroup: z.string().max(120).optional(),
   taskDateFrom: QueryDateSchema,
   taskDateTo: QueryDateSchema,
+  scope: z.enum(['gate', 'popup', 'all']).default('all'),
 }).superRefine((value, ctx) => {
   if (value.taskDateFrom && value.taskDateTo && value.taskDateFrom > value.taskDateTo) {
     ctx.addIssue({
@@ -34,12 +35,14 @@ export const SummaryListQuerySchema = z.object({
 
 export const ApproveTaskBodySchema = z.object({
   comment: z.string().max(500).optional(),
+  signatureFileId: z.string().min(1).optional(),
 });
 
 export const BatchApproveBodySchema = z.object({
   taskIds: z.array(z.string().min(1)).min(1, 'At least one task ID required.'),
   action: z.enum(['approve', 'reject']),
   rejectionReason: z.string().max(500).optional(),
+  signatureFileId: z.string().min(1).optional(),
 });
 
 export const ReviewTaskBodySchema = z.object({
@@ -53,6 +56,11 @@ export const approveTaskBodyJson = {
   additionalProperties: false,
   properties: {
     comment: { type: 'string', maxLength: 500, description: 'Optional approval comment' },
+    signatureFileId: {
+      type: 'string',
+      minLength: 1,
+      description: 'Optional uploaded signature file ID to attach as acknowledgement evidence.',
+    },
   },
 } as const;
 
@@ -69,6 +77,11 @@ export const batchApproveBodyJson = {
     },
     action: { type: 'string', enum: ['approve', 'reject'] },
     rejectionReason: { type: 'string', maxLength: 500 },
+    signatureFileId: {
+      type: 'string',
+      minLength: 1,
+      description: 'Optional uploaded signature file ID used when action=approve.',
+    },
   },
 } as const;
 
@@ -90,7 +103,7 @@ export const tasksToApproveQueryJson = {
   additionalProperties: false,
   properties: {
     page: { type: 'integer', minimum: 1, default: 1 },
-    pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    pageSize: { type: 'integer', minimum: 1, maximum: 500, default: 20 },
     sortBy: { type: 'string' },
     sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
     search: { type: 'string' },
@@ -105,6 +118,13 @@ export const tasksToApproveQueryJson = {
       format: 'date-time',
       description: 'Filter tasks with due date on/before this timestamp.',
     },
+    scope: {
+      type: 'string',
+      enum: ['gate', 'popup', 'all'],
+      default: 'all',
+      description:
+        '`gate` returns only unreviewed overdue items, `popup` returns unreviewed non-overdue items, `all` returns all pending approvals.',
+    },
   },
 } as const;
 
@@ -112,20 +132,69 @@ export const tasksToApproveQueryJson = {
 
 export const todoItemJson = {
   type: 'object',
-  required: ['id', 'taskRef', 'title', 'status', 'approvalStatus', 'priority'],
+  required: [
+    'id',
+    'taskRef',
+    'title',
+    'status',
+    'approvalStatus',
+    'category',
+    'priority',
+    'dueAt',
+    'assignee',
+    'createdBy',
+    'relatedEntity',
+    'links',
+    'review',
+    'timestamps',
+    'references',
+  ],
   properties: {
     id: { type: 'string' },
     taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
     title: { type: 'string' },
-    relation: { type: 'string', nullable: true, description: 'Related young person name or home' },
+    category: {
+      type: 'string',
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+    },
+    categoryLabel: { type: 'string', example: 'Task Log' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
     },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
-    assignee: { type: 'string', nullable: true },
-    dueDate: { type: 'string', format: 'date-time', nullable: true },
+    dueAt: { type: 'string', format: 'date-time', nullable: true },
+    assignee: {},
+    createdBy: {},
+    relatedEntity: {},
+    links: {},
+    review: {},
+    timestamps: {},
+    references: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'type', 'entityType', 'entityId', 'fileId', 'url', 'label', 'metadata'],
+        properties: {
+          id: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: ['entity', 'upload', 'internal_route', 'external_url', 'document_url'],
+          },
+          entityType: {
+            type: 'string',
+            nullable: true,
+            enum: ['tenant', 'care_group', 'home', 'young_person', 'vehicle', 'employee', 'task', null],
+          },
+          entityId: { type: 'string', nullable: true },
+          fileId: { type: 'string', nullable: true },
+          url: { type: 'string', nullable: true },
+          label: { type: 'string', nullable: true },
+          metadata: {},
+        },
+      },
+    },
   },
 } as const;
 
@@ -135,36 +204,90 @@ export const tasksToApproveItemJson = {
     'id',
     'taskRef',
     'title',
-    'formGroup',
+    'category',
+    'categoryLabel',
     'approvalStatus',
-    'approvalStatusLabel',
-    'taskDate',
-    'submittedOn',
-    'updatedOn',
-    'approvers',
-    'reviewedByCurrentUser',
-    'reviewedAt',
+    'status',
+    'priority',
+    'dueAt',
+    'assignee',
+    'createdBy',
+    'relatedEntity',
+    'links',
+    'review',
+    'timestamps',
+    'references',
   ],
   properties: {
     id: { type: 'string' },
     taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
     title: { type: 'string' },
-    formGroup: { type: 'string', nullable: true },
+    category: {
+      type: 'string',
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+    },
+    categoryLabel: { type: 'string', example: 'Document' },
+    status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
     },
-    approvalStatusLabel: { type: 'string', example: 'Awaiting Approval' },
-    homeOrSchool: { type: 'string', nullable: true },
-    relatedTo: { type: 'string', nullable: true },
-    taskDate: { type: 'string', format: 'date-time', nullable: true },
-    submittedOn: { type: 'string', format: 'date-time' },
-    submittedBy: { type: 'string', nullable: true },
-    updatedOn: { type: 'string', format: 'date-time' },
-    updatedBy: { type: 'string', nullable: true },
-    approvers: { type: 'array', items: { type: 'string' } },
-    reviewedByCurrentUser: { type: 'boolean' },
-    reviewedAt: { type: 'string', format: 'date-time', nullable: true },
+    dueAt: { type: 'string', format: 'date-time', nullable: true },
+    assignee: {},
+    createdBy: {},
+    relatedEntity: {},
+    links: {},
+    review: {},
+    timestamps: {},
+    references: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'type', 'entityType', 'entityId', 'fileId', 'url', 'label', 'metadata'],
+        properties: {
+          id: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: ['entity', 'upload', 'internal_route', 'external_url', 'document_url'],
+          },
+          entityType: {
+            type: 'string',
+            nullable: true,
+            enum: ['tenant', 'care_group', 'home', 'young_person', 'vehicle', 'employee', 'task', null],
+          },
+          entityId: { type: 'string', nullable: true },
+          fileId: { type: 'string', nullable: true },
+          url: { type: 'string', nullable: true },
+          label: { type: 'string', nullable: true },
+          metadata: {},
+        },
+      },
+    },
+  },
+} as const;
+
+export const todoLabelsJson = {
+  type: 'object',
+  required: [
+    'listTitle',
+    'workflowStatus',
+    'approvalStatus',
+    'priority',
+    'dueAt',
+    'assignee',
+    'createdBy',
+    'relatedEntity',
+  ],
+  properties: {
+    listTitle: { type: 'string', example: 'To-Do Items' },
+    workflowStatus: { type: 'string', example: 'Workflow Status' },
+    approvalStatus: { type: 'string', example: 'Approval Status' },
+    priority: { type: 'string', example: 'Priority' },
+    dueAt: { type: 'string', example: 'Due Date' },
+    assignee: { type: 'string', example: 'Assignee' },
+    createdBy: { type: 'string', example: 'Created By' },
+    relatedEntity: { type: 'string', example: 'Related Entity' },
   },
 } as const;
 
@@ -212,13 +335,19 @@ export const taskToApproveDetailJson = {
     'title',
     'formName',
     'formGroup',
+    'category',
+    'categoryLabel',
+    'status',
+    'priority',
     'approvalStatus',
     'approvalStatusLabel',
     'meta',
+    'references',
     'labels',
     'renderPayload',
     'reviewedByCurrentUser',
     'reviewedAt',
+    'reviewedByCurrentUserName',
   ],
   properties: {
     id: { type: 'string' },
@@ -226,6 +355,13 @@ export const taskToApproveDetailJson = {
     title: { type: 'string' },
     formName: { type: 'string', nullable: true },
     formGroup: { type: 'string', nullable: true },
+    category: {
+      type: 'string',
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+    },
+    categoryLabel: { type: 'string' },
+    status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
@@ -237,7 +373,10 @@ export const taskToApproveDetailJson = {
       properties: {
         taskId: { type: 'string' },
         taskRef: { type: 'string' },
+        homeId: { type: 'string', nullable: true },
         homeOrSchool: { type: 'string', nullable: true },
+        vehicleId: { type: 'string', nullable: true },
+        vehicleLabel: { type: 'string', nullable: true },
         relatedTo: { type: 'string', nullable: true },
         taskDate: { type: 'string', format: 'date-time', nullable: true },
         submittedOn: { type: 'string', format: 'date-time' },
@@ -247,12 +386,37 @@ export const taskToApproveDetailJson = {
         approvers: { type: 'array', items: { type: 'string' } },
       },
     },
+    references: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'type', 'entityType', 'entityId', 'fileId', 'url', 'label', 'metadata'],
+        properties: {
+          id: { type: 'string' },
+          type: {
+            type: 'string',
+            enum: ['entity', 'upload', 'internal_route', 'external_url', 'document_url'],
+          },
+          entityType: {
+            type: 'string',
+            nullable: true,
+            enum: ['tenant', 'care_group', 'home', 'young_person', 'vehicle', 'employee', 'task', null],
+          },
+          entityId: { type: 'string', nullable: true },
+          fileId: { type: 'string', nullable: true },
+          url: { type: 'string', nullable: true },
+          label: { type: 'string', nullable: true },
+          metadata: {},
+        },
+      },
+    },
     labels: pendingApprovalLabelsJson,
     renderPayload: {
       description: 'Dynamic submitted form payload for rendering the form detail page.',
     },
     reviewedByCurrentUser: { type: 'boolean' },
     reviewedAt: { type: 'string', format: 'date-time', nullable: true },
+    reviewedByCurrentUserName: { type: 'string', nullable: true },
   },
 } as const;
 

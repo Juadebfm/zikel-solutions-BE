@@ -1,16 +1,20 @@
 import {
   AuditAction,
+  TaskReferenceEntityType,
+  TaskReferenceType,
   TaskApprovalStatus,
   TaskStatus,
   TenantRole,
   UserRole,
-  type Prisma,
+  Prisma,
   type Task,
+  type TaskReference,
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import type { CreateTaskBody, ListTasksQuery, UpdateTaskBody } from './tasks.schema.js';
 
 type TaskActorContext = {
@@ -25,6 +29,7 @@ const SORTABLE_FIELDS = new Set([
   'title',
   'status',
   'approvalStatus',
+  'category',
   'priority',
   'dueDate',
   'createdAt',
@@ -42,13 +47,32 @@ function ownsTask(actor: TaskActorContext, task: Pick<Task, 'createdById' | 'ass
   return Boolean(actor.employeeId && task.assigneeId === actor.employeeId);
 }
 
-function mapTask(task: Task) {
+type TaskWithReferences = Task & { references?: TaskReference[] };
+
+function mapTaskReference(reference: TaskReference) {
+  return {
+    id: reference.id,
+    type: reference.type,
+    entityType: reference.entityType,
+    entityId: reference.entityId,
+    fileId: reference.fileId,
+    url: reference.url,
+    label: reference.label,
+    metadata: reference.metadata,
+    createdAt: reference.createdAt,
+    updatedAt: reference.updatedAt,
+  };
+}
+
+function mapTask(task: TaskWithReferences) {
+  const category = task.category ?? 'task_log';
   return {
     id: task.id,
     title: task.title,
     description: task.description,
     status: task.status,
     approvalStatus: task.approvalStatus,
+    category,
     priority: task.priority,
     dueDate: task.dueDate,
     completedAt: task.completedAt,
@@ -56,8 +80,19 @@ function mapTask(task: Task) {
     approvedAt: task.approvedAt,
     assigneeId: task.assigneeId,
     approvedById: task.approvedById,
+    homeId: task.homeId,
+    vehicleId: task.vehicleId,
     youngPersonId: task.youngPersonId,
     createdById: task.createdById,
+    formTemplateKey: task.formTemplateKey,
+    formName: task.formName,
+    formGroup: task.formGroup,
+    submissionPayload: task.submissionPayload,
+    signatureFileId: task.signatureFileId,
+    submittedAt: task.submittedAt,
+    submittedById: task.submittedById,
+    updatedById: task.updatedById,
+    references: (task.references ?? []).map(mapTaskReference),
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
   };
@@ -77,6 +112,115 @@ function orderByFromQuery(query: ListTasksQuery): Prisma.TaskOrderByWithRelation
     return [{ [query.sortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
   }
   return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function collectFileIdsFromPayload(value: unknown, accumulator = new Set<string>()) {
+  if (Array.isArray(value)) {
+    for (const item of value) collectFileIdsFromPayload(item, accumulator);
+    return accumulator;
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    for (const [key, nestedValue] of Object.entries(record)) {
+      if (
+        (key === 'fileId' || key === 'signatureFileId') &&
+        typeof nestedValue === 'string' &&
+        nestedValue.trim()
+      ) {
+        accumulator.add(nestedValue);
+        continue;
+      }
+
+      if ((key === 'fileIds' || key === 'attachmentFileIds') && Array.isArray(nestedValue)) {
+        for (const fileId of nestedValue) {
+          if (typeof fileId === 'string' && fileId.trim()) accumulator.add(fileId);
+        }
+        continue;
+      }
+
+      collectFileIdsFromPayload(nestedValue, accumulator);
+    }
+  }
+
+  return accumulator;
+}
+
+type TaskReferenceInput = {
+  type: TaskReferenceType;
+  entityType?: TaskReferenceEntityType | undefined;
+  entityId?: string | undefined;
+  fileId?: string | undefined;
+  url?: string | undefined;
+  label?: string | undefined;
+  metadata?: unknown;
+};
+
+function collectFileIdsFromReferences(
+  references: TaskReferenceInput[] | null | undefined,
+  accumulator = new Set<string>(),
+) {
+  if (!references) return accumulator;
+  for (const reference of references) {
+    if (reference.fileId?.trim()) {
+      accumulator.add(reference.fileId);
+    }
+  }
+  return accumulator;
+}
+
+function buildSubmissionPayload(args: {
+  rawPayload: unknown;
+  attachmentFileIds?: string[] | null | undefined;
+  signatureFileId?: string | null | undefined;
+}) {
+  const hasExplicitFileRefs =
+    args.attachmentFileIds !== undefined || args.signatureFileId !== undefined;
+
+  if (!hasExplicitFileRefs) {
+    return args.rawPayload ?? null;
+  }
+
+  const payloadObject = args.rawPayload == null ? {} : asRecord(args.rawPayload);
+  if (!payloadObject) {
+    throw httpError(
+      422,
+      'VALIDATION_ERROR',
+      'submissionPayload must be an object when attachmentFileIds or signatureFileId is provided.',
+    );
+  }
+
+  const mergedPayload: Record<string, unknown> = { ...payloadObject };
+
+  if (args.attachmentFileIds !== undefined) {
+    if (args.attachmentFileIds === null) {
+      delete mergedPayload.attachmentFileIds;
+    } else {
+      mergedPayload.attachmentFileIds = args.attachmentFileIds;
+    }
+  }
+
+  if (args.signatureFileId !== undefined) {
+    if (args.signatureFileId === null) {
+      delete mergedPayload.signatureFileId;
+    } else {
+      mergedPayload.signatureFileId = args.signatureFileId;
+    }
+  }
+
+  return mergedPayload;
+}
+
+function toNullableJsonInput(
+  value: unknown,
+): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
+  if (value === null) return Prisma.DbNull;
+  return value as Prisma.InputJsonValue;
 }
 
 async function resolveActorContext(actorUserId: string): Promise<TaskActorContext> {
@@ -113,6 +257,8 @@ async function ensureTaskRelationsInTenant(
   tenantId: string,
   body: {
     assigneeId?: string | null | undefined;
+    homeId?: string | null | undefined;
+    vehicleId?: string | null | undefined;
     youngPersonId?: string | null | undefined;
   },
 ) {
@@ -139,6 +285,127 @@ async function ensureTaskRelationsInTenant(
       throw httpError(422, 'YOUNG_PERSON_NOT_FOUND', 'Young person does not exist in active tenant.');
     }
   }
+
+  if (body.homeId !== undefined && body.homeId !== null) {
+    const home = await prisma.home.findFirst({
+      where: { id: body.homeId, tenantId },
+      select: { id: true },
+    });
+    if (!home) {
+      throw httpError(422, 'HOME_NOT_FOUND', 'Home does not exist in active tenant.');
+    }
+  }
+
+  if (body.vehicleId !== undefined && body.vehicleId !== null) {
+    const vehicle = await prisma.vehicle.findFirst({
+      where: { id: body.vehicleId, tenantId },
+      select: { id: true, homeId: true },
+    });
+    if (!vehicle) {
+      throw httpError(422, 'VEHICLE_NOT_FOUND', 'Vehicle does not exist in active tenant.');
+    }
+
+    if (body.homeId && vehicle.homeId && vehicle.homeId !== body.homeId) {
+      throw httpError(
+        422,
+        'VEHICLE_HOME_MISMATCH',
+        'Vehicle is linked to a different home in active tenant.',
+      );
+    }
+  }
+}
+
+async function assertEntityReferencesInTenant(
+  tenantId: string,
+  references: TaskReferenceInput[] | null | undefined,
+) {
+  if (!references || references.length === 0) return;
+
+  const grouped = new Map<TaskReferenceEntityType, Set<string>>();
+  for (const reference of references) {
+    if (reference.type !== TaskReferenceType.entity) continue;
+    if (!reference.entityType || !reference.entityId) continue;
+    const bucket = grouped.get(reference.entityType) ?? new Set<string>();
+    bucket.add(reference.entityId);
+    grouped.set(reference.entityType, bucket);
+  }
+
+  for (const [entityType, idsSet] of grouped.entries()) {
+    const ids = [...idsSet];
+    if (ids.length === 0) continue;
+
+    if (entityType === TaskReferenceEntityType.tenant) {
+      const allSameTenant = ids.every((id) => id === tenantId);
+      if (!allSameTenant) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid tenant reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.care_group) {
+      const total = await prisma.careGroup.count({ where: { id: { in: ids }, tenantId } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid care group reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.home) {
+      const total = await prisma.home.count({ where: { id: { in: ids }, tenantId } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid home reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.young_person) {
+      const total = await prisma.youngPerson.count({ where: { id: { in: ids }, tenantId } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid young person reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.vehicle) {
+      const total = await prisma.vehicle.count({ where: { id: { in: ids }, tenantId } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid vehicle reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.employee) {
+      const total = await prisma.employee.count({ where: { id: { in: ids }, tenantId } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid employee reference for entityType=${entityType}.`);
+      }
+      continue;
+    }
+
+    if (entityType === TaskReferenceEntityType.task) {
+      const total = await prisma.task.count({ where: { id: { in: ids }, tenantId, deletedAt: null } });
+      if (total !== ids.length) {
+        throw httpError(422, 'INVALID_TASK_REFERENCE', `Invalid task reference for entityType=${entityType}.`);
+      }
+    }
+  }
+}
+
+function toReferenceCreateData(
+  tenantId: string,
+  references: TaskReferenceInput[] | null | undefined,
+): Prisma.TaskReferenceUncheckedCreateWithoutTaskInput[] {
+  if (!references || references.length === 0) return [];
+  return references.map((reference) => ({
+    tenantId,
+    type: reference.type,
+    entityType: reference.entityType ?? null,
+    entityId: reference.entityId ?? null,
+    fileId: reference.fileId ?? null,
+    url: reference.url ?? null,
+    label: reference.label ?? null,
+    metadata: (reference.metadata ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
+  }));
 }
 
 export async function listTasks(actorUserId: string, query: ListTasksQuery) {
@@ -165,8 +432,11 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   }
   if (query.status) filters.push({ status: query.status });
   if (query.approvalStatus) filters.push({ approvalStatus: query.approvalStatus });
+  if (query.category) filters.push({ category: query.category });
   if (query.priority) filters.push({ priority: query.priority });
   if (query.assigneeId) filters.push({ assigneeId: query.assigneeId });
+  if (query.homeId) filters.push({ homeId: query.homeId });
+  if (query.vehicleId) filters.push({ vehicleId: query.vehicleId });
   if (query.youngPersonId) filters.push({ youngPersonId: query.youngPersonId });
 
   const where: Prisma.TaskWhereInput = { AND: filters };
@@ -178,6 +448,11 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
       orderBy: orderByFromQuery(query),
       skip,
       take: query.pageSize,
+      include: {
+        references: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     }),
   ]);
 
@@ -194,8 +469,11 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
       hasSearch: Boolean(query.search),
       status: query.status ?? null,
       approvalStatus: query.approvalStatus ?? null,
+      category: query.category ?? null,
       priority: query.priority ?? null,
       assigneeId: query.assigneeId ?? null,
+      homeId: query.homeId ?? null,
+      vehicleId: query.vehicleId ?? null,
       youngPersonId: query.youngPersonId ?? null,
       mine: query.mine ?? null,
     },
@@ -211,6 +489,11 @@ export async function getTask(actorUserId: string, taskId: string) {
   const actor = await resolveActorContext(actorUserId);
   const task = await prisma.task.findFirst({
     where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
+    include: {
+      references: {
+        orderBy: { createdAt: 'asc' },
+      },
+    },
   });
 
   if (!task) {
@@ -259,24 +542,71 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
     }
   }
 
-  const createRelationInputs: { assigneeId?: string; youngPersonId?: string } = {};
+  const createRelationInputs: {
+    assigneeId?: string;
+    homeId?: string;
+    vehicleId?: string;
+    youngPersonId?: string;
+  } = {};
   if (body.assigneeId !== undefined) createRelationInputs.assigneeId = body.assigneeId;
+  if (body.homeId !== undefined) createRelationInputs.homeId = body.homeId;
+  if (body.vehicleId !== undefined) createRelationInputs.vehicleId = body.vehicleId;
   if (body.youngPersonId !== undefined) createRelationInputs.youngPersonId = body.youngPersonId;
   await ensureTaskRelationsInTenant(actor.tenantId, createRelationInputs);
+  await assertEntityReferencesInTenant(actor.tenantId, body.references);
+
+  const submissionPayload = buildSubmissionPayload({
+    rawPayload: body.submissionPayload,
+    attachmentFileIds: body.attachmentFileIds,
+    signatureFileId: body.signatureFileId,
+  });
+
+  const referencedFileIds = [
+    ...collectFileIdsFromPayload(submissionPayload),
+    ...collectFileIdsFromReferences(body.references),
+  ];
+  if (body.signatureFileId?.trim()) referencedFileIds.push(body.signatureFileId);
+  await assertUploadedFilesBelongToTenant(actor.tenantId, referencedFileIds);
+
+  const submittedById = submissionPayload ? actor.userId : null;
+  const submittedAt = body.submittedAt ?? (submittedById ? new Date() : null);
 
   const task = await prisma.task.create({
     data: {
       tenantId: actor.tenantId,
+      formTemplateKey: body.formTemplateKey ?? null,
+      formName: body.formName ?? null,
+      formGroup: body.formGroup ?? null,
+      submissionPayload: toNullableJsonInput(submissionPayload),
+      submittedAt,
+      submittedById,
+      updatedById: actor.userId,
       title: body.title,
       description: body.description ?? null,
       status: body.status ?? TaskStatus.pending,
       approvalStatus: body.approvalStatus ?? TaskApprovalStatus.not_required,
+      category: body.category,
       priority: body.priority,
       dueDate: body.dueDate ?? null,
       assigneeId: body.assigneeId ?? null,
+      homeId: body.homeId ?? null,
+      vehicleId: body.vehicleId ?? null,
       youngPersonId: body.youngPersonId ?? null,
+      signatureFileId: body.signatureFileId ?? null,
       createdById: actor.userId,
       completedAt: body.status === TaskStatus.completed ? new Date() : null,
+      ...(body.references?.length
+        ? {
+            references: {
+              create: toReferenceCreateData(actor.tenantId, body.references),
+            },
+          }
+        : {}),
+    },
+    include: {
+      references: {
+        orderBy: { createdAt: 'asc' },
+      },
     },
   });
 
@@ -332,10 +662,33 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
     }
   }
 
-  const updateRelationInputs: { assigneeId?: string | null; youngPersonId?: string | null } = {};
+  const updateRelationInputs: {
+    assigneeId?: string | null;
+    homeId?: string | null;
+    vehicleId?: string | null;
+    youngPersonId?: string | null;
+  } = {};
   if (body.assigneeId !== undefined) updateRelationInputs.assigneeId = body.assigneeId;
+  if (body.homeId !== undefined) updateRelationInputs.homeId = body.homeId;
+  if (body.vehicleId !== undefined) updateRelationInputs.vehicleId = body.vehicleId;
   if (body.youngPersonId !== undefined) updateRelationInputs.youngPersonId = body.youngPersonId;
   await ensureTaskRelationsInTenant(actor.tenantId, updateRelationInputs);
+  if (body.references !== undefined) {
+    await assertEntityReferencesInTenant(actor.tenantId, body.references);
+  }
+
+  const submissionPayload = buildSubmissionPayload({
+    rawPayload: body.submissionPayload,
+    attachmentFileIds: body.attachmentFileIds,
+    signatureFileId: body.signatureFileId,
+  });
+
+  const referencedFileIds = [
+    ...collectFileIdsFromPayload(submissionPayload),
+    ...collectFileIdsFromReferences(body.references),
+  ];
+  if (body.signatureFileId?.trim()) referencedFileIds.push(body.signatureFileId);
+  await assertUploadedFilesBelongToTenant(actor.tenantId, referencedFileIds);
 
   const updateData: Prisma.TaskUncheckedUpdateInput = {};
   if (body.title !== undefined) updateData.title = body.title;
@@ -352,15 +705,68 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
         ? new Date()
         : null;
   }
+  if (body.category !== undefined) updateData.category = body.category;
   if (body.priority !== undefined) updateData.priority = body.priority;
   if (body.dueDate !== undefined) updateData.dueDate = body.dueDate;
   if (body.assigneeId !== undefined) updateData.assigneeId = body.assigneeId;
+  if (body.homeId !== undefined) updateData.homeId = body.homeId;
+  if (body.vehicleId !== undefined) updateData.vehicleId = body.vehicleId;
   if (body.youngPersonId !== undefined) updateData.youngPersonId = body.youngPersonId;
   if (body.rejectionReason !== undefined) updateData.rejectionReason = body.rejectionReason;
+  if (body.formTemplateKey !== undefined) updateData.formTemplateKey = body.formTemplateKey;
+  if (body.formName !== undefined) updateData.formName = body.formName;
+  if (body.formGroup !== undefined) updateData.formGroup = body.formGroup;
+  if (
+    body.submissionPayload !== undefined ||
+    body.attachmentFileIds !== undefined ||
+    body.signatureFileId !== undefined
+  ) {
+    updateData.submissionPayload = toNullableJsonInput(submissionPayload);
+    updateData.submittedById = submissionPayload ? actor.userId : null;
+    if (body.submittedAt !== undefined) {
+      updateData.submittedAt = body.submittedAt;
+    } else if (submissionPayload) {
+      updateData.submittedAt = new Date();
+    }
+  } else if (body.submittedAt !== undefined) {
+    updateData.submittedAt = body.submittedAt;
+  }
+  if (body.signatureFileId !== undefined) updateData.signatureFileId = body.signatureFileId;
+  updateData.updatedById = actor.userId;
 
-  const task = await prisma.task.update({
-    where: { id: taskId },
-    data: updateData,
+  const task = await prisma.$transaction(async (tx) => {
+    await tx.task.update({
+      where: { id: taskId },
+      data: updateData,
+    });
+
+    if (body.references !== undefined) {
+      await tx.taskReference.deleteMany({ where: { tenantId: actor.tenantId, taskId } });
+      if (body.references && body.references.length > 0) {
+        await tx.taskReference.createMany({
+          data: body.references.map((reference) => ({
+            tenantId: actor.tenantId,
+            taskId,
+            type: reference.type,
+            entityType: reference.entityType ?? null,
+            entityId: reference.entityId ?? null,
+            fileId: reference.fileId ?? null,
+            url: reference.url ?? null,
+            label: reference.label ?? null,
+            metadata: (reference.metadata ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
+          })),
+        });
+      }
+    }
+
+    return tx.task.findUniqueOrThrow({
+      where: { id: taskId },
+      include: {
+        references: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
   });
 
   await prisma.auditLog.create({

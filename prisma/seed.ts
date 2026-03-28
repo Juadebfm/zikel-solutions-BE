@@ -260,6 +260,52 @@ function buildGenericPendingPayload(formName: string, notes: string) {
   } as const;
 }
 
+function withSampleReferenceLinks(
+  payload: Prisma.InputJsonValue,
+  formName: string,
+): Prisma.InputJsonValue {
+  const slug = toTemplateKey(formName) || 'general';
+  const inferredCategory = /(policy|statement|procedure|document|guidance|manual)/i.test(formName)
+    ? 'document'
+    : 'task log';
+  const base =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Prisma.JsonObject)
+      : ({ value: payload } as Prisma.JsonObject);
+
+  const referenceLinks = inferredCategory === 'document'
+    ? [
+        {
+          id: `doc-${slug}`,
+          type: 'document',
+          label: `${formName} Reference (PDF)`,
+          url: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
+          openInNewTab: true,
+        },
+      ]
+    : [
+        {
+          id: `task-${slug}`,
+          type: 'task',
+          label: `${formName} Instructions`,
+          // FE can map this to app routing directly.
+          url: `/help/forms/${slug}`,
+          openInNewTab: false,
+        },
+      ];
+
+  const documentUrl = inferredCategory === 'document' ? referenceLinks[0].url : null;
+  const taskUrl = inferredCategory === 'task log' ? referenceLinks[0].url : null;
+
+  return {
+    ...base,
+    category: inferredCategory,
+    referenceLinks,
+    documentUrl,
+    taskUrl,
+  } as Prisma.InputJsonValue;
+}
+
 async function main() {
   console.log('Seeding database...');
   const now = new Date();
@@ -1299,7 +1345,7 @@ async function main() {
       details: task.details,
       formName: task.formName,
       formGroup: task.formName,
-      submissionPayload: task.payload,
+      submissionPayload: withSampleReferenceLinks(task.payload, task.formName),
       dueDate: task.dueDate,
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,

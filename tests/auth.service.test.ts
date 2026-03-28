@@ -251,24 +251,36 @@ describe('auth.service', () => {
     expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
   });
 
-  it('issues MFA challenge OTP for privileged sessions', async () => {
-    const superAdmin = makeUser({
-      id: 'super_1',
-      role: 'super_admin',
+  it('issues MFA challenge OTP for tenant-admin sessions requiring setup', async () => {
+    const tenantAdmin = makeUser({
+      id: 'tenant_admin_1',
+      role: 'staff',
+      activeTenantId: 'tenant_1',
       emailVerified: true,
     });
 
-    mockPrisma.user.findUnique.mockResolvedValueOnce(superAdmin);
+    mockPrisma.user.findUnique.mockResolvedValueOnce(tenantAdmin);
+    mockPrisma.tenantMembership.findMany.mockResolvedValueOnce([
+      {
+        tenantId: 'tenant_1',
+        role: 'tenant_admin',
+        tenant: {
+          name: 'Cadnamart',
+          slug: 'cadnamart',
+          mfaSetupCompletedAt: null,
+        },
+      },
+    ]);
     mockPrisma.otpCode.findFirst.mockResolvedValueOnce(null);
     mockPrisma.otpCode.create.mockResolvedValueOnce({});
     mockPrisma.auditLog.create.mockResolvedValueOnce({});
     sendOtpEmail.mockResolvedValueOnce(undefined);
 
-    const result = await authService.requestMfaChallenge('super_1');
+    const result = await authService.requestMfaChallenge('tenant_admin_1');
 
     expect(mockPrisma.otpCode.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        userId: 'super_1',
+        userId: 'tenant_admin_1',
         purpose: 'mfa_challenge',
       }),
     });
@@ -277,6 +289,21 @@ describe('auth.service', () => {
       message: 'MFA code sent to your email.',
       cooldownSeconds: 60,
     });
+  });
+
+  it('rejects MFA challenge for super-admin sessions', async () => {
+    const superAdmin = makeUser({
+      id: 'super_1',
+      role: 'super_admin',
+      emailVerified: true,
+    });
+
+    mockPrisma.user.findUnique.mockResolvedValueOnce(superAdmin);
+
+    await expect(authService.requestMfaChallenge('super_1')).rejects.toMatchObject({
+      code: 'MFA_NOT_REQUIRED',
+    });
+    expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
   });
 
   it('rejects MFA challenge when tenant already completed one-time MFA setup', async () => {
@@ -306,7 +333,7 @@ describe('auth.service', () => {
     expect(mockPrisma.otpCode.create).not.toHaveBeenCalled();
   });
 
-  it('verifies MFA challenge and returns session with mfaVerified=true', async () => {
+  it('rejects MFA verify for super-admin sessions', async () => {
     const superAdmin = makeUser({
       id: 'super_1',
       role: 'super_admin',
@@ -314,23 +341,10 @@ describe('auth.service', () => {
     });
 
     mockPrisma.user.findUnique.mockResolvedValueOnce(superAdmin);
-    mockPrisma.otpCode.findFirst.mockResolvedValueOnce({ id: 'otp_mfa_1' });
-    mockPrisma.otpCode.update.mockResolvedValueOnce({});
-    mockPrisma.auditLog.create.mockResolvedValueOnce({});
-
-    const result = await authService.verifyMfaChallenge('super_1', { code: '123456' });
-
-    expect(result).toMatchObject({
-      user: { id: 'super_1' },
-      session: {
-        mfaRequired: true,
-        mfaVerified: true,
-      },
+    await expect(authService.verifyMfaChallenge('super_1', { code: '123456' })).rejects.toMatchObject({
+      code: 'MFA_NOT_REQUIRED',
     });
-    expect(mockPrisma.otpCode.update).toHaveBeenCalledWith({
-      where: { id: 'otp_mfa_1' },
-      data: { usedAt: expect.any(Date) },
-    });
+    expect(mockPrisma.otpCode.findFirst).not.toHaveBeenCalled();
   });
 
   it('marks tenant MFA setup as completed after first successful tenant-admin verification', async () => {
