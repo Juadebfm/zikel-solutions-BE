@@ -28,6 +28,9 @@ const { mockPrisma } = vi.hoisted(() => ({
       findFirst: vi.fn(),
       upsert: vi.fn(),
     },
+    uploadedFile: {
+      findMany: vi.fn(),
+    },
     announcement: {
       count: vi.fn(),
     },
@@ -79,6 +82,7 @@ beforeEach(() => {
   mockPrisma.user.findMany.mockResolvedValue([]);
   mockPrisma.taskReviewEvent.findMany.mockResolvedValue([]);
   mockPrisma.taskReviewEvent.findFirst.mockResolvedValue(null);
+  mockPrisma.uploadedFile.findMany.mockResolvedValue([]);
 });
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
@@ -275,6 +279,7 @@ describe('Summary routes', () => {
         id: 'task_abc123',
         createdAt: new Date('2026-03-20T10:15:00.000Z'),
         title: 'Daily Summary For JUADEB GABRIEL',
+        category: 'task_log',
         status: 'pending',
         approvalStatus: 'not_required',
         priority: 'medium',
@@ -301,12 +306,21 @@ describe('Summary routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       success: true,
+      labels: {
+        listTitle: 'Tasks',
+        workflowStatus: 'Workflow Status',
+        approvalStatus: 'Approval Status',
+      },
       data: [
         {
           id: 'task_abc123',
           taskRef: 'TSK-20260320-ABC123',
           title: 'Daily Summary For JUADEB GABRIEL',
-          relation: 'Juadeb Gabriel',
+          status: 'pending',
+          approvalStatus: 'not_required',
+          review: {
+            reviewedByCurrentUser: false,
+          },
         },
       ],
     });
@@ -325,6 +339,7 @@ describe('Summary routes', () => {
         id: 'task_old001',
         createdAt: new Date('2026-03-19T08:00:00.000Z'),
         title: 'Overdue Safeguarding Follow-up',
+        category: 'task_log',
         status: 'pending',
         approvalStatus: 'not_required',
         priority: 'high',
@@ -344,6 +359,7 @@ describe('Summary routes', () => {
         id: 'task_old002',
         createdAt: new Date('2026-03-19T09:00:00.000Z'),
         title: 'Overdue Incident Documentation',
+        category: 'incident',
         status: 'pending',
         approvalStatus: 'not_required',
         priority: 'urgent',
@@ -414,6 +430,7 @@ describe('Summary routes', () => {
         tenantId: 'tenant_1',
         formName: 'Daily Cleaning Schedule',
         formGroup: 'Daily Cleaning Schedule',
+        category: 'task_log',
         submissionPayload: {
           approverNames: ['Sonia Akoto', 'Izu Obani'],
         },
@@ -460,30 +477,35 @@ describe('Summary routes', () => {
     expect(res.json()).toMatchObject({
       success: true,
       labels: {
-        pendingApprovalTitle: 'Items Awaiting Approval',
-        configuredInformation: 'Current Filters',
-        status: 'Approval Status',
-        pendingApprovalStatus: 'Awaiting Approval',
-        resetGrid: 'Reset table',
+        listTitle: 'Tasks',
+        workflowStatus: 'Workflow Status',
+        approvalStatus: 'Approval Status',
       },
       data: [
         {
           id: 'task_zyx987',
           taskRef: 'TSK-20260320-ZYX987',
           title: 'Daily Cleaning Schedule',
-          formGroup: 'Daily Cleaning Schedule',
+          category: 'task_log',
           approvalStatus: 'pending_approval',
-          approvalStatusLabel: 'Awaiting Approval',
-          homeOrSchool: 'Fortuna Homes',
-          relatedTo: 'Juadeb Gabriel',
-          submittedBy: 'Ruhman Akoto',
-          updatedBy: 'Izu Obani',
-          approvers: ['Sonia Akoto', 'Izu Obani'],
-          reviewedByCurrentUser: false,
-          reviewedAt: null,
+          references: [],
+          review: {
+            reviewedByCurrentUser: false,
+            reviewedAt: null,
+          },
         },
       ],
     });
+    const findManyArgs = mockPrisma.task.findMany.mock.calls[0]?.[0];
+    const andFilters = findManyArgs.where.AND as Array<Record<string, unknown>>;
+    expect(andFilters).not.toContainEqual({ reviewEvents: { none: { userId: 'user_1' } } });
+    expect(
+      andFilters.some((entry) => {
+        if (!('dueDate' in entry)) return false;
+        const dueDateFilter = (entry as { dueDate?: Record<string, unknown> }).dueDate ?? {};
+        return 'lt' in dueDateFilter || 'lte' in dueDateFilter;
+      }),
+    ).toBe(false);
   });
 
   it('GET /api/v1/summary/tasks-to-approve applies form/date/search filters', async () => {
@@ -522,6 +544,55 @@ describe('Summary routes', () => {
     });
   });
 
+  it('GET /api/v1/summary/tasks-to-approve supports scope=all without gate filtering', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/tasks-to-approve?scope=all',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const findManyArgs = mockPrisma.task.findMany.mock.calls[0]?.[0];
+    const andFilters = findManyArgs.where.AND as Array<Record<string, unknown>>;
+    expect(andFilters).not.toContainEqual({ reviewEvents: { none: { userId: 'user_1' } } });
+    expect(andFilters.some((entry) => 'dueDate' in entry)).toBe(false);
+  });
+
+  it('GET /api/v1/summary/tasks-to-approve supports scope=gate overdue filter', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/summary/tasks-to-approve?scope=gate',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const findManyArgs = mockPrisma.task.findMany.mock.calls[0]?.[0];
+    expect(findManyArgs.where).toMatchObject({
+      AND: expect.arrayContaining([
+        { dueDate: { lt: expect.any(Date) } },
+        { reviewEvents: { none: { userId: 'user_1' } } },
+      ]),
+    });
+  });
+
   it('GET /api/v1/summary/tasks-to-approve/:id returns dynamic detail payload', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
@@ -535,6 +606,7 @@ describe('Summary routes', () => {
       formTemplateKey: 'weekly-menu',
       formName: 'Weekly Menu Planner',
       formGroup: 'Weekly Menu',
+      category: 'document',
       title: 'Weekly Menu - 21/03/2026',
       description: 'Pending approval item',
       status: 'pending',
@@ -716,6 +788,106 @@ describe('Summary routes', () => {
     expect(mockPrisma.task.update).not.toHaveBeenCalled();
   });
 
+  it('POST /api/v1/summary/tasks-to-approve/:id/approve stores signature evidence when provided', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_1',
+      tenantId: 'tenant_1',
+      submissionPayload: { sections: [] },
+      approvalStatus: 'pending_approval',
+      title: 'Task 1',
+      description: null,
+      status: 'pending',
+      priority: 'medium',
+      dueDate: null,
+      completedAt: null,
+      rejectionReason: null,
+      approvedAt: null,
+      assigneeId: null,
+      approvedById: null,
+      youngPersonId: null,
+      createdById: 'user_2',
+      submittedAt: null,
+      submittedById: null,
+      updatedById: 'user_2',
+      formTemplateKey: null,
+      formName: null,
+      formGroup: null,
+      category: 'task_log',
+      deletedAt: null,
+      createdAt: new Date('2026-03-20T11:00:00.000Z'),
+      updatedAt: new Date('2026-03-20T11:00:00.000Z'),
+    });
+    mockPrisma.uploadedFile.findMany.mockResolvedValueOnce([{ id: 'file_sig_1' }]);
+    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'task_1' }]);
+    mockPrisma.taskReviewEvent.findMany.mockResolvedValueOnce([{ taskId: 'task_1' }]);
+    mockPrisma.task.update.mockResolvedValueOnce({
+      id: 'task_1',
+      tenantId: 'tenant_1',
+      submissionPayload: {
+        sections: [],
+        acknowledgement: {
+          signatureFileId: 'file_sig_1',
+        },
+      },
+      approvalStatus: 'approved',
+      title: 'Task 1',
+      description: null,
+      status: 'pending',
+      priority: 'medium',
+      dueDate: null,
+      completedAt: null,
+      rejectionReason: null,
+      approvedAt: new Date('2026-03-24T10:00:00.000Z'),
+      assigneeId: null,
+      approvedById: 'emp_1',
+      youngPersonId: null,
+      createdById: 'user_2',
+      submittedAt: null,
+      submittedById: null,
+      updatedById: 'user_2',
+      formTemplateKey: null,
+      formName: null,
+      formGroup: null,
+      category: 'task_log',
+      references: [],
+      deletedAt: null,
+      createdAt: new Date('2026-03-20T11:00:00.000Z'),
+      updatedAt: new Date('2026-03-24T10:00:00.000Z'),
+    });
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/task_1/approve',
+      headers: authHeader(),
+      payload: { comment: 'Approved after signature', signatureFileId: 'file_sig_1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ success: true });
+    expect(mockPrisma.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'task_1' },
+        data: expect.objectContaining({
+          approvalStatus: 'approved',
+          submissionPayload: expect.objectContaining({
+            acknowledgement: expect.objectContaining({
+              mode: 'single',
+              signatureFileId: 'file_sig_1',
+              comment: 'Approved after signature',
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it('POST /api/v1/summary/tasks-to-approve/process-batch blocks approve submit when popup has unreviewed items', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
     mockPrisma.user.findUnique.mockResolvedValueOnce({
@@ -744,6 +916,76 @@ describe('Summary routes', () => {
       error: {
         code: 'REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE',
         message: 'Please review the item(s) before acknowledging.',
+      },
+    });
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/process-batch stores signature evidence for approve action', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.uploadedFile.findMany.mockResolvedValueOnce([{ id: 'file_sig_1' }]);
+    mockPrisma.task.findMany
+      .mockResolvedValueOnce([{ id: 'task_1' }])
+      .mockResolvedValueOnce([
+        { id: 'task_1', approvalStatus: 'pending_approval', submissionPayload: { sections: [] } },
+      ]);
+    mockPrisma.taskReviewEvent.findMany.mockResolvedValueOnce([{ taskId: 'task_1' }]);
+    mockPrisma.task.update.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/process-batch',
+      headers: authHeader(),
+      payload: { taskIds: ['task_1'], action: 'approve', signatureFileId: 'file_sig_1' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: { processed: 1, failed: [] },
+    });
+    expect(mockPrisma.task.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'task_1' },
+        data: expect.objectContaining({
+          approvalStatus: 'approved',
+          submissionPayload: expect.objectContaining({
+            acknowledgement: expect.objectContaining({
+              mode: 'batch',
+              signatureFileId: 'file_sig_1',
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/process-batch rejects signature on reject action', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/process-batch',
+      headers: authHeader(),
+      payload: { taskIds: ['task_1'], action: 'reject', signatureFileId: 'file_sig_1' },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'signatureFileId is only supported when action is approve.',
       },
     });
   });

@@ -55,6 +55,11 @@ export const TAGS = [
     description: 'Assignable tasks with priority, status, and optional assignment to a young person.',
   },
   {
+    name: 'Uploads',
+    description:
+      'Direct-to-storage upload sessions for signatures and document attachments, with signed upload/download URLs.',
+  },
+  {
     name: 'Announcements',
     description: 'System-wide announcements; pinnable, with optional expiry.',
   },

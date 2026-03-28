@@ -242,8 +242,8 @@ async function resolveAuthSessionContext(args: {
       activeTenantId: effectiveActiveTenantId,
       activeTenantRole: null,
       memberships: [],
-      mfaRequired: true,
-      mfaVerified: false,
+      mfaRequired: false,
+      mfaVerified: true,
     };
   }
 

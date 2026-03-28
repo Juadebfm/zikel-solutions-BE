@@ -14,7 +14,7 @@ import {
   taskToApproveDetailJson,
   tasksToApproveQueryJson,
   todoItemJson,
-  pendingApprovalLabelsJson,
+  todoLabelsJson,
   provisionHomeJson,
   provisionsResponseExample,
 } from './summary.schema.js';
@@ -61,11 +61,12 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       response: {
         200: {
           type: 'object',
-          required: ['success', 'data', 'meta'],
+          required: ['success', 'data', 'meta', 'labels'],
           properties: {
             success: { type: 'boolean', enum: [true] },
             data: { type: 'array', items: todoItemJson },
             meta: { $ref: 'PaginationMeta#' },
+            labels: todoLabelsJson,
           },
         },
         401: { $ref: 'ApiError#' },
@@ -83,8 +84,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const userId = (request.user as JwtPayload).sub;
-      const { data, meta } = await summaryService.listTodos(userId, parse.data);
-      return reply.send({ success: true, data, meta });
+      const { data, meta, labels } = await summaryService.listTodos(userId, parse.data);
+      return reply.send({ success: true, data, meta, labels });
     },
   });
 
@@ -99,11 +100,12 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       response: {
         200: {
           type: 'object',
-          required: ['success', 'data', 'meta'],
+          required: ['success', 'data', 'meta', 'labels'],
           properties: {
             success: { type: 'boolean', enum: [true] },
             data: { type: 'array', items: todoItemJson },
             meta: { $ref: 'PaginationMeta#' },
+            labels: todoLabelsJson,
           },
         },
         401: { $ref: 'ApiError#' },
@@ -121,8 +123,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const userId = (request.user as JwtPayload).sub;
-      const { data, meta } = await summaryService.listOverdueTodos(userId, parse.data);
-      return reply.send({ success: true, data, meta });
+      const { data, meta, labels } = await summaryService.listOverdueTodos(userId, parse.data);
+      return reply.send({ success: true, data, meta, labels });
     },
   });
 
@@ -133,6 +135,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Items awaiting my approval',
       description:
         'Returns tasks with approvalStatus = pending_approval that the current user has permission to approve. ' +
+        'Default scope is `all` (full pending queue). Use `scope=gate` for unreviewed overdue blockers or `scope=popup` for unreviewed non-overdue reminders. ' +
         'Users without approval permission receive a 403.',
       querystring: tasksToApproveQueryJson,
       response: {
@@ -143,7 +146,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
             success: { type: 'boolean', enum: [true] },
             data: { type: 'array', items: tasksToApproveItemJson },
             meta: { $ref: 'PaginationMeta#' },
-            labels: pendingApprovalLabelsJson,
+            labels: todoLabelsJson,
           },
         },
         401: { $ref: 'ApiError#' },
@@ -215,11 +218,12 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
             success: { type: 'boolean', enum: [true] },
             data: {
               type: 'object',
-              required: ['taskId', 'reviewedByCurrentUser', 'reviewedAt', 'action'],
+              required: ['taskId', 'reviewedByCurrentUser', 'reviewedAt', 'reviewedByCurrentUserName', 'action'],
               properties: {
                 taskId: { type: 'string' },
                 reviewedByCurrentUser: { type: 'boolean', enum: [true] },
                 reviewedAt: { type: 'string', format: 'date-time' },
+                reviewedByCurrentUserName: { type: 'string' },
                 action: { type: 'string', enum: ['view_detail', 'open_document', 'open_task'] },
               },
             },
@@ -255,7 +259,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Batch approve or reject tasks',
       description:
         'Approves or rejects multiple tasks in a single operation. ' +
-        'Requires approval permission. Partial success returns details per task.',
+        'Requires approval permission. Partial success returns details per task. ' +
+        'When action=approve, an optional signatureFileId can be provided as acknowledgement evidence.',
       body: batchApproveBodyJson,
       response: {
         200: {
@@ -312,7 +317,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Approve a single task',
       description:
         'Approves the specified task. Requires approval permission. ' +
-        'Stores approver ID, timestamp, and optional comment.',
+        'Stores approver ID, timestamp, optional comment, and optional signatureFileId.',
       params: { $ref: 'CuidParam#' },
       body: approveTaskBodyJson,
       response: {
@@ -348,7 +353,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const data = await summaryService.approveTask(userId, id, parse.data.comment);
+      const data = await summaryService.approveTask(userId, id, parse.data);
       return reply.send({ success: true, data });
     },
   });

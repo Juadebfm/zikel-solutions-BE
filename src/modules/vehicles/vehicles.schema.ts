@@ -25,19 +25,24 @@ const NullableDateSchema = z
 
 export const ListVehiclesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  pageSize: z.coerce.number().int().min(1).max(500).default(20),
   search: z.string().max(100).optional(),
+  homeId: z.string().min(1).optional(),
   isActive: BoolishSchema.optional(),
   sortBy: VehicleSortBySchema.optional(),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
 });
 
 export const CreateVehicleBodySchema = z.object({
+  homeId: z.string().min(1).optional(),
   registration: z.string().min(1).max(32),
   make: z.string().max(100).optional(),
   model: z.string().max(100).optional(),
   year: z.number().int().min(1900).max(2100).optional(),
   colour: z.string().max(50).optional(),
+  avatarFileId: z.string().min(1).optional(),
+  avatarUrl: z.string().url().optional(),
+  details: z.unknown().optional(),
   isActive: z.boolean().optional(),
   nextServiceDue: NullableDateSchema,
   motDue: NullableDateSchema,
@@ -45,11 +50,15 @@ export const CreateVehicleBodySchema = z.object({
 
 export const UpdateVehicleBodySchema = z
   .object({
+    homeId: z.string().min(1).nullable().optional(),
     registration: z.string().min(1).max(32).optional(),
     make: z.string().max(100).nullable().optional(),
     model: z.string().max(100).nullable().optional(),
     year: z.number().int().min(1900).max(2100).nullable().optional(),
     colour: z.string().max(50).nullable().optional(),
+    avatarFileId: z.string().min(1).nullable().optional(),
+    avatarUrl: z.string().url().nullable().optional(),
+    details: z.unknown().nullable().optional(),
     isActive: z.boolean().optional(),
     nextServiceDue: NullableDateSchema,
     motDue: NullableDateSchema,
@@ -63,8 +72,9 @@ export const listVehiclesQueryJson = {
   additionalProperties: false,
   properties: {
     page: { type: 'integer', minimum: 1, default: 1 },
-    pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    pageSize: { type: 'integer', minimum: 1, maximum: 500, default: 20 },
     search: { type: 'string', maxLength: 100 },
+    homeId: { type: 'string' },
     isActive: { type: 'boolean' },
     sortBy: {
       type: 'string',
@@ -79,11 +89,15 @@ export const createVehicleBodyJson = {
   required: ['registration'],
   additionalProperties: false,
   properties: {
+    homeId: { type: 'string' },
     registration: { type: 'string', minLength: 1, maxLength: 32 },
     make: { type: 'string', maxLength: 100 },
     model: { type: 'string', maxLength: 100 },
     year: { type: 'integer', minimum: 1900, maximum: 2100 },
     colour: { type: 'string', maxLength: 50 },
+    avatarFileId: { type: 'string', minLength: 1 },
+    avatarUrl: { type: 'string', format: 'uri' },
+    details: {},
     isActive: { type: 'boolean' },
     nextServiceDue: { type: ['string', 'null'], format: 'date-time' },
     motDue: { type: ['string', 'null'], format: 'date-time' },
@@ -94,11 +108,15 @@ export const updateVehicleBodyJson = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    homeId: { type: ['string', 'null'], minLength: 1 },
     registration: { type: 'string', minLength: 1, maxLength: 32 },
     make: { type: ['string', 'null'], maxLength: 100 },
     model: { type: ['string', 'null'], maxLength: 100 },
     year: { type: ['integer', 'null'], minimum: 1900, maximum: 2100 },
     colour: { type: ['string', 'null'], maxLength: 50 },
+    avatarFileId: { type: ['string', 'null'], minLength: 1 },
+    avatarUrl: { type: ['string', 'null'], format: 'uri' },
+    details: {},
     isActive: { type: 'boolean' },
     nextServiceDue: { type: ['string', 'null'], format: 'date-time' },
     motDue: { type: ['string', 'null'], format: 'date-time' },

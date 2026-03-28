@@ -1,19 +1,26 @@
 import {
   AuditAction,
+  TaskCategory,
+  TaskReferenceEntityType,
   TenantRole,
   TaskApprovalStatus,
   TaskStatus,
   UserRole,
   type TaskPriority,
+  type TaskReference,
   type Prisma,
 } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import type { BatchApproveBody, ReviewTaskBody, SummaryListQuery } from './summary.schema.js';
+import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
+import type { ApproveTaskBody, BatchApproveBody, ReviewTaskBody, SummaryListQuery } from './summary.schema.js';
 
 type UserContext = {
   id: string;
+  firstName: string;
+  lastName: string;
+  displayName: string;
   tenantId: string;
   role: UserRole;
   tenantRole: TenantRole | null;
@@ -42,7 +49,28 @@ const APPROVAL_STATUS_LABELS: Record<TaskApprovalStatus, string> = {
   rejected: 'Rejected',
   processing: 'Processing',
 };
-const PENDING_APPROVAL_LABELS = {
+const CATEGORY_LABELS: Record<TaskCategory, string> = {
+  task_log: 'Task Log',
+  document: 'Document',
+  system_link: 'System Link',
+  checklist: 'Checklist',
+  incident: 'Incident',
+  other: 'Other',
+};
+const SHARED_TASK_LABELS = {
+  listTitle: 'Tasks',
+  taskRef: 'Task Reference',
+  title: 'Title',
+  category: 'Category',
+  workflowStatus: 'Workflow Status',
+  approvalStatus: 'Approval Status',
+  priority: 'Priority',
+  dueAt: 'Due Date',
+  assignee: 'Assignee',
+  createdBy: 'Created By',
+  relatedEntity: 'Related Entity',
+} as const;
+const ACKNOWLEDGEMENT_DETAIL_LABELS = {
   pendingApprovalTitle: 'Items Awaiting Approval',
   configuredInformation: 'Current Filters',
   formName: 'Form',
@@ -58,6 +86,30 @@ const PENDING_APPROVAL_LABELS = {
   pendingApprovalStatus: 'Awaiting Approval',
   resetGrid: 'Reset table',
 } as const;
+
+type SharedRelatedEntityType =
+  | 'young_person'
+  | 'home'
+  | 'vehicle'
+  | 'document'
+  | 'upload'
+  | 'care_group'
+  | 'tenant'
+  | 'employee'
+  | 'task'
+  | 'other';
+
+type SharedRelatedEntity = {
+  type: SharedRelatedEntityType;
+  id: string | null;
+  name: string;
+  homeId: string | null;
+  careGroupId: string | null;
+} | null;
+
+function toDisplayName(firstName?: string | null, lastName?: string | null) {
+  return `${firstName ?? ''} ${lastName ?? ''}`.trim();
+}
 
 function getTodayBounds() {
   const start = new Date();
@@ -82,6 +134,8 @@ async function getUserContext(userId: string): Promise<UserContext> {
       where: { id: userId },
       select: {
         id: true,
+        firstName: true,
+        lastName: true,
         role: true,
       },
     }),
@@ -104,6 +158,9 @@ async function getUserContext(userId: string): Promise<UserContext> {
 
   return {
     id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    displayName: `${user.firstName} ${user.lastName}`.trim(),
     role: user.role,
     tenantId: tenant.tenantId,
     tenantRole: tenant.tenantRole,
@@ -169,11 +226,13 @@ async function getReviewMap(userId: string, taskIds: string[]) {
 }
 
 async function ensureActorReviewedAllPendingApprovals(user: UserContext) {
+  const { start } = getTodayBounds();
   const pendingRows = await prisma.task.findMany({
     where: {
       tenantId: user.tenantId,
       deletedAt: null,
       approvalStatus: TaskApprovalStatus.pending_approval,
+      dueDate: { lt: start },
     },
     select: { id: true },
   });
@@ -231,6 +290,168 @@ function parseApprovers(payload: Prisma.JsonValue | null): string[] {
   return [];
 }
 
+type MappedReference = {
+  id: string;
+  type: TaskReference['type'];
+  entityType: TaskReference['entityType'];
+  entityId: string | null;
+  fileId: string | null;
+  url: string | null;
+  label: string | null;
+  metadata: Prisma.JsonValue;
+};
+
+function mapReference(reference: TaskReference): MappedReference {
+  return {
+    id: reference.id,
+    type: reference.type,
+    entityType: reference.entityType,
+    entityId: reference.entityId,
+    fileId: reference.fileId,
+    url: reference.url,
+    label: reference.label,
+    metadata: reference.metadata,
+  };
+}
+
+function extractPayloadReferences(taskId: string, payload: Prisma.JsonValue | null): MappedReference[] {
+  const payloadObj = asRecord(payload);
+  const rawLinks = Array.isArray(payloadObj?.referenceLinks) ? payloadObj.referenceLinks : [];
+  const references: MappedReference[] = [];
+  rawLinks.forEach((raw, index) => {
+    const link = asRecord(raw);
+    if (!link) return;
+    const typeRaw = typeof link.type === 'string' ? link.type.trim().toLowerCase() : '';
+    const url = typeof link.url === 'string' ? link.url : null;
+    const label = typeof link.label === 'string' ? link.label : null;
+    let type: MappedReference['type'] = 'external_url';
+    if (typeRaw === 'document') type = 'document_url';
+    else if (typeRaw === 'task') type = 'internal_route';
+    else if (typeRaw === 'upload') type = 'upload';
+
+    references.push({
+      id: typeof link.id === 'string' ? link.id : `${taskId}-payload-ref-${index + 1}`,
+      type,
+      entityType: null,
+      entityId: null,
+      fileId: typeof link.fileId === 'string' ? link.fileId : null,
+      url,
+      label,
+      metadata: link as Prisma.JsonValue,
+    });
+  });
+  return references;
+}
+
+function toRelatedEntityTypeFromReference(
+  reference: MappedReference,
+): SharedRelatedEntityType | null {
+  if (reference.type === 'document_url') return 'document';
+  if (reference.type === 'upload') return 'upload';
+  if (reference.entityType === TaskReferenceEntityType.young_person) return 'young_person';
+  if (reference.entityType === TaskReferenceEntityType.home) return 'home';
+  if (reference.entityType === TaskReferenceEntityType.vehicle) return 'vehicle';
+  if (reference.entityType === TaskReferenceEntityType.care_group) return 'care_group';
+  if (reference.entityType === TaskReferenceEntityType.tenant) return 'tenant';
+  if (reference.entityType === TaskReferenceEntityType.employee) return 'employee';
+  if (reference.entityType === TaskReferenceEntityType.task) return 'task';
+  return null;
+}
+
+function buildLinksFromReferences(references: MappedReference[]) {
+  const taskUrlRef = references.find((reference) => reference.type === 'internal_route');
+  const documentUrlRef = references.find((reference) => reference.type === 'document_url');
+  const fallbackExternalDocumentRef = references.find((reference) => reference.type === 'external_url');
+
+  return {
+    taskUrl: taskUrlRef?.url ?? null,
+    documentUrl: documentUrlRef?.url ?? fallbackExternalDocumentRef?.url ?? null,
+  };
+}
+
+function resolveRelatedEntity(args: {
+  youngPersonId: string | null;
+  youngPersonName: string | null;
+  youngPersonHomeId: string | null;
+  homeId: string | null;
+  homeName: string | null;
+  homeCareGroupId: string | null;
+  vehicleId: string | null;
+  vehicleLabel: string | null;
+  vehicleHomeId: string | null;
+  references: MappedReference[];
+}): SharedRelatedEntity {
+  if (args.youngPersonId && args.youngPersonName) {
+    return {
+      type: 'young_person',
+      id: args.youngPersonId,
+      name: args.youngPersonName,
+      homeId: args.youngPersonHomeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  if (args.homeId && args.homeName) {
+    return {
+      type: 'home',
+      id: args.homeId,
+      name: args.homeName,
+      homeId: args.homeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  if (args.vehicleId && args.vehicleLabel) {
+    return {
+      type: 'vehicle',
+      id: args.vehicleId,
+      name: args.vehicleLabel,
+      homeId: args.vehicleHomeId ?? args.homeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  const referenceEntity = args.references.find((reference) => toRelatedEntityTypeFromReference(reference));
+  if (referenceEntity) {
+    return {
+      type: toRelatedEntityTypeFromReference(referenceEntity) ?? 'other',
+      id: referenceEntity.entityId,
+      name: referenceEntity.label ?? referenceEntity.url ?? 'Reference',
+      homeId: null,
+      careGroupId: null,
+    };
+  }
+
+  return null;
+}
+
+function mergeAcknowledgementEvidence(args: {
+  submissionPayload: Prisma.JsonValue | null;
+  evidence: Record<string, unknown>;
+}): Prisma.InputJsonValue {
+  const payloadObj = asRecord(args.submissionPayload);
+  if (payloadObj) {
+    const existingAck = asRecord(payloadObj.acknowledgement);
+    return {
+      ...payloadObj,
+      acknowledgement: {
+        ...(existingAck ?? {}),
+        ...args.evidence,
+      },
+    } as Prisma.InputJsonValue;
+  }
+
+  return {
+    acknowledgement: args.evidence,
+    originalSubmissionPayload: args.submissionPayload,
+  } as Prisma.InputJsonValue;
+}
+
+async function assertValidSignatureFile(tenantId: string, signatureFileId?: string) {
+  if (!signatureFileId) return;
+  await assertUploadedFilesBelongToTenant(tenantId, [signatureFileId]);
+}
+
 async function getUserNameMap(userIds: string[]) {
   if (userIds.length === 0) return new Map<string, string>();
 
@@ -251,9 +472,12 @@ type TaskToApproveRow = {
   createdAt: Date;
   updatedAt: Date;
   title: string;
+  category: TaskCategory;
   formName: string | null;
   formGroup: string | null;
   submissionPayload: Prisma.JsonValue | null;
+  homeId: string | null;
+  vehicleId: string | null;
   approvalStatus: TaskApprovalStatus;
   status: TaskStatus;
   priority: TaskPriority;
@@ -263,50 +487,86 @@ type TaskToApproveRow = {
   updatedById: string | null;
   createdById: string | null;
   youngPerson: {
+    id: string;
     firstName: string;
     lastName: string;
-    home: { name: string } | null;
+    homeId: string;
+    home: { id: string; name: string; careGroupId: string | null } | null;
   } | null;
   assignee: {
-    user: { firstName: string; lastName: string };
-    home: { name: string } | null;
+    id: string;
+    user: { id: string; firstName: string; lastName: string };
+    home: { id: string; name: string; careGroupId: string | null } | null;
   } | null;
+  home?: { id: string; name: string; careGroupId: string | null } | null;
+  vehicle?: {
+    id: string;
+    homeId: string | null;
+    registration: string;
+    make: string | null;
+    model: string | null;
+  } | null;
+  references?: TaskReference[];
 };
 
 function toTasksToApproveItem(
   row: TaskToApproveRow,
   userNameMap: Map<string, string>,
   reviewMap: Map<string, Date>,
+  currentUserDisplayName: string,
 ) {
-  const submittedBy =
-    (row.submittedById ? userNameMap.get(row.submittedById) : null)
-    ?? (row.createdById ? userNameMap.get(row.createdById) : null)
-    ?? null;
-  const updatedBy =
-    (row.updatedById ? userNameMap.get(row.updatedById) : null)
-    ?? submittedBy
-    ?? null;
   const reviewedAt = reviewMap.get(row.id) ?? null;
+  const category = row.category ?? TaskCategory.task_log;
+  const vehicleLabel = row.vehicle
+    ? [row.vehicle.make, row.vehicle.model, row.vehicle.registration].filter(Boolean).join(' ')
+    : null;
+  const rowReferences = row.references ?? [];
+  const references = rowReferences.length > 0
+    ? rowReferences.map(mapReference)
+    : extractPayloadReferences(row.id, row.submissionPayload);
+  const links = buildLinksFromReferences(references);
+  const relatedTo = row.youngPerson
+    ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
+    : null;
+  const createdByName = row.createdById ? userNameMap.get(row.createdById) ?? null : null;
+  const assigneeName = row.assignee ? toDisplayName(row.assignee.user.firstName, row.assignee.user.lastName) : null;
+  const relatedEntity = resolveRelatedEntity({
+    youngPersonId: row.youngPerson?.id ?? null,
+    youngPersonName: relatedTo,
+    youngPersonHomeId: row.youngPerson?.homeId ?? null,
+    homeId: row.homeId,
+    homeName: row.home?.name ?? null,
+    homeCareGroupId: row.home?.careGroupId ?? row.youngPerson?.home?.careGroupId ?? row.assignee?.home?.careGroupId ?? null,
+    vehicleId: row.vehicleId,
+    vehicleLabel,
+    vehicleHomeId: row.vehicle?.homeId ?? null,
+    references,
+  });
 
   return {
     id: row.id,
     taskRef: toTaskRef(row),
     title: row.title,
-    formGroup: row.formGroup ?? row.formName ?? null,
+    category,
+    categoryLabel: CATEGORY_LABELS[category],
+    status: row.status,
+    priority: row.priority,
     approvalStatus: row.approvalStatus,
-    approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
-    homeOrSchool: row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null,
-    relatedTo: row.youngPerson
-      ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
-      : null,
-    taskDate: row.dueDate,
-    submittedOn: row.submittedAt ?? row.createdAt,
-    submittedBy,
-    updatedOn: row.updatedAt,
-    updatedBy,
-    approvers: parseApprovers(row.submissionPayload),
-    reviewedByCurrentUser: reviewedAt !== null,
-    reviewedAt,
+    dueAt: row.dueDate,
+    assignee: row.assignee && assigneeName ? { id: row.assignee.id, name: assigneeName } : null,
+    createdBy: row.createdById && createdByName ? { id: row.createdById, name: createdByName } : null,
+    relatedEntity,
+    links,
+    review: {
+      reviewedByCurrentUser: reviewedAt !== null,
+      reviewedAt,
+      reviewedByCurrentUserName: reviewedAt ? currentUserDisplayName : null,
+    },
+    timestamps: {
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    },
+    references,
   };
 }
 
@@ -314,29 +574,82 @@ function toTodoItem(
   task: {
     id: string;
     createdAt: Date;
+    updatedAt: Date;
+    createdById: string | null;
     title: string;
+    category: TaskCategory;
     status: TaskStatus;
     approvalStatus: TaskApprovalStatus;
     priority: string;
     dueDate: Date | null;
-    youngPerson: { firstName: string; lastName: string } | null;
-    assignee: { user: { firstName: string; lastName: string } } | null;
+    submissionPayload: Prisma.JsonValue | null;
+    homeId: string | null;
+    vehicleId: string | null;
+    home?: { id: string; name: string; careGroupId: string | null } | null;
+    vehicle?: {
+      id: string;
+      homeId: string | null;
+      registration: string;
+      make: string | null;
+      model: string | null;
+    } | null;
+    youngPerson: { id: string; homeId: string; firstName: string; lastName: string } | null;
+    assignee: { id: string; user: { id: string; firstName: string; lastName: string } } | null;
+    references?: TaskReference[];
   },
+  userNameMap: Map<string, string>,
 ) {
+  const vehicleLabel = task.vehicle
+    ? [task.vehicle.make, task.vehicle.model, task.vehicle.registration].filter(Boolean).join(' ')
+    : null;
+  const taskReferences = task.references ?? [];
+  const references = taskReferences.length > 0
+    ? taskReferences.map(mapReference)
+    : extractPayloadReferences(task.id, task.submissionPayload);
+  const category = task.category ?? TaskCategory.task_log;
+  const relation = task.youngPerson
+    ? `${task.youngPerson.firstName} ${task.youngPerson.lastName}`
+    : null;
+  const links = buildLinksFromReferences(references);
+  const assigneeName = task.assignee ? toDisplayName(task.assignee.user.firstName, task.assignee.user.lastName) : null;
+  const createdByName = task.createdById ? userNameMap.get(task.createdById) ?? null : null;
+  const relatedEntity = resolveRelatedEntity({
+    youngPersonId: task.youngPerson?.id ?? null,
+    youngPersonName: relation,
+    youngPersonHomeId: task.youngPerson?.homeId ?? null,
+    homeId: task.homeId,
+    homeName: task.home?.name ?? null,
+    homeCareGroupId: task.home?.careGroupId ?? null,
+    vehicleId: task.vehicleId,
+    vehicleLabel,
+    vehicleHomeId: task.vehicle?.homeId ?? null,
+    references,
+  });
+
   return {
     id: task.id,
     taskRef: toTaskRef(task),
     title: task.title,
-    relation: task.youngPerson
-      ? `${task.youngPerson.firstName} ${task.youngPerson.lastName}`
-      : null,
+    category,
+    categoryLabel: CATEGORY_LABELS[category],
+    dueAt: task.dueDate,
+    assignee: task.assignee && assigneeName ? { id: task.assignee.id, name: assigneeName } : null,
+    createdBy: task.createdById && createdByName ? { id: task.createdById, name: createdByName } : null,
+    relatedEntity,
+    links,
+    review: {
+      reviewedByCurrentUser: false,
+      reviewedAt: null,
+      reviewedByCurrentUserName: null,
+    },
+    timestamps: {
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    },
     status: task.status,
     approvalStatus: task.approvalStatus,
     priority: task.priority,
-    assignee: task.assignee
-      ? `${task.assignee.user.firstName} ${task.assignee.user.lastName}`
-      : null,
-    dueDate: task.dueDate,
+    references,
   };
 }
 
@@ -445,23 +758,38 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
       skip,
       take: query.pageSize,
       include: {
+        home: {
+          select: { id: true, name: true, careGroupId: true },
+        },
+        vehicle: {
+          select: { id: true, homeId: true, registration: true, make: true, model: true },
+        },
         youngPerson: {
-          select: { firstName: true, lastName: true },
+          select: { id: true, homeId: true, firstName: true, lastName: true },
         },
         assignee: {
           select: {
+            id: true,
             user: {
-              select: { firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true },
             },
           },
+        },
+        references: {
+          orderBy: { createdAt: 'asc' },
         },
       },
     }),
   ]);
+  const userIds = [
+    ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
+  ];
+  const userNameMap = await getUserNameMap(userIds);
 
   return {
-    data: rows.map((row) => toTodoItem(row)),
+    data: rows.map((row) => toTodoItem(row, userNameMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
+    labels: SHARED_TASK_LABELS,
   };
 }
 
@@ -498,23 +826,38 @@ export async function listOverdueTodos(userId: string, query: SummaryListQuery) 
       skip,
       take: query.pageSize,
       include: {
+        home: {
+          select: { id: true, name: true, careGroupId: true },
+        },
+        vehicle: {
+          select: { id: true, homeId: true, registration: true, make: true, model: true },
+        },
         youngPerson: {
-          select: { firstName: true, lastName: true },
+          select: { id: true, homeId: true, firstName: true, lastName: true },
         },
         assignee: {
           select: {
+            id: true,
             user: {
-              select: { firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true },
             },
           },
+        },
+        references: {
+          orderBy: { createdAt: 'asc' },
         },
       },
     }),
   ]);
+  const userIds = [
+    ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
+  ];
+  const userNameMap = await getUserNameMap(userIds);
 
   return {
-    data: rows.map((row) => toTodoItem(row)),
+    data: rows.map((row) => toTodoItem(row, userNameMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
+    labels: SHARED_TASK_LABELS,
   };
 }
 
@@ -524,10 +867,29 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
   }
 
+  const { start } = getTodayBounds();
   const skip = (query.page - 1) * query.pageSize;
   const filters: Prisma.TaskWhereInput[] = [
     { tenantId: user.tenantId, deletedAt: null, approvalStatus: TaskApprovalStatus.pending_approval },
   ];
+
+  // Default gate feed: only actionable blocking items (unreviewed and overdue).
+  if (query.scope === 'gate') {
+    filters.push(
+      { dueDate: { lt: start } },
+      { reviewEvents: { none: { userId: user.id } } },
+    );
+  } else if (query.scope === 'popup') {
+    filters.push(
+      {
+        OR: [
+          { dueDate: { gte: start } },
+          { dueDate: null },
+        ],
+      },
+      { reviewEvents: { none: { userId: user.id } } },
+    );
+  }
 
   if (query.search) {
     filters.push({
@@ -563,20 +925,32 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
       skip,
       take: query.pageSize,
       include: {
+        home: {
+          select: { id: true, name: true, careGroupId: true },
+        },
+        vehicle: {
+          select: { id: true, homeId: true, registration: true, make: true, model: true },
+        },
         youngPerson: {
           select: {
+            id: true,
+            homeId: true,
             firstName: true,
             lastName: true,
-            home: { select: { name: true } },
+            home: { select: { id: true, name: true, careGroupId: true } },
           },
         },
         assignee: {
           select: {
+            id: true,
             user: {
-              select: { firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true },
             },
-            home: { select: { name: true } },
+            home: { select: { id: true, name: true, careGroupId: true } },
           },
+        },
+        references: {
+          orderBy: { createdAt: 'asc' },
         },
       },
     }),
@@ -594,9 +968,14 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
   ]);
 
   return {
-    data: rows.map((row) => toTasksToApproveItem(row as TaskToApproveRow, userNameMap, reviewMap)),
+    data: rows.map((row) => toTasksToApproveItem(
+      row as TaskToApproveRow,
+      userNameMap,
+      reviewMap,
+      user.displayName,
+    )),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
-    labels: PENDING_APPROVAL_LABELS,
+    labels: SHARED_TASK_LABELS,
   };
 }
 
@@ -614,6 +993,12 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
       approvalStatus: TaskApprovalStatus.pending_approval,
     },
     include: {
+      home: {
+        select: { name: true },
+      },
+      vehicle: {
+        select: { registration: true, make: true, model: true },
+      },
       youngPerson: {
         select: {
           firstName: true,
@@ -628,6 +1013,9 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
           },
           home: { select: { name: true } },
         },
+      },
+      references: {
+        orderBy: { createdAt: 'asc' },
       },
     },
   });
@@ -662,8 +1050,16 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
   const relatedTo = row.youngPerson
     ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
     : null;
-  const homeOrSchool = row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null;
+  const homeOrSchool = row.home?.name ?? row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null;
+  const vehicleLabel = row.vehicle
+    ? [row.vehicle.make, row.vehicle.model, row.vehicle.registration].filter(Boolean).join(' ')
+    : null;
   const reviewedAt = reviewRow?.reviewedAt ?? null;
+  const category = row.category ?? TaskCategory.task_log;
+  const rowReferences = row.references ?? [];
+  const references = rowReferences.length > 0
+    ? rowReferences.map(mapReference)
+    : extractPayloadReferences(row.id, row.submissionPayload);
 
   return {
     id: row.id,
@@ -671,12 +1067,19 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
     title: row.title,
     formName: row.formName ?? null,
     formGroup: row.formGroup ?? row.formName ?? null,
+    category,
+    categoryLabel: CATEGORY_LABELS[category],
+    status: row.status,
+    priority: row.priority,
     approvalStatus: row.approvalStatus,
     approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
     meta: {
       taskId: row.id,
       taskRef: toTaskRef(row),
+      homeId: row.homeId,
       homeOrSchool,
+      vehicleId: row.vehicleId,
+      vehicleLabel,
       relatedTo,
       taskDate: row.dueDate,
       submittedOn: row.submittedAt ?? row.createdAt,
@@ -685,11 +1088,13 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
       updatedBy,
       approvers,
     },
-    labels: PENDING_APPROVAL_LABELS,
+    references,
+    labels: ACKNOWLEDGEMENT_DETAIL_LABELS,
     // Keep per-form field labels/value structure as submitted (dynamic, no hardcoded rewrite).
     renderPayload: row.submissionPayload ?? { sections: [] },
     reviewedByCurrentUser: reviewedAt !== null,
     reviewedAt,
+    reviewedByCurrentUserName: reviewedAt ? user.displayName : null,
   };
 }
 
@@ -753,11 +1158,12 @@ export async function recordTaskReviewEvent(userId: string, taskId: string, body
     taskId,
     reviewedByCurrentUser: true as const,
     reviewedAt: review.reviewedAt,
+    reviewedByCurrentUserName: user.displayName,
     action: review.action,
   };
 }
 
-export async function approveTask(userId: string, taskId: string, comment?: string) {
+export async function approveTask(userId: string, taskId: string, body: ApproveTaskBody) {
   const user = await getUserContext(userId);
   if (!canApprove(user)) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
@@ -773,15 +1179,34 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
     throw httpError(409, 'INVALID_TASK_STATE', 'Task is not in pending_approval state.');
   }
 
+  await assertValidSignatureFile(user.tenantId, body.signatureFileId);
   await ensureActorReviewedAllPendingApprovals(user);
+  const approvedAt = new Date();
 
   const updated = await prisma.task.update({
     where: { id: taskId },
     data: {
       approvalStatus: TaskApprovalStatus.approved,
-      approvedAt: new Date(),
+      approvedAt,
       approvedById: user.employee?.id ?? null,
+      signatureFileId: body.signatureFileId ?? null,
       rejectionReason: null,
+      submissionPayload: mergeAcknowledgementEvidence({
+        submissionPayload: existing.submissionPayload,
+        evidence: {
+          action: 'approve',
+          mode: 'single',
+          approvedAt: approvedAt.toISOString(),
+          approvedByUserId: user.id,
+          signatureFileId: body.signatureFileId ?? null,
+          comment: body.comment ?? null,
+        },
+      }),
+    },
+    include: {
+      references: {
+        orderBy: { createdAt: 'asc' },
+      },
     },
   });
 
@@ -792,7 +1217,11 @@ export async function approveTask(userId: string, taskId: string, comment?: stri
       action: AuditAction.record_updated,
       entityType: 'task_approval',
       entityId: taskId,
-      metadata: { action: 'approve', comment: comment ?? null },
+      metadata: {
+        action: 'approve',
+        comment: body.comment ?? null,
+        signatureFileId: body.signatureFileId ?? null,
+      },
     },
   });
 
@@ -805,13 +1234,23 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
     throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
   }
 
+  if (body.action === 'reject' && body.signatureFileId) {
+    throw httpError(
+      422,
+      'VALIDATION_ERROR',
+      'signatureFileId is only supported when action is approve.',
+    );
+  }
+
+  await assertValidSignatureFile(user.tenantId, body.signatureFileId);
+
   if (body.action === 'approve') {
     await ensureActorReviewedAllPendingApprovals(user);
   }
 
   const tasks = await prisma.task.findMany({
     where: { id: { in: body.taskIds }, tenantId: user.tenantId, deletedAt: null },
-    select: { id: true, approvalStatus: true },
+    select: { id: true, approvalStatus: true, submissionPayload: true },
   });
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
 
@@ -835,16 +1274,32 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
         where: { id: taskId },
         data:
           body.action === 'approve'
-            ? {
-                approvalStatus: TaskApprovalStatus.approved,
-                approvedAt: new Date(),
-                approvedById: user.employee?.id ?? null,
-                rejectionReason: null,
-              }
+            ? (() => {
+                const approvedAt = new Date();
+                return {
+                  approvalStatus: TaskApprovalStatus.approved,
+                  approvedAt,
+                  approvedById: user.employee?.id ?? null,
+                  signatureFileId: body.signatureFileId ?? null,
+                  rejectionReason: null,
+                  submissionPayload: mergeAcknowledgementEvidence({
+                    submissionPayload: task.submissionPayload,
+                    evidence: {
+                      action: 'approve',
+                      mode: 'batch',
+                      approvedAt: approvedAt.toISOString(),
+                      approvedByUserId: user.id,
+                      signatureFileId: body.signatureFileId ?? null,
+                      comment: null,
+                    },
+                  }),
+                };
+              })()
             : {
                 approvalStatus: TaskApprovalStatus.rejected,
                 approvedAt: new Date(),
                 approvedById: user.employee?.id ?? null,
+                signatureFileId: null,
                 rejectionReason: body.rejectionReason ?? 'Rejected in batch review.',
               },
       });
@@ -865,6 +1320,7 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
           action: body.action,
           processed,
           failed: failed.length,
+          signatureFileId: body.signatureFileId ?? null,
         },
       },
     });

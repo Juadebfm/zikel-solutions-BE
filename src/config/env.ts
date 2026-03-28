@@ -63,6 +63,35 @@ const envSchema = z.object({
   SECURITY_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   SECURITY_ALERT_WEBHOOK_MAX_DRIFT_SECONDS: z.coerce.number().int().positive().default(300),
 
+  // File uploads (direct-to-object-storage via presigned URLs)
+  UPLOADS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  UPLOADS_S3_BUCKET: z.string().min(1).optional(),
+  UPLOADS_S3_REGION: z.string().min(1).default('eu-west-1'),
+  UPLOADS_S3_ENDPOINT: z.url({ error: 'UPLOADS_S3_ENDPOINT must be a valid URL' }).optional(),
+  UPLOADS_S3_ACCESS_KEY_ID: z.string().min(1).optional(),
+  UPLOADS_S3_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  UPLOADS_FORCE_PATH_STYLE: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  UPLOADS_SIGNED_URL_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
+  UPLOADS_MAX_FILE_SIZE_BYTES: z.coerce.number().int().positive().default(15 * 1024 * 1024),
+  UPLOADS_ALLOWED_MIME_TYPES: z.string().default(
+    [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'image/png',
+      'image/jpeg',
+      'image/webp',
+      'image/svg+xml',
+    ].join(','),
+  ),
+  UPLOADS_PUBLIC_BASE_URL: z.url({ error: 'UPLOADS_PUBLIC_BASE_URL must be a valid URL' }).optional(),
+
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -143,6 +172,29 @@ function parseEnv(): Env {
       }
     }
 
+  }
+
+  if (parsed.UPLOADS_ENABLED) {
+    if (!parsed.UPLOADS_S3_BUCKET) {
+      throw new Error('UPLOADS_S3_BUCKET is required when UPLOADS_ENABLED=true.');
+    }
+    if (!parsed.UPLOADS_S3_ACCESS_KEY_ID || !parsed.UPLOADS_S3_SECRET_ACCESS_KEY) {
+      throw new Error(
+        'UPLOADS_S3_ACCESS_KEY_ID and UPLOADS_S3_SECRET_ACCESS_KEY are required when UPLOADS_ENABLED=true.',
+      );
+    }
+  }
+
+  if (
+    (parsed.NODE_ENV === 'staging' || parsed.NODE_ENV === 'production') &&
+    parsed.UPLOADS_ENABLED
+  ) {
+    if (parsed.UPLOADS_S3_ENDPOINT && !parsed.UPLOADS_S3_ENDPOINT.startsWith('https://')) {
+      throw new Error('UPLOADS_S3_ENDPOINT must use https:// in staging/production.');
+    }
+    if (parsed.UPLOADS_PUBLIC_BASE_URL && !parsed.UPLOADS_PUBLIC_BASE_URL.startsWith('https://')) {
+      throw new Error('UPLOADS_PUBLIC_BASE_URL must use https:// in staging/production.');
+    }
   }
 
   if (parsed.AI_ENABLED && !parsed.AI_API_KEY) {

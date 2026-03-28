@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import type {
   CreateVehicleBody,
   ListVehiclesQuery,
@@ -26,17 +27,31 @@ function normalizeRegistration(registration: string) {
 function mapVehicle(vehicle: Vehicle) {
   return {
     id: vehicle.id,
+    homeId: vehicle.homeId,
     registration: vehicle.registration,
     make: vehicle.make,
     model: vehicle.model,
     year: vehicle.year,
     colour: vehicle.colour,
+    avatarFileId: vehicle.avatarFileId,
+    avatarUrl: vehicle.avatarUrl,
+    details: vehicle.details,
     isActive: vehicle.isActive,
     nextServiceDue: vehicle.nextServiceDue,
     motDue: vehicle.motDue,
     createdAt: vehicle.createdAt,
     updatedAt: vehicle.updatedAt,
   };
+}
+
+async function ensureHomeExists(tenantId: string, homeId: string) {
+  const exists = await prisma.home.findFirst({
+    where: { id: homeId, tenantId },
+    select: { id: true },
+  });
+  if (!exists) {
+    throw httpError(422, 'HOME_NOT_FOUND', 'Home does not exist in active tenant.');
+  }
 }
 
 function paginationMeta(total: number, page: number, pageSize: number) {
@@ -71,6 +86,7 @@ export async function listVehicles(actorUserId: string, query: ListVehiclesQuery
           ],
         }
       : {}),
+    ...(query.homeId ? { homeId: query.homeId } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
   };
 
@@ -97,6 +113,7 @@ export async function listVehicles(actorUserId: string, query: ListVehiclesQuery
       sortBy: query.sortBy ?? null,
       sortOrder: query.sortOrder ?? null,
       hasSearch: Boolean(query.search),
+      homeId: query.homeId ?? null,
       isActive: query.isActive ?? null,
     },
   });
@@ -131,15 +148,25 @@ export async function getVehicle(actorUserId: string, vehicleId: string) {
 
 export async function createVehicle(actorUserId: string, body: CreateVehicleBody) {
   const tenant = await requireTenantContext(actorUserId);
+  if (body.homeId) {
+    await ensureHomeExists(tenant.tenantId, body.homeId);
+  }
+  if (body.avatarFileId) {
+    await assertUploadedFilesBelongToTenant(tenant.tenantId, [body.avatarFileId]);
+  }
   try {
     const vehicle = await prisma.vehicle.create({
       data: {
         tenantId: tenant.tenantId,
+        homeId: body.homeId ?? null,
         registration: normalizeRegistration(body.registration),
         make: body.make ?? null,
         model: body.model ?? null,
         year: body.year ?? null,
         colour: body.colour ?? null,
+        ...(body.avatarFileId ? { avatarFileId: body.avatarFileId } : {}),
+        avatarUrl: body.avatarUrl ?? null,
+        details: (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
         isActive: body.isActive ?? true,
         nextServiceDue: body.nextServiceDue ?? null,
         motDue: body.motDue ?? null,
@@ -178,8 +205,15 @@ export async function updateVehicle(actorUserId: string, vehicleId: string, body
   if (!existing) {
     throw httpError(404, 'VEHICLE_NOT_FOUND', 'Vehicle not found.');
   }
+  if (body.homeId) {
+    await ensureHomeExists(tenant.tenantId, body.homeId);
+  }
+  if (body.avatarFileId) {
+    await assertUploadedFilesBelongToTenant(tenant.tenantId, [body.avatarFileId]);
+  }
 
   const updateData: Prisma.VehicleUpdateInput = {};
+  if (body.homeId !== undefined) updateData.home = body.homeId === null ? { disconnect: true } : { connect: { id: body.homeId } };
   if (body.registration !== undefined) {
     updateData.registration = normalizeRegistration(body.registration);
   }
@@ -187,6 +221,15 @@ export async function updateVehicle(actorUserId: string, vehicleId: string, body
   if (body.model !== undefined) updateData.model = body.model;
   if (body.year !== undefined) updateData.year = body.year;
   if (body.colour !== undefined) updateData.colour = body.colour;
+  if (body.avatarFileId !== undefined) {
+    updateData.avatarFile = body.avatarFileId === null
+      ? { disconnect: true }
+      : { connect: { id: body.avatarFileId } };
+  }
+  if (body.avatarUrl !== undefined) updateData.avatarUrl = body.avatarUrl;
+  if (body.details !== undefined) {
+    updateData.details = (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
+  }
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
   if (body.nextServiceDue !== undefined) updateData.nextServiceDue = body.nextServiceDue;
   if (body.motDue !== undefined) updateData.motDue = body.motDue;
