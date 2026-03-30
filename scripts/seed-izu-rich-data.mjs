@@ -38,6 +38,15 @@ function signatureAvatar(seed) {
   return `https://api.dicebear.com/9.x/identicon/svg?seed=${encodeURIComponent(seed)}`;
 }
 
+const CANONICAL_TASK_GROUP_LABELS = {
+  [TaskCategory.task_log]: 'Task Log',
+  [TaskCategory.document]: 'Document',
+  [TaskCategory.system_link]: 'System Link',
+  [TaskCategory.checklist]: 'Checklist',
+  [TaskCategory.incident]: 'Incident',
+  [TaskCategory.other]: 'General',
+};
+
 async function resolveTenantForUser(userId) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -426,6 +435,8 @@ async function main() {
     {
       title: 'Overdue Child Protection Policy Acknowledgement',
       category: TaskCategory.document,
+      domain: 'Compliance',
+      requestId: '9921',
       dueInDays: -2,
       priority: TaskPriority.urgent,
       home: homeOne,
@@ -436,10 +447,16 @@ async function main() {
       documentUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
       routeUrl: '/policies/child-protection',
       notes: 'Review child protection policy revision and sign-off before dashboard access.',
+      previewFields: [
+        { label: 'Requested By', value: 'Sarah Jenkins' },
+        { label: 'Policy Version', value: 'v3.2' },
+      ],
     },
     {
       title: 'Overdue Fleet Safety Checklist Sign-off',
       category: TaskCategory.task_log,
+      domain: 'Operations',
+      requestId: '9945',
       dueInDays: -1,
       priority: TaskPriority.high,
       home: homeTwo,
@@ -450,10 +467,16 @@ async function main() {
       documentUrl: null,
       routeUrl: '/tasks/fleet/IZU-VC-002/safety-check',
       notes: 'Complete vehicle safety checklist and confirm odometer readings.',
+      previewFields: [
+        { label: 'Vehicle', value: 'Mercedes Vito IZU-VC-002' },
+        { label: 'Mileage', value: '84,120 mi' },
+      ],
     },
     {
       title: 'Due Soon Medication Incident Review',
       category: TaskCategory.incident,
+      domain: 'Clinical',
+      requestId: '9952',
       dueInDays: 1,
       priority: TaskPriority.high,
       home: homeOne,
@@ -464,10 +487,16 @@ async function main() {
       documentUrl: null,
       routeUrl: '/incidents/review/medication',
       notes: 'Medication discrepancy follow-up; pending manager approval.',
+      previewFields: [
+        { label: 'Severity', value: 'Medium' },
+        { label: 'Location', value: 'Northbridge Home' },
+      ],
     },
     {
       title: 'Upcoming Home Compliance Checklist',
       category: TaskCategory.checklist,
+      domain: 'Compliance',
+      requestId: '9970',
       dueInDays: 3,
       priority: TaskPriority.medium,
       home: homeTwo,
@@ -478,10 +507,16 @@ async function main() {
       documentUrl: null,
       routeUrl: '/homes/compliance/lakeside',
       notes: 'Monthly home compliance checklist due in three days.',
+      previewFields: [
+        { label: 'Checklist Window', value: 'March 2026' },
+        { label: 'Home', value: 'Lakeside Home' },
+      ],
     },
     {
       title: 'Document Review: Whistleblowing Procedure',
       category: TaskCategory.document,
+      domain: 'Staffing',
+      requestId: '9988',
       dueInDays: 2,
       priority: TaskPriority.medium,
       home: homeOne,
@@ -492,6 +527,10 @@ async function main() {
       documentUrl: 'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf',
       routeUrl: '/policies/whistleblowing',
       notes: 'Procedure update distributed to all tenant admins.',
+      previewFields: [
+        { label: 'Owner', value: 'People Operations' },
+        { label: 'Effective Date', value: '2026-04-01' },
+      ],
     },
   ];
 
@@ -501,7 +540,11 @@ async function main() {
     const dueDate = nowPlusDays(taskSeed.dueInDays, 10, 30);
     const submissionPayload = {
       approverNames: [reviewerName],
+      domain: taskSeed.domain,
+      requestId: taskSeed.requestId,
       summary: taskSeed.notes,
+      previewFields: taskSeed.previewFields,
+      summaryMetrics: Object.fromEntries(taskSeed.previewFields.map((item) => [item.label, item.value])),
       sections: [
         {
           title: taskSeed.title,
@@ -524,7 +567,7 @@ async function main() {
         priority: taskSeed.priority,
         dueDate,
         formName: taskSeed.title,
-        formGroup: taskSeed.category,
+        formGroup: CANONICAL_TASK_GROUP_LABELS[taskSeed.category] ?? 'General',
         submissionPayload,
         submittedAt: new Date(),
         submittedById: taskSeed.creator.id,

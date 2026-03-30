@@ -5,9 +5,11 @@ import * as tasksService from './tasks.service.js';
 import {
   CreateTaskBodySchema,
   ListTasksQuerySchema,
+  TaskActionBodySchema,
   UpdateTaskBodySchema,
   createTaskBodyJson,
   listTasksQueryJson,
+  taskActionBodyJson,
   updateTaskBodyJson,
 } from './tasks.schema.js';
 
@@ -23,11 +25,12 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
       response: {
         200: {
           type: 'object',
-          required: ['success', 'data', 'meta'],
+          required: ['success', 'data', 'meta', 'labels'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'array', items: { $ref: 'Task#' } },
+            data: { type: 'array', items: { type: 'object', additionalProperties: true } },
             meta: { $ref: 'PaginationMeta#' },
+            labels: { type: 'object', additionalProperties: true },
           },
         },
         422: { $ref: 'ApiError#' },
@@ -44,8 +47,73 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const actorUserId = (request.user as JwtPayload).sub;
-      const { data, meta } = await tasksService.listTasks(actorUserId, parse.data);
-      return reply.send({ success: true, data, meta });
+      const { data, meta, labels } = await tasksService.listTasks(actorUserId, parse.data);
+      return reply.send({ success: true, data, meta, labels });
+    },
+  });
+
+  fastify.get('/categories', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'List task categories',
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['value', 'label'],
+                properties: {
+                  value: { type: 'string' },
+                  label: { type: 'string' },
+                  types: { type: ['array', 'null'], items: { type: 'string' } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    handler: async (_request, reply) => {
+      const data = await tasksService.listTaskCategories();
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.get('/form-templates', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'List task form templates',
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['slug', 'label', 'category'],
+                properties: {
+                  slug: { type: 'string' },
+                  label: { type: 'string' },
+                  category: { type: 'string' },
+                  formGroup: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    handler: async (_request, reply) => {
+      const data = await tasksService.listTaskFormTemplates();
+      return reply.send({ success: true, data });
     },
   });
 
@@ -60,7 +128,7 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { $ref: 'Task#' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         404: { $ref: 'ApiError#' },
@@ -70,6 +138,43 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
       const actorUserId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
       const data = await tasksService.getTask(actorUserId, id);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.post('/:id/actions', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Run task action',
+      params: { $ref: 'CuidParam#' },
+      body: taskActionBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'object', additionalProperties: true },
+          },
+        },
+        403: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = TaskActionBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await tasksService.runTaskAction(actorUserId, id, parse.data);
       return reply.send({ success: true, data });
     },
   });

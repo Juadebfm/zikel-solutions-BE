@@ -1,5 +1,6 @@
 import {
   AuditAction,
+  TaskCategory,
   TaskReferenceEntityType,
   TaskReferenceType,
   TaskApprovalStatus,
@@ -15,10 +16,11 @@ import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type { CreateTaskBody, ListTasksQuery, UpdateTaskBody } from './tasks.schema.js';
+import type { CreateTaskBody, ListTasksQuery, TaskActionBody, UpdateTaskBody } from './tasks.schema.js';
 
 type TaskActorContext = {
   userId: string;
+  displayName: string;
   userRole: UserRole;
   tenantId: string;
   tenantRole: TenantRole | null;
@@ -26,14 +28,136 @@ type TaskActorContext = {
 };
 
 const SORTABLE_FIELDS = new Set([
+  'taskRef',
   'title',
   'status',
   'approvalStatus',
   'category',
+  'type',
   'priority',
+  'submittedAt',
+  'dueAt',
   'dueDate',
   'createdAt',
   'updatedAt',
+]);
+
+const WORKFLOW_STATUS_LABELS: Record<TaskStatus, string> = {
+  pending: 'Pending',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
+
+const APPROVAL_STATUS_LABELS: Record<TaskApprovalStatus, string> = {
+  not_required: 'Not Required',
+  pending_approval: 'Awaiting Approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  processing: 'Processing',
+};
+
+const TASK_CATEGORY_LABELS: Record<TaskCategory, string> = {
+  task_log: 'Task Log',
+  document: 'Document',
+  system_link: 'System Link',
+  checklist: 'Checklist',
+  incident: 'Incident',
+  other: 'General',
+};
+
+const EXPLORER_CATEGORY_MAP: Record<
+  string,
+  { value: string; label: string; taskCategory: TaskCategory; types: string[] | null }
+> = {
+  reg44: { value: 'reg44', label: 'Reg 44 Visit', taskCategory: TaskCategory.document, types: ['home'] },
+  inspection: {
+    value: 'inspection',
+    label: 'Inspection',
+    taskCategory: TaskCategory.checklist,
+    types: ['home', 'vehicle'],
+  },
+  maintenance: {
+    value: 'maintenance',
+    label: 'Maintenance',
+    taskCategory: TaskCategory.checklist,
+    types: ['home', 'vehicle'],
+  },
+  checkup: {
+    value: 'checkup',
+    label: 'Checkup',
+    taskCategory: TaskCategory.task_log,
+    types: ['young_person', 'employee'],
+  },
+  meeting: { value: 'meeting', label: 'Meeting', taskCategory: TaskCategory.task_log, types: null },
+  documentation: {
+    value: 'documentation',
+    label: 'Documentation',
+    taskCategory: TaskCategory.document,
+    types: null,
+  },
+  incident: {
+    value: 'incident',
+    label: 'Incident Report',
+    taskCategory: TaskCategory.incident,
+    types: ['home', 'young_person'],
+  },
+  report: { value: 'report', label: 'Report', taskCategory: TaskCategory.document, types: null },
+  compliance: {
+    value: 'compliance',
+    label: 'Compliance',
+    taskCategory: TaskCategory.document,
+    types: ['home'],
+  },
+  general: { value: 'general', label: 'General Task', taskCategory: TaskCategory.other, types: null },
+};
+
+const EXPLORER_STATUS_VALUES = new Set([
+  'draft',
+  'submitted',
+  'sent_for_approval',
+  'approved',
+  'rejected',
+  'sent_for_deletion',
+  'deleted',
+  'deleted_draft',
+  'hidden',
+]);
+
+const EXPLORER_APPROVAL_STATUS_VALUES = new Set([
+  'not_required',
+  'pending_approval',
+  'approved',
+  'rejected',
+  'processing',
+]);
+
+const EXPLORER_TYPE_VALUES = new Set([
+  'home',
+  'young_person',
+  'vehicle',
+  'employee',
+  'document',
+  'event',
+  'upload',
+  'care_group',
+  'tenant',
+  'task',
+  'other',
+]);
+
+const TASK_CATEGORY_VALUES = new Set<TaskCategory>([
+  TaskCategory.task_log,
+  TaskCategory.document,
+  TaskCategory.system_link,
+  TaskCategory.checklist,
+  TaskCategory.incident,
+  TaskCategory.other,
+]);
+
+const EXPLORER_CATEGORY_VALUES = new Set([
+  ...Object.keys(EXPLORER_CATEGORY_MAP),
+  ...TASK_CATEGORY_VALUES,
 ]);
 
 function isPrivilegedActor(actor: TaskActorContext) {
@@ -48,6 +172,23 @@ function ownsTask(actor: TaskActorContext, task: Pick<Task, 'createdById' | 'ass
 }
 
 type TaskWithReferences = Task & { references?: TaskReference[] };
+
+type TaskWithExplorerRelations = Task & {
+  references?: TaskReference[];
+  home?: { id: string; name: string; careGroupId: string | null } | null;
+  vehicle?: { id: string; registration: string; make: string | null; model: string | null; homeId: string | null } | null;
+  youngPerson?: { id: string; firstName: string; lastName: string; homeId: string } | null;
+  assignee?: {
+    id: string;
+    user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } | null;
+  } | null;
+};
+
+type UserIdentity = {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+};
 
 function mapTaskReference(reference: TaskReference) {
   return {
@@ -98,6 +239,94 @@ function mapTask(task: TaskWithReferences) {
   };
 }
 
+function toTaskRef(task: { id: string; createdAt: Date }) {
+  const year = task.createdAt.getUTCFullYear();
+  const month = String(task.createdAt.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(task.createdAt.getUTCDate()).padStart(2, '0');
+  const alphanumericId = task.id.replace(/[^a-zA-Z0-9]/g, '');
+  const suffix = alphanumericId.slice(-6).toUpperCase().padStart(6, '0');
+  return `TSK-${year}${month}${day}-${suffix}`;
+}
+
+function toDisplayName(firstName?: string | null, lastName?: string | null) {
+  return `${firstName ?? ''} ${lastName ?? ''}`.trim();
+}
+
+function parseDelimitedValues(raw: string | undefined, valid: Set<string>) {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item): item is string => Boolean(item))
+    .filter((item, index, list) => list.indexOf(item) === index)
+    .filter((item) => valid.has(item));
+}
+
+function normalizeTaskCategoryInput(raw: CreateTaskBody['category'] | UpdateTaskBody['category']) {
+  if (!raw) return undefined;
+  if (raw in EXPLORER_CATEGORY_MAP) {
+    return EXPLORER_CATEGORY_MAP[raw as keyof typeof EXPLORER_CATEGORY_MAP].taskCategory;
+  }
+  return raw as TaskCategory;
+}
+
+function getTodayBounds() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setHours(23, 59, 59, 999);
+  return { start, end };
+}
+
+function periodToRange(period: ListTasksQuery['period']) {
+  const now = new Date();
+  const { start, end } = getTodayBounds();
+
+  switch (period) {
+    case 'today':
+      return { from: start, to: end };
+    case 'yesterday': {
+      const from = new Date(start);
+      from.setDate(from.getDate() - 1);
+      const to = new Date(end);
+      to.setDate(to.getDate() - 1);
+      return { from, to };
+    }
+    case 'last_7_days': {
+      const from = new Date(start);
+      from.setDate(from.getDate() - 6);
+      return { from, to: end };
+    }
+    case 'this_week': {
+      const from = new Date(start);
+      const day = from.getDay() || 7;
+      from.setDate(from.getDate() - (day - 1));
+      const to = new Date(from);
+      to.setDate(to.getDate() + 6);
+      to.setHours(23, 59, 59, 999);
+      return { from, to };
+    }
+    case 'this_month': {
+      const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0));
+      const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+      return { from, to };
+    }
+    case 'last_month': {
+      const from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1, 0, 0, 0, 0));
+      const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0, 23, 59, 59, 999));
+      return { from, to };
+    }
+    case 'this_year': {
+      const from = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0, 0));
+      const to = new Date(Date.UTC(now.getUTCFullYear(), 11, 31, 23, 59, 59, 999));
+      return { from, to };
+    }
+    case 'all':
+    default:
+      return { from: null, to: null };
+  }
+}
+
 function paginationMeta(total: number, page: number, pageSize: number) {
   return {
     total,
@@ -109,7 +338,16 @@ function paginationMeta(total: number, page: number, pageSize: number) {
 
 function orderByFromQuery(query: ListTasksQuery): Prisma.TaskOrderByWithRelationInput[] {
   if (query.sortBy && SORTABLE_FIELDS.has(query.sortBy)) {
-    return [{ [query.sortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
+    const normalizedSortBy = query.sortBy === 'dueAt'
+      ? 'dueDate'
+      : query.sortBy === 'submittedAt'
+        ? 'submittedAt'
+        : query.sortBy === 'taskRef'
+          ? 'createdAt'
+          : query.sortBy === 'type'
+            ? 'category'
+            : query.sortBy;
+    return [{ [normalizedSortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
   }
   return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
 }
@@ -223,12 +461,418 @@ function toNullableJsonInput(
   return value as Prisma.InputJsonValue;
 }
 
+type MappedReference = {
+  id: string;
+  type: TaskReference['type'];
+  entityType: TaskReference['entityType'];
+  entityId: string | null;
+  fileId: string | null;
+  url: string | null;
+  label: string | null;
+  metadata: Prisma.JsonValue;
+};
+
+function mapReference(reference: TaskReference): MappedReference {
+  return {
+    id: reference.id,
+    type: reference.type,
+    entityType: reference.entityType,
+    entityId: reference.entityId,
+    fileId: reference.fileId,
+    url: reference.url,
+    label: reference.label,
+    metadata: reference.metadata,
+  };
+}
+
+function extractPayloadReferences(taskId: string, payload: Prisma.JsonValue | null): MappedReference[] {
+  const payloadObj = asRecord(payload);
+  const rawLinks = Array.isArray(payloadObj?.referenceLinks) ? payloadObj.referenceLinks : [];
+  const references: MappedReference[] = [];
+
+  rawLinks.forEach((raw, index) => {
+    const link = asRecord(raw);
+    if (!link) return;
+
+    const typeRaw = typeof link.type === 'string' ? link.type.trim().toLowerCase() : '';
+    const url = typeof link.url === 'string' ? link.url : null;
+    const label = typeof link.label === 'string' ? link.label : null;
+    let type: MappedReference['type'] = 'external_url';
+    if (typeRaw === 'document') type = 'document_url';
+    else if (typeRaw === 'task') type = 'internal_route';
+    else if (typeRaw === 'upload') type = 'upload';
+
+    references.push({
+      id: typeof link.id === 'string' ? link.id : `${taskId}-payload-ref-${index + 1}`,
+      type,
+      entityType: null,
+      entityId: null,
+      fileId: typeof link.fileId === 'string' ? link.fileId : null,
+      url,
+      label,
+      metadata: link as Prisma.JsonValue,
+    });
+  });
+
+  return references;
+}
+
+function toRelatedTypeFromReference(reference: MappedReference): string | null {
+  if (reference.type === 'document_url') return 'document';
+  if (reference.type === 'upload') return 'upload';
+  if (reference.entityType === TaskReferenceEntityType.young_person) return 'young_person';
+  if (reference.entityType === TaskReferenceEntityType.home) return 'home';
+  if (reference.entityType === TaskReferenceEntityType.vehicle) return 'vehicle';
+  if (reference.entityType === TaskReferenceEntityType.care_group) return 'care_group';
+  if (reference.entityType === TaskReferenceEntityType.tenant) return 'tenant';
+  if (reference.entityType === TaskReferenceEntityType.employee) return 'employee';
+  if (reference.entityType === TaskReferenceEntityType.task) return 'task';
+  return null;
+}
+
+function buildLinksFromReferences(taskId: string, references: MappedReference[]) {
+  const taskUrlRef = references.find((reference) => reference.type === 'internal_route');
+  const documentUrlRef = references.find((reference) => reference.type === 'document_url');
+  const fallbackExternal = references.find((reference) => reference.type === 'external_url');
+
+  return {
+    taskUrl: taskUrlRef?.url ?? `/tasks/${taskId}`,
+    documentUrl: documentUrlRef?.url ?? fallbackExternal?.url ?? null,
+  };
+}
+
+function buildReferenceSummary(references: MappedReference[]) {
+  const documents = references.filter((reference) => reference.type === 'document_url').length;
+  const uploads = references.filter((reference) => reference.type === 'upload').length;
+  const links = references.filter((reference) => ['internal_route', 'external_url'].includes(reference.type)).length;
+  const entities = references.filter((reference) => reference.type === 'entity').length;
+  return {
+    documents,
+    uploads,
+    links,
+    entities,
+    total: references.length,
+  };
+}
+
+function resolveRelatedEntity(args: {
+  youngPersonId: string | null;
+  youngPersonName: string | null;
+  youngPersonHomeId: string | null;
+  homeId: string | null;
+  homeName: string | null;
+  homeCareGroupId: string | null;
+  vehicleId: string | null;
+  vehicleLabel: string | null;
+  vehicleHomeId: string | null;
+  references: MappedReference[];
+}) {
+  if (args.youngPersonId && args.youngPersonName) {
+    return {
+      type: 'young_person',
+      id: args.youngPersonId,
+      name: args.youngPersonName,
+      homeId: args.youngPersonHomeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  if (args.homeId && args.homeName) {
+    return {
+      type: 'home',
+      id: args.homeId,
+      name: args.homeName,
+      homeId: args.homeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  if (args.vehicleId && args.vehicleLabel) {
+    return {
+      type: 'vehicle',
+      id: args.vehicleId,
+      name: args.vehicleLabel,
+      homeId: args.vehicleHomeId ?? args.homeId,
+      careGroupId: args.homeCareGroupId,
+    };
+  }
+
+  const fromReference = args.references.find((reference) => toRelatedTypeFromReference(reference));
+  if (fromReference) {
+    return {
+      type: toRelatedTypeFromReference(fromReference) ?? 'other',
+      id: fromReference.entityId,
+      name: fromReference.label ?? fromReference.url ?? 'Reference',
+      homeId: null,
+      careGroupId: null,
+    };
+  }
+
+  return null;
+}
+
+function extractApproverIds(payload: Prisma.JsonValue | null) {
+  const payloadObj = asRecord(payload);
+  const direct = Array.isArray(payloadObj?.approverIds) ? payloadObj.approverIds : [];
+  return direct.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function extractApproverNames(payload: Prisma.JsonValue | null) {
+  const payloadObj = asRecord(payload);
+  const direct = Array.isArray(payloadObj?.approverNames) ? payloadObj.approverNames : [];
+  return direct.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+}
+
+function extractRequestId(payload: Prisma.JsonValue | null) {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return null;
+  if (typeof payloadObj.requestId === 'string' || typeof payloadObj.requestId === 'number') {
+    return String(payloadObj.requestId);
+  }
+  const requestObj = asRecord(payloadObj.request);
+  if (!requestObj) return null;
+  if (typeof requestObj.id === 'string' || typeof requestObj.id === 'number') {
+    return String(requestObj.id);
+  }
+  return null;
+}
+
+function extractPreviewFields(payload: Prisma.JsonValue | null) {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj || !Array.isArray(payloadObj.previewFields)) return [];
+  return payloadObj.previewFields
+    .map((entry) => {
+      const row = asRecord(entry);
+      if (!row) return null;
+      const label = typeof row.label === 'string' ? row.label.trim() : '';
+      const value = typeof row.value === 'string' || typeof row.value === 'number' ? String(row.value).trim() : '';
+      if (!label || !value) return null;
+      return { label, value };
+    })
+    .filter((entry): entry is { label: string; value: string } => entry !== null)
+    .slice(0, 6);
+}
+
+function toExplorerCategory(task: Pick<Task, 'category'>) {
+  switch (task.category) {
+    case TaskCategory.checklist:
+      return EXPLORER_CATEGORY_MAP.inspection;
+    case TaskCategory.document:
+      return EXPLORER_CATEGORY_MAP.documentation;
+    case TaskCategory.incident:
+      return EXPLORER_CATEGORY_MAP.incident;
+    case TaskCategory.system_link:
+      return EXPLORER_CATEGORY_MAP.report;
+    case TaskCategory.task_log:
+      return EXPLORER_CATEGORY_MAP.general;
+    case TaskCategory.other:
+    default:
+      return EXPLORER_CATEGORY_MAP.general;
+  }
+}
+
+function toTypeLabel(type: string) {
+  const labelByType: Record<string, string> = {
+    home: 'Home',
+    young_person: 'Young Person',
+    vehicle: 'Vehicle',
+    employee: 'Employee',
+    document: 'Document',
+    event: 'Event',
+    upload: 'Upload',
+    care_group: 'Care Group',
+    tenant: 'Tenant',
+    task: 'Task',
+    other: 'Other',
+  };
+  return labelByType[type] ?? 'Other';
+}
+
+function toLifecycleStatus(task: Pick<Task, 'status' | 'approvalStatus' | 'submittedAt' | 'deletedAt'>) {
+  if (task.deletedAt) {
+    return task.submittedAt ? 'deleted' : 'deleted_draft';
+  }
+  if (task.status === TaskStatus.cancelled && task.approvalStatus === TaskApprovalStatus.processing) {
+    return 'sent_for_deletion';
+  }
+  if (task.status === TaskStatus.cancelled) return 'hidden';
+  if (task.approvalStatus === TaskApprovalStatus.pending_approval) return 'sent_for_approval';
+  if (task.approvalStatus === TaskApprovalStatus.approved) return 'approved';
+  if (task.approvalStatus === TaskApprovalStatus.rejected) return 'rejected';
+  if (task.submittedAt) return 'submitted';
+  return 'draft';
+}
+
+function toLifecycleStatusLabel(status: ReturnType<typeof toLifecycleStatus>) {
+  const labels: Record<ReturnType<typeof toLifecycleStatus>, string> = {
+    draft: 'Draft',
+    submitted: 'Submitted',
+    sent_for_approval: 'Sent for Approval',
+    approved: 'Approved',
+    rejected: 'Rejected',
+    sent_for_deletion: 'Sent for Deletion',
+    deleted: 'Deleted',
+    deleted_draft: 'Deleted Draft',
+    hidden: 'Hidden',
+  };
+  return labels[status];
+}
+
+function lifecycleWhereClause(status: string): Prisma.TaskWhereInput {
+  switch (status) {
+    case 'draft':
+      return { deletedAt: null, submittedAt: null, approvalStatus: { in: [TaskApprovalStatus.not_required, TaskApprovalStatus.processing] } };
+    case 'submitted':
+      return { deletedAt: null, submittedAt: { not: null }, approvalStatus: TaskApprovalStatus.not_required };
+    case 'sent_for_approval':
+      return { deletedAt: null, approvalStatus: TaskApprovalStatus.pending_approval };
+    case 'approved':
+      return { deletedAt: null, approvalStatus: TaskApprovalStatus.approved };
+    case 'rejected':
+      return { deletedAt: null, approvalStatus: TaskApprovalStatus.rejected };
+    case 'sent_for_deletion':
+      return { deletedAt: null, status: TaskStatus.cancelled, approvalStatus: TaskApprovalStatus.processing };
+    case 'deleted':
+      return { deletedAt: { not: null }, submittedAt: { not: null } };
+    case 'deleted_draft':
+      return { deletedAt: { not: null }, submittedAt: null };
+    case 'hidden':
+      return { deletedAt: null, status: TaskStatus.cancelled };
+    default:
+      return { deletedAt: null };
+  }
+}
+
+async function getUserIdentityMap(userIds: string[]) {
+  const deduped = [...new Set(userIds.filter(Boolean))];
+  if (deduped.length === 0) return new Map<string, UserIdentity>();
+
+  // Some isolated tests mock a minimal prisma client and do not define user.findMany.
+  // Runtime Prisma always provides it, so in tests we safely fall back to an empty map.
+  if (typeof (prisma.user as { findMany?: unknown } | undefined)?.findMany !== 'function') {
+    return new Map<string, UserIdentity>();
+  }
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: deduped } },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      avatarUrl: true,
+    },
+  });
+
+  return new Map(users.map((user) => [
+    user.id,
+    {
+      id: user.id,
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      avatarUrl: user.avatarUrl ?? null,
+    },
+  ]));
+}
+
+function mergeApprovers(args: {
+  approverIds: string[];
+  approverNames: string[];
+  userIdentityMap: Map<string, UserIdentity>;
+}) {
+  const byId = args.approverIds
+    .map((id) => args.userIdentityMap.get(id))
+    .filter((identity): identity is UserIdentity => Boolean(identity));
+
+  if (byId.length > 0) return byId;
+
+  return args.approverNames.map((name, index) => ({
+    id: `approver-name-${index + 1}`,
+    name,
+    avatarUrl: null,
+  }));
+}
+
+function toTaskExplorerItem(
+  task: TaskWithExplorerRelations,
+  userIdentityMap: Map<string, UserIdentity>,
+) {
+  const references = (task.references ?? []).length > 0
+    ? (task.references ?? []).map(mapReference)
+    : extractPayloadReferences(task.id, task.submissionPayload);
+  const vehicleLabel = task.vehicle
+    ? [task.vehicle.make, task.vehicle.model, task.vehicle.registration].filter(Boolean).join(' ')
+    : null;
+  const relatedEntity = resolveRelatedEntity({
+    youngPersonId: task.youngPerson?.id ?? task.youngPersonId,
+    youngPersonName: task.youngPerson ? toDisplayName(task.youngPerson.firstName, task.youngPerson.lastName) : null,
+    youngPersonHomeId: task.youngPerson?.homeId ?? null,
+    homeId: task.homeId,
+    homeName: task.home?.name ?? null,
+    homeCareGroupId: task.home?.careGroupId ?? null,
+    vehicleId: task.vehicleId,
+    vehicleLabel,
+    vehicleHomeId: task.vehicle?.homeId ?? null,
+    references,
+  });
+  const resolvedType = relatedEntity?.type ?? 'other';
+  const explorerCategory = toExplorerCategory(task);
+  const lifecycleStatus = toLifecycleStatus(task);
+  const requestId = extractRequestId(task.submissionPayload);
+  const previewFields = extractPreviewFields(task.submissionPayload);
+  const approverIds = extractApproverIds(task.submissionPayload);
+  const approverNames = extractApproverNames(task.submissionPayload);
+  const approvers = mergeApprovers({ approverIds, approverNames, userIdentityMap });
+  const assigneeName = task.assignee?.user
+    ? toDisplayName(task.assignee.user.firstName, task.assignee.user.lastName)
+    : null;
+  const createdBy = task.createdById ? userIdentityMap.get(task.createdById) ?? null : null;
+
+  return {
+    id: task.id,
+    taskRef: toTaskRef(task),
+    requestId,
+    title: task.title,
+    description: task.description,
+    category: explorerCategory.value,
+    categoryLabel: explorerCategory.label,
+    taskCategory: task.category,
+    taskCategoryLabel: TASK_CATEGORY_LABELS[task.category],
+    type: resolvedType,
+    typeLabel: toTypeLabel(resolvedType),
+    status: lifecycleStatus,
+    statusLabel: toLifecycleStatusLabel(lifecycleStatus),
+    workflowStatus: task.status,
+    workflowStatusLabel: WORKFLOW_STATUS_LABELS[task.status],
+    approvalStatus: task.approvalStatus,
+    approvalStatusLabel: APPROVAL_STATUS_LABELS[task.approvalStatus],
+    priority: task.priority,
+    dueAt: task.dueDate,
+    submittedAt: task.submittedAt,
+    formGroup: task.formGroup,
+    formTemplateKey: task.formTemplateKey,
+    formName: task.formName,
+    relatedEntity,
+    assignee: task.assignee && assigneeName
+      ? { id: task.assignee.id, name: assigneeName, avatarUrl: task.assignee.user?.avatarUrl ?? null }
+      : null,
+    createdBy,
+    approvers,
+    links: buildLinksFromReferences(task.id, references),
+    referenceSummary: buildReferenceSummary(references),
+    previewFields,
+    references,
+    timestamps: {
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    },
+  };
+}
+
 async function resolveActorContext(actorUserId: string): Promise<TaskActorContext> {
   const tenant = await requireTenantContext(actorUserId);
   const [user, employee] = await Promise.all([
     prisma.user.findUnique({
       where: { id: actorUserId },
-      select: { id: true, role: true },
+      select: { id: true, role: true, firstName: true, lastName: true },
     }),
     prisma.employee.findFirst({
       where: {
@@ -246,6 +890,7 @@ async function resolveActorContext(actorUserId: string): Promise<TaskActorContex
 
   return {
     userId: user.id,
+    displayName: toDisplayName(user.firstName, user.lastName),
     userRole: user.role,
     tenantId: tenant.tenantId,
     tenantRole: tenant.tenantRole,
@@ -313,6 +958,42 @@ async function ensureTaskRelationsInTenant(
       );
     }
   }
+}
+
+function resolveEntityLinksFromInput(args: {
+  relatedEntityId?: string | null | undefined;
+  type?: string | null | undefined;
+  homeId?: string | null | undefined;
+  vehicleId?: string | null | undefined;
+  youngPersonId?: string | null | undefined;
+}) {
+  const next = {
+    homeId: args.homeId ?? undefined,
+    vehicleId: args.vehicleId ?? undefined,
+    youngPersonId: args.youngPersonId ?? undefined,
+  };
+  if (!args.relatedEntityId || !args.type) return next;
+
+  if (args.type === 'home' && !next.homeId) next.homeId = args.relatedEntityId;
+  if (args.type === 'vehicle' && !next.vehicleId) next.vehicleId = args.relatedEntityId;
+  if (args.type === 'young_person' && !next.youngPersonId) next.youngPersonId = args.relatedEntityId;
+  return next;
+}
+
+function mergeApproverIdsIntoPayload(payload: unknown, approverIds?: string[] | null) {
+  if (approverIds === undefined) return payload;
+  const record = payload == null ? {} : asRecord(payload);
+  if (!record) {
+    throw httpError(422, 'VALIDATION_ERROR', 'submissionPayload must be an object when approverIds is provided.');
+  }
+
+  const next = { ...record } as Record<string, unknown>;
+  if (approverIds === null) {
+    delete next.approverIds;
+  } else {
+    next.approverIds = approverIds;
+  }
+  return next;
 }
 
 async function assertEntityReferencesInTenant(
@@ -410,12 +1091,27 @@ function toReferenceCreateData(
 
 export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const actor = await resolveActorContext(actorUserId);
-  const skip = (query.page - 1) * query.pageSize;
-
-  const filters: Prisma.TaskWhereInput[] = [{ tenantId: actor.tenantId, deletedAt: null }];
+  const filters: Prisma.TaskWhereInput[] = [{ tenantId: actor.tenantId }];
   const privileged = isPrivilegedActor(actor);
+  const lifecycleStatuses = parseDelimitedValues(query.status, EXPLORER_STATUS_VALUES);
+  const explorerCategories = parseDelimitedValues(query.category, EXPLORER_CATEGORY_VALUES);
+  const approvalStatuses = parseDelimitedValues(query.approvalStatus, EXPLORER_APPROVAL_STATUS_VALUES) as TaskApprovalStatus[];
+  const typeFilters = parseDelimitedValues(query.type, EXPLORER_TYPE_VALUES);
 
-  if (!privileged || query.mine) {
+  if (query.scope === 'my_tasks' || query.mine) {
+    filters.push({ createdById: actor.userId });
+  } else if (query.scope === 'assigned_to_me') {
+    if (!actor.employeeId) {
+      filters.push({ id: '__none__' });
+    } else {
+      filters.push({ assigneeId: actor.employeeId });
+    }
+  } else if (query.scope === 'approvals') {
+    filters.push({ approvalStatus: TaskApprovalStatus.pending_approval });
+    if (!privileged) {
+      filters.push({ createdById: actor.userId });
+    }
+  } else if (!privileged) {
     const personalScope: Prisma.TaskWhereInput = actor.employeeId
       ? { OR: [{ createdById: actor.userId }, { assigneeId: actor.employeeId }] }
       : { createdById: actor.userId };
@@ -425,21 +1121,94 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   if (query.search) {
     filters.push({
       OR: [
+        { id: { contains: query.search, mode: 'insensitive' } },
         { title: { contains: query.search, mode: 'insensitive' } },
         { description: { contains: query.search, mode: 'insensitive' } },
+        { formName: { contains: query.search, mode: 'insensitive' } },
+        { formGroup: { contains: query.search, mode: 'insensitive' } },
       ],
     });
   }
-  if (query.status) filters.push({ status: query.status });
-  if (query.approvalStatus) filters.push({ approvalStatus: query.approvalStatus });
-  if (query.category) filters.push({ category: query.category });
+
+  if (lifecycleStatuses.length > 0) {
+    filters.push({ OR: lifecycleStatuses.map((status) => lifecycleWhereClause(status)) });
+  } else {
+    filters.push({ deletedAt: null });
+  }
+
+  if (approvalStatuses.length > 0) filters.push({ approvalStatus: { in: approvalStatuses } });
+
+  if (explorerCategories.length > 0) {
+    const dbCategories = [...new Set(explorerCategories.map((key) => (
+      key in EXPLORER_CATEGORY_MAP
+        ? EXPLORER_CATEGORY_MAP[key as keyof typeof EXPLORER_CATEGORY_MAP].taskCategory
+        : key as TaskCategory
+    )))];
+    filters.push({ category: { in: dbCategories } });
+  }
+
   if (query.priority) filters.push({ priority: query.priority });
   if (query.assigneeId) filters.push({ assigneeId: query.assigneeId });
+  if (query.createdById) filters.push({ createdById: query.createdById });
   if (query.homeId) filters.push({ homeId: query.homeId });
   if (query.vehicleId) filters.push({ vehicleId: query.vehicleId });
   if (query.youngPersonId) filters.push({ youngPersonId: query.youngPersonId });
+  if (query.formGroup) filters.push({ formGroup: query.formGroup });
+  if (query.entityId) {
+    filters.push({
+      OR: [
+        { homeId: query.entityId },
+        { vehicleId: query.entityId },
+        { youngPersonId: query.entityId },
+        { references: { some: { entityId: query.entityId } } },
+      ],
+    });
+  }
+
+  if (typeFilters.length > 0) {
+    const typeClauses: Prisma.TaskWhereInput[] = [];
+    if (typeFilters.includes('home')) typeClauses.push({ homeId: { not: null } });
+    if (typeFilters.includes('young_person')) typeClauses.push({ youngPersonId: { not: null } });
+    if (typeFilters.includes('vehicle')) typeClauses.push({ vehicleId: { not: null } });
+    if (typeFilters.includes('employee')) {
+      typeClauses.push({
+        OR: [{ assigneeId: { not: null } }, { references: { some: { entityType: TaskReferenceEntityType.employee } } }],
+      });
+    }
+    if (typeFilters.includes('document')) {
+      typeClauses.push({
+        OR: [
+          { category: TaskCategory.document },
+          { references: { some: { type: TaskReferenceType.document_url } } },
+        ],
+      });
+    }
+    if (typeFilters.includes('event')) typeClauses.push({ category: TaskCategory.incident });
+    if (typeFilters.includes('upload')) typeClauses.push({ references: { some: { type: TaskReferenceType.upload } } });
+    if (typeFilters.includes('care_group')) {
+      typeClauses.push({ references: { some: { entityType: TaskReferenceEntityType.care_group } } });
+    }
+    if (typeFilters.includes('tenant')) {
+      typeClauses.push({ references: { some: { entityType: TaskReferenceEntityType.tenant } } });
+    }
+    if (typeFilters.includes('task')) {
+      typeClauses.push({ references: { some: { entityType: TaskReferenceEntityType.task } } });
+    }
+    if (typeClauses.length > 0) filters.push({ OR: typeClauses });
+  }
+
+  const periodRange = periodToRange(query.period);
+  const dueFrom = query.dateFrom ?? periodRange.from;
+  const dueTo = query.dateTo ?? periodRange.to;
+  if (dueFrom || dueTo) {
+    const dateFilter: Prisma.DateTimeFilter = {};
+    if (dueFrom) dateFilter.gte = dueFrom;
+    if (dueTo) dateFilter.lte = dueTo;
+    filters.push({ dueDate: dateFilter });
+  }
 
   const where: Prisma.TaskWhereInput = { AND: filters };
+  const skip = (query.page - 1) * query.pageSize;
 
   const [total, rows] = await Promise.all([
     prisma.task.count({ where }),
@@ -449,12 +1218,26 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
       skip,
       take: query.pageSize,
       include: {
+        home: { select: { id: true, name: true, careGroupId: true } },
+        vehicle: { select: { id: true, registration: true, make: true, model: true, homeId: true } },
+        youngPerson: { select: { id: true, firstName: true, lastName: true, homeId: true } },
+        assignee: {
+          select: {
+            id: true,
+            user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+          },
+        },
         references: {
           orderBy: { createdAt: 'asc' },
         },
       },
     }),
   ]);
+
+  const approverIds = rows.flatMap((row) => extractApproverIds(row.submissionPayload));
+  const createdByIds = rows.map((row) => row.createdById).filter((id): id is string => Boolean(id));
+  const userIdentityMap = await getUserIdentityMap([...createdByIds, ...approverIds]);
+  const data = rows.map((row) => toTaskExplorerItem(row, userIdentityMap));
 
   await logSensitiveReadAccess({
     actorUserId,
@@ -470,26 +1253,53 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
       status: query.status ?? null,
       approvalStatus: query.approvalStatus ?? null,
       category: query.category ?? null,
+      type: query.type ?? null,
       priority: query.priority ?? null,
       assigneeId: query.assigneeId ?? null,
+      createdById: query.createdById ?? null,
       homeId: query.homeId ?? null,
       vehicleId: query.vehicleId ?? null,
       youngPersonId: query.youngPersonId ?? null,
       mine: query.mine ?? null,
+      scope: query.scope,
+      period: query.period,
     },
   });
 
   return {
-    data: rows.map(mapTask),
+    data,
     meta: paginationMeta(total, query.page, query.pageSize),
+    labels: {
+      listTitle: 'Task Explorer',
+      taskRef: 'Task ID',
+      title: 'Title',
+      category: 'Category',
+      type: 'Type',
+      workflowStatus: 'Workflow Status',
+      approvalStatus: 'Approval Status',
+      priority: 'Priority',
+      dueAt: 'Due Date',
+      assignee: 'Assignee',
+      createdBy: 'Created By',
+      relatedEntity: 'Related Entity',
+    },
   };
 }
 
 export async function getTask(actorUserId: string, taskId: string) {
   const actor = await resolveActorContext(actorUserId);
   const task = await prisma.task.findFirst({
-    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
+    where: { id: taskId, tenantId: actor.tenantId },
     include: {
+      home: { select: { id: true, name: true, careGroupId: true } },
+      vehicle: { select: { id: true, registration: true, make: true, model: true, homeId: true } },
+      youngPerson: { select: { id: true, firstName: true, lastName: true, homeId: true } },
+      assignee: {
+        select: {
+          id: true,
+          user: { select: { id: true, firstName: true, lastName: true, avatarUrl: true } },
+        },
+      },
       references: {
         orderBy: { createdAt: 'asc' },
       },
@@ -504,6 +1314,103 @@ export async function getTask(actorUserId: string, taskId: string) {
     throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
   }
 
+  const approverIds = extractApproverIds(task.submissionPayload);
+  const createdByIds = [task.createdById].filter((id): id is string => Boolean(id));
+  const userIdentityMap = await getUserIdentityMap([...createdByIds, ...approverIds]);
+  const taskItem = toTaskExplorerItem(task, userIdentityMap);
+
+  const payloadRecord = asRecord(task.submissionPayload);
+  const payloadAttachmentIds = Array.isArray(payloadRecord?.attachmentFileIds)
+    ? payloadRecord.attachmentFileIds.filter((value): value is string => typeof value === 'string')
+    : [];
+  const referencedFileIds = (task.references ?? [])
+    .map((reference) => reference.fileId)
+    .filter((value): value is string => Boolean(value));
+  const allAttachmentIds = [...new Set([...payloadAttachmentIds, ...referencedFileIds, task.signatureFileId].filter(Boolean))] as string[];
+  const attachmentFiles = allAttachmentIds.length === 0
+    ? []
+    : await prisma.uploadedFile.findMany({
+        where: {
+          tenantId: actor.tenantId,
+          deletedAt: null,
+          id: { in: allAttachmentIds },
+        },
+        select: {
+          id: true,
+          originalName: true,
+          contentType: true,
+          sizeBytes: true,
+          purpose: true,
+          status: true,
+          uploadedAt: true,
+        },
+      });
+
+  const auditLogs = await prisma.auditLog.findMany({
+    where: {
+      tenantId: actor.tenantId,
+      entityId: task.id,
+      entityType: { in: ['task', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+    select: {
+      id: true,
+      action: true,
+      userId: true,
+      metadata: true,
+      createdAt: true,
+    },
+  });
+  const auditUserMap = await getUserIdentityMap(
+    auditLogs.map((row) => row.userId).filter((id): id is string => Boolean(id)),
+  );
+  const activityLog = auditLogs.map((entry) => {
+    const metadataRecord = asRecord(entry.metadata);
+    return {
+      id: entry.id,
+      action: entry.action,
+      by: entry.userId ? (auditUserMap.get(entry.userId) ?? null) : null,
+      at: entry.createdAt,
+      note:
+        typeof metadataRecord?.comment === 'string'
+          ? metadataRecord.comment
+          : typeof metadataRecord?.reason === 'string'
+            ? metadataRecord.reason
+            : null,
+      metadata: metadataRecord,
+    };
+  });
+
+  const comments = activityLog
+    .filter((item) => typeof item.note === 'string' && item.note.trim().length > 0)
+    .map((item) => ({
+      id: item.id,
+      by: item.by,
+      text: item.note,
+      at: item.at,
+    }));
+
+  const auditTrail = activityLog
+    .filter((item) => Array.isArray(item.metadata?.fields))
+    .flatMap((item) => {
+      const fields = Array.isArray(item.metadata?.fields) ? item.metadata.fields : [];
+      return fields.map((field) => ({
+        field: typeof field === 'string' ? field : 'unknown',
+        from: null,
+        to: null,
+        by: item.by?.name ?? 'System',
+        at: item.at,
+      }));
+    });
+
+  const approvalChain = taskItem.approvers.map((approver) => ({
+    userId: approver.id,
+    name: approver.name,
+    status: task.approvalStatus === TaskApprovalStatus.approved ? 'approved' : task.approvalStatus === TaskApprovalStatus.rejected ? 'rejected' : 'pending',
+    respondedAt: task.approvedAt,
+  }));
+
   await logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
@@ -514,12 +1421,35 @@ export async function getTask(actorUserId: string, taskId: string) {
     resultCount: 1,
   });
 
-  return mapTask(task);
+  return {
+    ...taskItem,
+    attachments: attachmentFiles.map((file) => ({
+      id: file.id,
+      name: file.originalName,
+      contentType: file.contentType,
+      sizeBytes: file.sizeBytes,
+      purpose: file.purpose,
+      status: file.status,
+      uploadedAt: file.uploadedAt,
+    })),
+    approvalChain,
+    activityLog,
+    comments,
+    formData: task.submissionPayload,
+    auditTrail,
+  };
 }
 
 export async function createTask(actorUserId: string, body: CreateTaskBody) {
   const actor = await resolveActorContext(actorUserId);
   const privileged = isPrivilegedActor(actor);
+  const entityLinks = resolveEntityLinksFromInput({
+    relatedEntityId: body.relatedEntityId,
+    type: body.type,
+    homeId: body.homeId,
+    vehicleId: body.vehicleId,
+    youngPersonId: body.youngPersonId,
+  });
 
   if (!privileged) {
     if (body.assigneeId && body.assigneeId !== actor.employeeId) {
@@ -549,14 +1479,15 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
     youngPersonId?: string;
   } = {};
   if (body.assigneeId !== undefined) createRelationInputs.assigneeId = body.assigneeId;
-  if (body.homeId !== undefined) createRelationInputs.homeId = body.homeId;
-  if (body.vehicleId !== undefined) createRelationInputs.vehicleId = body.vehicleId;
-  if (body.youngPersonId !== undefined) createRelationInputs.youngPersonId = body.youngPersonId;
+  if (entityLinks.homeId !== undefined) createRelationInputs.homeId = entityLinks.homeId;
+  if (entityLinks.vehicleId !== undefined) createRelationInputs.vehicleId = entityLinks.vehicleId;
+  if (entityLinks.youngPersonId !== undefined) createRelationInputs.youngPersonId = entityLinks.youngPersonId;
   await ensureTaskRelationsInTenant(actor.tenantId, createRelationInputs);
   await assertEntityReferencesInTenant(actor.tenantId, body.references);
 
+  const mergedPayload = mergeApproverIdsIntoPayload(body.submissionPayload, body.approverIds);
   const submissionPayload = buildSubmissionPayload({
-    rawPayload: body.submissionPayload,
+    rawPayload: mergedPayload,
     attachmentFileIds: body.attachmentFileIds,
     signatureFileId: body.signatureFileId,
   });
@@ -568,8 +1499,8 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
   if (body.signatureFileId?.trim()) referencedFileIds.push(body.signatureFileId);
   await assertUploadedFilesBelongToTenant(actor.tenantId, referencedFileIds);
 
-  const submittedById = submissionPayload ? actor.userId : null;
-  const submittedAt = body.submittedAt ?? (submittedById ? new Date() : null);
+  const submittedAt = body.submittedAt ?? null;
+  const submittedById = submittedAt ? actor.userId : null;
 
   const task = await prisma.task.create({
     data: {
@@ -585,15 +1516,15 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
       description: body.description ?? null,
       status: body.status ?? TaskStatus.pending,
       approvalStatus: body.approvalStatus ?? TaskApprovalStatus.not_required,
-      category: body.category,
+      category: normalizeTaskCategoryInput(body.category) ?? TaskCategory.task_log,
       priority: body.priority,
-      dueDate: body.dueDate ?? null,
+      dueDate: body.dueAt ?? body.dueDate ?? null,
       assigneeId: body.assigneeId ?? null,
-      homeId: body.homeId ?? null,
-      vehicleId: body.vehicleId ?? null,
-      youngPersonId: body.youngPersonId ?? null,
+      homeId: entityLinks.homeId ?? null,
+      vehicleId: entityLinks.vehicleId ?? null,
+      youngPersonId: entityLinks.youngPersonId ?? null,
       signatureFileId: body.signatureFileId ?? null,
-      createdById: actor.userId,
+      createdById: privileged && body.createdById ? body.createdById : actor.userId,
       completedAt: body.status === TaskStatus.completed ? new Date() : null,
       ...(body.references?.length
         ? {
@@ -662,6 +1593,14 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
     }
   }
 
+  const entityLinks = resolveEntityLinksFromInput({
+    relatedEntityId: body.relatedEntityId,
+    type: body.type,
+    homeId: body.homeId,
+    vehicleId: body.vehicleId,
+    youngPersonId: body.youngPersonId,
+  });
+
   const updateRelationInputs: {
     assigneeId?: string | null;
     homeId?: string | null;
@@ -669,16 +1608,17 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
     youngPersonId?: string | null;
   } = {};
   if (body.assigneeId !== undefined) updateRelationInputs.assigneeId = body.assigneeId;
-  if (body.homeId !== undefined) updateRelationInputs.homeId = body.homeId;
-  if (body.vehicleId !== undefined) updateRelationInputs.vehicleId = body.vehicleId;
-  if (body.youngPersonId !== undefined) updateRelationInputs.youngPersonId = body.youngPersonId;
+  if (entityLinks.homeId !== undefined) updateRelationInputs.homeId = entityLinks.homeId;
+  if (entityLinks.vehicleId !== undefined) updateRelationInputs.vehicleId = entityLinks.vehicleId;
+  if (entityLinks.youngPersonId !== undefined) updateRelationInputs.youngPersonId = entityLinks.youngPersonId;
   await ensureTaskRelationsInTenant(actor.tenantId, updateRelationInputs);
   if (body.references !== undefined) {
     await assertEntityReferencesInTenant(actor.tenantId, body.references);
   }
 
+  const payloadWithApprovers = mergeApproverIdsIntoPayload(body.submissionPayload, body.approverIds);
   const submissionPayload = buildSubmissionPayload({
-    rawPayload: body.submissionPayload,
+    rawPayload: payloadWithApprovers,
     attachmentFileIds: body.attachmentFileIds,
     signatureFileId: body.signatureFileId,
   });
@@ -705,13 +1645,14 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
         ? new Date()
         : null;
   }
-  if (body.category !== undefined) updateData.category = body.category;
+  if (body.category !== undefined) updateData.category = normalizeTaskCategoryInput(body.category) ?? TaskCategory.task_log;
   if (body.priority !== undefined) updateData.priority = body.priority;
-  if (body.dueDate !== undefined) updateData.dueDate = body.dueDate;
+  if (body.dueDate !== undefined || body.dueAt !== undefined) updateData.dueDate = body.dueAt ?? body.dueDate ?? null;
   if (body.assigneeId !== undefined) updateData.assigneeId = body.assigneeId;
-  if (body.homeId !== undefined) updateData.homeId = body.homeId;
-  if (body.vehicleId !== undefined) updateData.vehicleId = body.vehicleId;
-  if (body.youngPersonId !== undefined) updateData.youngPersonId = body.youngPersonId;
+  if (entityLinks.homeId !== undefined) updateData.homeId = entityLinks.homeId;
+  if (entityLinks.vehicleId !== undefined) updateData.vehicleId = entityLinks.vehicleId;
+  if (entityLinks.youngPersonId !== undefined) updateData.youngPersonId = entityLinks.youngPersonId;
+  if (body.createdById !== undefined && privileged) updateData.createdById = body.createdById;
   if (body.rejectionReason !== undefined) updateData.rejectionReason = body.rejectionReason;
   if (body.formTemplateKey !== undefined) updateData.formTemplateKey = body.formTemplateKey;
   if (body.formName !== undefined) updateData.formName = body.formName;
@@ -719,17 +1660,17 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
   if (
     body.submissionPayload !== undefined ||
     body.attachmentFileIds !== undefined ||
-    body.signatureFileId !== undefined
+    body.signatureFileId !== undefined ||
+    body.approverIds !== undefined
   ) {
     updateData.submissionPayload = toNullableJsonInput(submissionPayload);
-    updateData.submittedById = submissionPayload ? actor.userId : null;
     if (body.submittedAt !== undefined) {
       updateData.submittedAt = body.submittedAt;
-    } else if (submissionPayload) {
-      updateData.submittedAt = new Date();
+      updateData.submittedById = body.submittedAt ? actor.userId : null;
     }
   } else if (body.submittedAt !== undefined) {
     updateData.submittedAt = body.submittedAt;
+    updateData.submittedById = body.submittedAt ? actor.userId : null;
   }
   if (body.signatureFileId !== undefined) updateData.signatureFileId = body.signatureFileId;
   updateData.updatedById = actor.userId;
@@ -781,6 +1722,170 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
   });
 
   return mapTask(task);
+}
+
+export async function runTaskAction(actorUserId: string, taskId: string, body: TaskActionBody) {
+  const actor = await resolveActorContext(actorUserId);
+  const existing = await prisma.task.findFirst({
+    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
+    select: {
+      id: true,
+      status: true,
+      approvalStatus: true,
+      assigneeId: true,
+      createdById: true,
+      submissionPayload: true,
+    },
+  });
+
+  if (!existing) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  const privileged = isPrivilegedActor(actor);
+  if (!privileged && !ownsTask(actor, existing)) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  if (body.signatureFileId) {
+    await assertUploadedFilesBelongToTenant(actor.tenantId, [body.signatureFileId]);
+  }
+
+  const metadata: Record<string, unknown> = {
+    action: body.action,
+    comment: body.comment ?? body.text ?? null,
+    reason: body.reason ?? null,
+    assigneeId: body.assigneeId ?? null,
+  };
+
+  if (body.action === 'comment') {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        action: AuditAction.record_updated,
+        entityType: 'task_action',
+        entityId: taskId,
+        metadata,
+      },
+    });
+    return getTask(actorUserId, taskId);
+  }
+
+  const updateData: Prisma.TaskUncheckedUpdateInput = {
+    updatedById: actor.userId,
+  };
+
+  if (body.action === 'submit') {
+    const payloadObject = asRecord(existing.submissionPayload) ?? {};
+    const approverIds = body.approverIds ?? extractApproverIds(existing.submissionPayload);
+    const nextPayload = {
+      ...payloadObject,
+      approverIds,
+    };
+    updateData.submissionPayload = toNullableJsonInput(nextPayload);
+    updateData.submittedAt = new Date();
+    updateData.submittedById = actor.userId;
+    updateData.status = TaskStatus.pending;
+    updateData.approvalStatus = approverIds.length > 0
+      ? TaskApprovalStatus.pending_approval
+      : TaskApprovalStatus.not_required;
+    updateData.rejectionReason = null;
+  }
+
+  if (body.action === 'approve') {
+    if (!privileged) {
+      throw httpError(403, 'FORBIDDEN', 'You do not have permission to approve tasks.');
+    }
+    updateData.approvalStatus = TaskApprovalStatus.approved;
+    updateData.approvedAt = new Date();
+    updateData.approvedById = actor.employeeId;
+    updateData.rejectionReason = null;
+    if (body.signatureFileId) updateData.signatureFileId = body.signatureFileId;
+  }
+
+  if (body.action === 'reject') {
+    if (!privileged) {
+      throw httpError(403, 'FORBIDDEN', 'You do not have permission to reject tasks.');
+    }
+    updateData.approvalStatus = TaskApprovalStatus.rejected;
+    updateData.approvedAt = new Date();
+    updateData.approvedById = actor.employeeId;
+    updateData.rejectionReason = body.reason ?? body.comment ?? 'Rejected';
+    updateData.signatureFileId = null;
+  }
+
+  if (body.action === 'reassign') {
+    if (!body.assigneeId) {
+      throw httpError(422, 'VALIDATION_ERROR', '`assigneeId` is required when action is reassign.');
+    }
+    await ensureTaskRelationsInTenant(actor.tenantId, { assigneeId: body.assigneeId });
+    updateData.assigneeId = body.assigneeId;
+  }
+
+  if (body.action === 'request_deletion') {
+    updateData.status = TaskStatus.cancelled;
+    updateData.approvalStatus = TaskApprovalStatus.processing;
+  }
+
+  await prisma.task.update({
+    where: { id: taskId },
+    data: updateData,
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: actor.tenantId,
+      userId: actor.userId,
+      action: AuditAction.record_updated,
+      entityType: 'task_action',
+      entityId: taskId,
+      metadata,
+    },
+  });
+
+  return getTask(actorUserId, taskId);
+}
+
+function inferTemplateCategory(template: { key: string; group: string; name: string }) {
+  const text = `${template.key} ${template.group} ${template.name}`.toLowerCase();
+  if (text.includes('reg44') || text.includes('reg 44')) return 'reg44';
+  if (text.includes('incident')) return 'incident';
+  if (text.includes('vehicle')) return 'maintenance';
+  if (text.includes('audit') || text.includes('inspection')) return 'inspection';
+  if (text.includes('policy') || text.includes('document')) return 'documentation';
+  if (text.includes('compliance')) return 'compliance';
+  if (text.includes('report')) return 'report';
+  if (text.includes('meeting')) return 'meeting';
+  if (text.includes('check')) return 'checkup';
+  return 'general';
+}
+
+export async function listTaskCategories() {
+  return Object.values(EXPLORER_CATEGORY_MAP).map((entry) => ({
+    value: entry.value,
+    label: entry.label,
+    types: entry.types,
+  }));
+}
+
+export async function listTaskFormTemplates() {
+  const rows = await prisma.formTemplate.findMany({
+    where: { isActive: true },
+    orderBy: [{ group: 'asc' }, { name: 'asc' }],
+    select: {
+      key: true,
+      name: true,
+      group: true,
+    },
+  });
+
+  return rows.map((row) => ({
+    slug: row.key,
+    label: row.name,
+    category: inferTemplateCategory(row),
+    formGroup: row.group,
+  }));
 }
 
 export async function deleteTask(actorUserId: string, taskId: string) {

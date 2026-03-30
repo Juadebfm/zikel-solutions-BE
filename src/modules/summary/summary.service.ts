@@ -49,6 +49,12 @@ const APPROVAL_STATUS_LABELS: Record<TaskApprovalStatus, string> = {
   rejected: 'Rejected',
   processing: 'Processing',
 };
+const WORKFLOW_STATUS_LABELS: Record<TaskStatus, string> = {
+  pending: 'Pending',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+};
 const CATEGORY_LABELS: Record<TaskCategory, string> = {
   task_log: 'Task Log',
   document: 'Document',
@@ -290,6 +296,88 @@ function parseApprovers(payload: Prisma.JsonValue | null): string[] {
   return [];
 }
 
+function sanitizeTaskDescription(description: string | null | undefined): string | null {
+  if (typeof description !== 'string') return null;
+  const cleaned = description.replace(/^\[seed:[^\]]+\]\s*/i, '').trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function extractTaskDescription(description: string | null | undefined, payload: Prisma.JsonValue | null): string | null {
+  const direct = sanitizeTaskDescription(description);
+  if (direct) return direct;
+
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return null;
+  const summary = typeof payloadObj.summary === 'string' ? payloadObj.summary.trim() : '';
+  if (summary) return summary;
+  const fallback = typeof payloadObj.description === 'string' ? payloadObj.description.trim() : '';
+  return fallback || null;
+}
+
+function extractRequestId(payload: Prisma.JsonValue | null): string | null {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return null;
+  const direct =
+    typeof payloadObj.requestId === 'string' || typeof payloadObj.requestId === 'number'
+      ? String(payloadObj.requestId).trim()
+      : '';
+  if (direct) return direct;
+  const requestObj = asRecord(payloadObj.request);
+  if (!requestObj) return null;
+  const nested =
+    typeof requestObj.id === 'string' || typeof requestObj.id === 'number'
+      ? String(requestObj.id).trim()
+      : '';
+  return nested || null;
+}
+
+function extractDomain(payload: Prisma.JsonValue | null, formGroup: string | null | undefined, categoryLabel: string): string {
+  const payloadObj = asRecord(payload);
+  const payloadDomain = typeof payloadObj?.domain === 'string' ? payloadObj.domain.trim() : '';
+  if (payloadDomain) return payloadDomain;
+  const normalizedFormGroup = typeof formGroup === 'string' ? formGroup.trim() : '';
+  if (normalizedFormGroup) return normalizedFormGroup;
+  return categoryLabel;
+}
+
+type PreviewField = {
+  label: string;
+  value: string;
+};
+
+function extractPreviewFields(payload: Prisma.JsonValue | null): PreviewField[] {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return [];
+
+  const explicitPreview = Array.isArray(payloadObj.previewFields) ? payloadObj.previewFields : [];
+  const parsedExplicit = explicitPreview
+    .map((item) => {
+      const row = asRecord(item);
+      if (!row) return null;
+      const label = typeof row.label === 'string' ? row.label.trim() : '';
+      const value = typeof row.value === 'string' || typeof row.value === 'number' ? String(row.value).trim() : '';
+      if (!label || !value) return null;
+      return { label, value };
+    })
+    .filter((item): item is PreviewField => item !== null);
+  if (parsedExplicit.length > 0) return parsedExplicit.slice(0, 4);
+
+  const summaryMetrics = asRecord(payloadObj.summaryMetrics);
+  if (!summaryMetrics) return [];
+  return Object.entries(summaryMetrics)
+    .map(([label, rawValue]) => {
+      const normalizedLabel = label.trim();
+      const value =
+        typeof rawValue === 'string' || typeof rawValue === 'number'
+          ? String(rawValue).trim()
+          : '';
+      if (!normalizedLabel || !value) return null;
+      return { label: normalizedLabel, value };
+    })
+    .filter((item): item is PreviewField => item !== null)
+    .slice(0, 4);
+}
+
 type MappedReference = {
   id: string;
   type: TaskReference['type'];
@@ -366,6 +454,20 @@ function buildLinksFromReferences(references: MappedReference[]) {
   return {
     taskUrl: taskUrlRef?.url ?? null,
     documentUrl: documentUrlRef?.url ?? fallbackExternalDocumentRef?.url ?? null,
+  };
+}
+
+function buildReferenceSummary(references: MappedReference[]) {
+  const documents = references.filter((reference) => reference.type === 'document_url').length;
+  const uploads = references.filter((reference) => reference.type === 'upload').length;
+  const links = references.filter((reference) => ['internal_route', 'external_url'].includes(reference.type)).length;
+  const entities = references.filter((reference) => reference.type === 'entity').length;
+  return {
+    documents,
+    uploads,
+    links,
+    entities,
+    total: references.length,
   };
 }
 
@@ -452,8 +554,14 @@ async function assertValidSignatureFile(tenantId: string, signatureFileId?: stri
   await assertUploadedFilesBelongToTenant(tenantId, [signatureFileId]);
 }
 
-async function getUserNameMap(userIds: string[]) {
-  if (userIds.length === 0) return new Map<string, string>();
+type UserIdentity = {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+};
+
+async function getUserIdentityMap(userIds: string[]) {
+  if (userIds.length === 0) return new Map<string, UserIdentity>();
 
   const users = await prisma.user.findMany({
     where: { id: { in: userIds } },
@@ -461,10 +569,18 @@ async function getUserNameMap(userIds: string[]) {
       id: true,
       firstName: true,
       lastName: true,
+      avatarUrl: true,
     },
   });
 
-  return new Map(users.map((user) => [user.id, `${user.firstName} ${user.lastName}`.trim()]));
+  return new Map(users.map((user) => [
+    user.id,
+    {
+      id: user.id,
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      avatarUrl: user.avatarUrl ?? null,
+    },
+  ]));
 }
 
 type TaskToApproveRow = {
@@ -472,6 +588,7 @@ type TaskToApproveRow = {
   createdAt: Date;
   updatedAt: Date;
   title: string;
+  description: string | null;
   category: TaskCategory;
   formName: string | null;
   formGroup: string | null;
@@ -495,7 +612,7 @@ type TaskToApproveRow = {
   } | null;
   assignee: {
     id: string;
-    user: { id: string; firstName: string; lastName: string };
+    user: { id: string; firstName: string; lastName: string; avatarUrl: string | null };
     home: { id: string; name: string; careGroupId: string | null } | null;
   } | null;
   home?: { id: string; name: string; careGroupId: string | null } | null;
@@ -511,7 +628,7 @@ type TaskToApproveRow = {
 
 function toTasksToApproveItem(
   row: TaskToApproveRow,
-  userNameMap: Map<string, string>,
+  userIdentityMap: Map<string, UserIdentity>,
   reviewMap: Map<string, Date>,
   currentUserDisplayName: string,
 ) {
@@ -525,11 +642,16 @@ function toTasksToApproveItem(
     ? rowReferences.map(mapReference)
     : extractPayloadReferences(row.id, row.submissionPayload);
   const links = buildLinksFromReferences(references);
+  const referenceSummary = buildReferenceSummary(references);
   const relatedTo = row.youngPerson
     ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
     : null;
-  const createdByName = row.createdById ? userNameMap.get(row.createdById) ?? null : null;
+  const createdByIdentity = row.createdById ? userIdentityMap.get(row.createdById) ?? null : null;
   const assigneeName = row.assignee ? toDisplayName(row.assignee.user.firstName, row.assignee.user.lastName) : null;
+  const description = extractTaskDescription((row as { description?: string | null }).description ?? null, row.submissionPayload);
+  const approvers = parseApprovers(row.submissionPayload);
+  const requestId = extractRequestId(row.submissionPayload);
+  const previewFields = extractPreviewFields(row.submissionPayload);
   const relatedEntity = resolveRelatedEntity({
     youngPersonId: row.youngPerson?.id ?? null,
     youngPersonName: relatedTo,
@@ -546,17 +668,29 @@ function toTasksToApproveItem(
   return {
     id: row.id,
     taskRef: toTaskRef(row),
+    requestId,
     title: row.title,
+    description,
+    domain: extractDomain(row.submissionPayload, row.formGroup, CATEGORY_LABELS[category]),
     category,
     categoryLabel: CATEGORY_LABELS[category],
     status: row.status,
+    statusLabel: WORKFLOW_STATUS_LABELS[row.status],
     priority: row.priority,
     approvalStatus: row.approvalStatus,
+    approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
+    submittedAt: row.submittedAt ?? row.createdAt,
     dueAt: row.dueDate,
-    assignee: row.assignee && assigneeName ? { id: row.assignee.id, name: assigneeName } : null,
-    createdBy: row.createdById && createdByName ? { id: row.createdById, name: createdByName } : null,
+    assignee: row.assignee && assigneeName
+      ? { id: row.assignee.id, name: assigneeName, avatarUrl: row.assignee.user.avatarUrl ?? null }
+      : null,
+    createdBy: createdByIdentity,
+    requestedBy: createdByIdentity,
+    approvers,
     relatedEntity,
     links,
+    previewFields,
+    referenceSummary,
     review: {
       reviewedByCurrentUser: reviewedAt !== null,
       reviewedAt,
@@ -575,9 +709,12 @@ function toTodoItem(
     id: string;
     createdAt: Date;
     updatedAt: Date;
+    submittedAt: Date | null;
     createdById: string | null;
     title: string;
+    description: string | null;
     category: TaskCategory;
+    formGroup: string | null;
     status: TaskStatus;
     approvalStatus: TaskApprovalStatus;
     priority: string;
@@ -594,10 +731,10 @@ function toTodoItem(
       model: string | null;
     } | null;
     youngPerson: { id: string; homeId: string; firstName: string; lastName: string } | null;
-    assignee: { id: string; user: { id: string; firstName: string; lastName: string } } | null;
+    assignee: { id: string; user: { id: string; firstName: string; lastName: string; avatarUrl: string | null } } | null;
     references?: TaskReference[];
   },
-  userNameMap: Map<string, string>,
+  userIdentityMap: Map<string, UserIdentity>,
 ) {
   const vehicleLabel = task.vehicle
     ? [task.vehicle.make, task.vehicle.model, task.vehicle.registration].filter(Boolean).join(' ')
@@ -607,12 +744,17 @@ function toTodoItem(
     ? taskReferences.map(mapReference)
     : extractPayloadReferences(task.id, task.submissionPayload);
   const category = task.category ?? TaskCategory.task_log;
+  const description = extractTaskDescription(task.description, task.submissionPayload);
+  const approvers = parseApprovers(task.submissionPayload);
+  const requestId = extractRequestId(task.submissionPayload);
+  const previewFields = extractPreviewFields(task.submissionPayload);
+  const referenceSummary = buildReferenceSummary(references);
   const relation = task.youngPerson
     ? `${task.youngPerson.firstName} ${task.youngPerson.lastName}`
     : null;
   const links = buildLinksFromReferences(references);
   const assigneeName = task.assignee ? toDisplayName(task.assignee.user.firstName, task.assignee.user.lastName) : null;
-  const createdByName = task.createdById ? userNameMap.get(task.createdById) ?? null : null;
+  const createdByIdentity = task.createdById ? userIdentityMap.get(task.createdById) ?? null : null;
   const relatedEntity = resolveRelatedEntity({
     youngPersonId: task.youngPerson?.id ?? null,
     youngPersonName: relation,
@@ -629,12 +771,25 @@ function toTodoItem(
   return {
     id: task.id,
     taskRef: toTaskRef(task),
+    requestId,
     title: task.title,
+    description,
+    domain: extractDomain(task.submissionPayload, task.formGroup, CATEGORY_LABELS[category]),
     category,
     categoryLabel: CATEGORY_LABELS[category],
+    status: task.status,
+    statusLabel: WORKFLOW_STATUS_LABELS[task.status],
+    approvalStatus: task.approvalStatus,
+    approvalStatusLabel: APPROVAL_STATUS_LABELS[task.approvalStatus],
+    submittedAt: task.submittedAt ?? task.createdAt,
+    approvers,
+    previewFields,
+    referenceSummary,
     dueAt: task.dueDate,
-    assignee: task.assignee && assigneeName ? { id: task.assignee.id, name: assigneeName } : null,
-    createdBy: task.createdById && createdByName ? { id: task.createdById, name: createdByName } : null,
+    assignee: task.assignee && assigneeName
+      ? { id: task.assignee.id, name: assigneeName, avatarUrl: task.assignee.user.avatarUrl ?? null }
+      : null,
+    createdBy: createdByIdentity,
     relatedEntity,
     links,
     review: {
@@ -646,8 +801,6 @@ function toTodoItem(
       createdAt: task.createdAt,
       updatedAt: task.updatedAt,
     },
-    status: task.status,
-    approvalStatus: task.approvalStatus,
     priority: task.priority,
     references,
   };
@@ -771,7 +924,7 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
           select: {
             id: true,
             user: {
-              select: { id: true, firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true, avatarUrl: true },
             },
           },
         },
@@ -784,10 +937,10 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
   const userIds = [
     ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
   ];
-  const userNameMap = await getUserNameMap(userIds);
+  const userIdentityMap = await getUserIdentityMap(userIds);
 
   return {
-    data: rows.map((row) => toTodoItem(row, userNameMap)),
+    data: rows.map((row) => toTodoItem(row, userIdentityMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
     labels: SHARED_TASK_LABELS,
   };
@@ -839,7 +992,7 @@ export async function listOverdueTodos(userId: string, query: SummaryListQuery) 
           select: {
             id: true,
             user: {
-              select: { id: true, firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true, avatarUrl: true },
             },
           },
         },
@@ -852,10 +1005,10 @@ export async function listOverdueTodos(userId: string, query: SummaryListQuery) 
   const userIds = [
     ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
   ];
-  const userNameMap = await getUserNameMap(userIds);
+  const userIdentityMap = await getUserIdentityMap(userIds);
 
   return {
-    data: rows.map((row) => toTodoItem(row, userNameMap)),
+    data: rows.map((row) => toTodoItem(row, userIdentityMap)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
     labels: SHARED_TASK_LABELS,
   };
@@ -944,7 +1097,7 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
           select: {
             id: true,
             user: {
-              select: { id: true, firstName: true, lastName: true },
+              select: { id: true, firstName: true, lastName: true, avatarUrl: true },
             },
             home: { select: { id: true, name: true, careGroupId: true } },
           },
@@ -962,15 +1115,15 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
     ),
   ];
   const taskIds = rows.map((row) => row.id);
-  const [userNameMap, reviewMap] = await Promise.all([
-    getUserNameMap(userIds),
+  const [userIdentityMap, reviewMap] = await Promise.all([
+    getUserIdentityMap(userIds),
     getReviewMap(user.id, taskIds),
   ]);
 
   return {
     data: rows.map((row) => toTasksToApproveItem(
       row as TaskToApproveRow,
-      userNameMap,
+      userIdentityMap,
       reviewMap,
       user.displayName,
     )),
@@ -1027,8 +1180,8 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
   const userIds = [
     ...new Set([row.submittedById, row.updatedById, row.createdById].filter((id): id is string => Boolean(id))),
   ];
-  const [userNameMap, reviewRow] = await Promise.all([
-    getUserNameMap(userIds),
+  const [userIdentityMap, reviewRow] = await Promise.all([
+    getUserIdentityMap(userIds),
     prisma.taskReviewEvent.findFirst({
       where: {
         tenantId: user.tenantId,
@@ -1039,14 +1192,13 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
     }),
   ]);
   const submittedBy =
-    (row.submittedById ? userNameMap.get(row.submittedById) : null)
-    ?? (row.createdById ? userNameMap.get(row.createdById) : null)
+    (row.submittedById ? userIdentityMap.get(row.submittedById)?.name : null)
+    ?? (row.createdById ? userIdentityMap.get(row.createdById)?.name : null)
     ?? null;
   const updatedBy =
-    (row.updatedById ? userNameMap.get(row.updatedById) : null)
+    (row.updatedById ? userIdentityMap.get(row.updatedById)?.name : null)
     ?? submittedBy
     ?? null;
-  const approvers = parseApprovers(row.submissionPayload);
   const relatedTo = row.youngPerson
     ? `${row.youngPerson.firstName} ${row.youngPerson.lastName}`.trim()
     : null;
@@ -1060,19 +1212,32 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
   const references = rowReferences.length > 0
     ? rowReferences.map(mapReference)
     : extractPayloadReferences(row.id, row.submissionPayload);
+  const description = extractTaskDescription(row.description, row.submissionPayload);
+  const approversList = parseApprovers(row.submissionPayload);
+  const requestId = extractRequestId(row.submissionPayload);
+  const previewFields = extractPreviewFields(row.submissionPayload);
+  const referenceSummary = buildReferenceSummary(references);
 
   return {
     id: row.id,
     taskRef: toTaskRef(row),
+    requestId,
     title: row.title,
+    description,
+    domain: extractDomain(row.submissionPayload, row.formGroup, CATEGORY_LABELS[category]),
     formName: row.formName ?? null,
     formGroup: row.formGroup ?? row.formName ?? null,
     category,
     categoryLabel: CATEGORY_LABELS[category],
     status: row.status,
+    statusLabel: WORKFLOW_STATUS_LABELS[row.status],
     priority: row.priority,
     approvalStatus: row.approvalStatus,
     approvalStatusLabel: APPROVAL_STATUS_LABELS[row.approvalStatus],
+    submittedAt: row.submittedAt ?? row.createdAt,
+    approvers: approversList,
+    previewFields,
+    referenceSummary,
     meta: {
       taskId: row.id,
       taskRef: toTaskRef(row),
@@ -1086,7 +1251,7 @@ export async function getTaskToApproveDetail(userId: string, taskId: string) {
       submittedBy,
       updatedOn: row.updatedAt,
       updatedBy,
-      approvers,
+      approvers: approversList,
     },
     references,
     labels: ACKNOWLEDGEMENT_DETAIL_LABELS,

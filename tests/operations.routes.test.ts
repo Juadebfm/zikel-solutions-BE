@@ -33,6 +33,14 @@ const { mockPrisma } = vi.hoisted(() => ({
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+      findUniqueOrThrow: vi.fn(),
+    },
+    taskReference: {
+      deleteMany: vi.fn(),
+      createMany: vi.fn(),
+    },
+    formTemplate: {
+      findMany: vi.fn(),
     },
     auditLog: {
       create: vi.fn(),
@@ -71,6 +79,22 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (arg: unknown) => {
+    if (typeof arg === 'function') {
+      return arg({
+        task: {
+          update: mockPrisma.task.update,
+          findUniqueOrThrow: mockPrisma.task.findUniqueOrThrow,
+        },
+        taskReference: {
+          deleteMany: mockPrisma.taskReference.deleteMany,
+          createMany: mockPrisma.taskReference.createMany,
+        },
+      });
+    }
+
+    return Promise.all(arg as Array<Promise<unknown>>);
+  });
 });
 
 function authHeader(
@@ -109,6 +133,47 @@ function mockTenantContext(
     role: tenantRole,
     status: 'active',
   });
+}
+
+function makeTaskRecord(overrides: Record<string, unknown> = {}) {
+  const timestamp = new Date('2026-03-12T09:00:00.000Z');
+  return {
+    id: 'task_1',
+    tenantId: 'tenant_1',
+    title: 'Medication check',
+    description: null,
+    status: 'pending',
+    approvalStatus: 'not_required',
+    category: 'task_log',
+    priority: 'high',
+    dueDate: null,
+    completedAt: null,
+    rejectionReason: null,
+    approvedAt: null,
+    assigneeId: 'emp_1',
+    approvedById: null,
+    homeId: null,
+    vehicleId: null,
+    youngPersonId: null,
+    createdById: 'user_1',
+    formTemplateKey: null,
+    formName: null,
+    formGroup: 'Task Log',
+    submissionPayload: { approverIds: [], approverNames: [], previewFields: [] },
+    signatureFileId: null,
+    submittedAt: null,
+    submittedById: null,
+    updatedById: 'user_1',
+    deletedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    references: [],
+    home: null,
+    vehicle: null,
+    youngPerson: null,
+    assignee: null,
+    ...overrides,
+  };
 }
 
 describe('New module routes', () => {
@@ -273,6 +338,223 @@ describe('New module routes', () => {
       success: true,
       data: [{ id: 'task_1', title: 'Medication check' }],
       meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
+    });
+  });
+
+  it('GET /api/v1/tasks/:id returns task detail payload', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce(
+      makeTaskRecord({
+        id: 'task_detail_1',
+        title: 'Incident review detail',
+        description: 'Detailed incident record for QA',
+        approvalStatus: 'pending_approval',
+        submittedAt: new Date('2026-03-12T10:30:00.000Z'),
+      }),
+    );
+    mockPrisma.auditLog.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks/task_detail_1',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        id: 'task_detail_1',
+        title: 'Incident review detail',
+        attachments: [],
+        comments: [],
+      },
+    });
+  });
+
+  it('POST /api/v1/tasks creates a task (happy path)', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.create.mockResolvedValueOnce(
+      makeTaskRecord({
+        id: 'task_new_1',
+        title: 'New task from route test',
+      }),
+    );
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks',
+      headers: authHeader(),
+      payload: {
+        title: 'New task from route test',
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        id: 'task_new_1',
+        title: 'New task from route test',
+      },
+    });
+  });
+
+  it('PATCH /api/v1/tasks/:id updates a task (happy path)', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_patch_1',
+      createdById: 'user_1',
+      assigneeId: 'emp_1',
+      approvalStatus: 'not_required',
+      status: 'pending',
+    });
+    mockPrisma.task.update.mockResolvedValueOnce({});
+    mockPrisma.task.findUniqueOrThrow.mockResolvedValueOnce(
+      makeTaskRecord({
+        id: 'task_patch_1',
+        title: 'Patched task title',
+      }),
+    );
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/v1/tasks/task_patch_1',
+      headers: authHeader(),
+      payload: {
+        title: 'Patched task title',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        id: 'task_patch_1',
+        title: 'Patched task title',
+      },
+    });
+  });
+
+  it('GET /api/v1/tasks/categories returns explorer categories', async () => {
+    mockTenantContext();
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks/categories',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: expect.arrayContaining([
+        expect.objectContaining({ value: 'reg44', label: 'Reg 44 Visit' }),
+        expect.objectContaining({ value: 'incident', label: 'Incident Report' }),
+      ]),
+    });
+  });
+
+  it('GET /api/v1/tasks/form-templates returns active templates', async () => {
+    mockTenantContext();
+    mockPrisma.formTemplate.findMany.mockResolvedValueOnce([
+      {
+        key: 'vehicle-safety-check',
+        name: 'Vehicle Safety Check',
+        group: 'Vehicle',
+      },
+    ]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks/form-templates',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPrisma.formTemplate.findMany).toHaveBeenCalledWith({
+      where: { isActive: true },
+      orderBy: [{ group: 'asc' }, { name: 'asc' }],
+      select: { key: true, name: true, group: true },
+    });
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [
+        {
+          slug: 'vehicle-safety-check',
+          label: 'Vehicle Safety Check',
+          category: 'maintenance',
+          formGroup: 'Vehicle',
+        },
+      ],
+    });
+  });
+
+  it('POST /api/v1/tasks/:id/actions validates reassign payload', async () => {
+    mockTenantContext();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks/task_1/actions',
+      headers: authHeader(),
+      payload: { action: 'reassign' },
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+      },
+    });
+  });
+
+  it('POST /api/v1/tasks/:id/actions submit transitions task lifecycle (happy path)', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst
+      .mockResolvedValueOnce({ id: 'emp_1' })
+      .mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.findFirst
+      .mockResolvedValueOnce({
+        id: 'task_action_1',
+        status: 'pending',
+        approvalStatus: 'not_required',
+        assigneeId: 'emp_1',
+        createdById: 'user_1',
+        submissionPayload: { approverIds: ['approver_1'] },
+      })
+      .mockResolvedValueOnce(
+        makeTaskRecord({
+          id: 'task_action_1',
+          approvalStatus: 'pending_approval',
+          submittedAt: new Date('2026-03-12T10:30:00.000Z'),
+          submissionPayload: { approverIds: ['approver_1'], approverNames: ['Sarah Jenkins'], previewFields: [] },
+        }),
+      );
+    mockPrisma.task.update.mockResolvedValueOnce({});
+    mockPrisma.auditLog.create.mockResolvedValue({});
+    mockPrisma.auditLog.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/tasks/task_action_1/actions',
+      headers: authHeader(),
+      payload: { action: 'submit' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: {
+        id: 'task_action_1',
+        status: 'sent_for_approval',
+        approvalStatus: 'pending_approval',
+      },
     });
   });
 

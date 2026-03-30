@@ -22,6 +22,57 @@ const OptionalNullableDateTimeSchema = z
     return value instanceof Date ? value : new Date(value);
   });
 
+const QueryDateSchema = z
+  .union([z.string().datetime(), z.string().date(), z.date()])
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    return value instanceof Date ? value : new Date(value);
+  });
+
+export const TASK_EXPLORER_STATUS_VALUES = [
+  'draft',
+  'submitted',
+  'sent_for_approval',
+  'approved',
+  'rejected',
+  'sent_for_deletion',
+  'deleted',
+  'deleted_draft',
+  'hidden',
+] as const;
+
+export const TASK_EXPLORER_CATEGORY_VALUES = [
+  'reg44',
+  'inspection',
+  'maintenance',
+  'checkup',
+  'meeting',
+  'documentation',
+  'incident',
+  'report',
+  'compliance',
+  'general',
+] as const;
+
+export const TASK_EXPLORER_TYPE_VALUES = [
+  'home',
+  'young_person',
+  'vehicle',
+  'employee',
+  'document',
+  'event',
+  'upload',
+  'care_group',
+  'tenant',
+  'task',
+  'other',
+] as const;
+
+export const TaskExplorerStatusSchema = z.enum(TASK_EXPLORER_STATUS_VALUES);
+export const TaskExplorerCategorySchema = z.enum(TASK_EXPLORER_CATEGORY_VALUES);
+export const TaskExplorerTypeSchema = z.enum(TASK_EXPLORER_TYPE_VALUES);
+
 export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'cancelled']);
 export const TaskApprovalStatusSchema = z.enum([
   'not_required',
@@ -39,6 +90,7 @@ export const TaskCategorySchema = z.enum([
   'incident',
   'other',
 ]);
+export const TaskCategoryInputSchema = z.union([TaskCategorySchema, TaskExplorerCategorySchema]);
 export const TaskReferenceTypeSchema = z.enum([
   'entity',
   'upload',
@@ -92,21 +144,51 @@ const TaskReferenceInputSchema = z.object({
 
 export const ListTasksQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  pageSize: z.coerce.number().int().min(1).max(500).default(20),
-  search: z.string().max(100).optional(),
-  status: TaskStatusSchema.optional(),
-  approvalStatus: TaskApprovalStatusSchema.optional(),
-  category: TaskCategorySchema.optional(),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+  search: z.string().max(200).optional(),
+  status: z.string().max(300).optional(),
+  approvalStatus: z.string().max(200).optional(),
+  category: z.string().max(300).optional(),
+  type: z.string().max(200).optional(),
+  entityId: z.string().min(1).optional(),
   priority: TaskPrioritySchema.optional(),
   assigneeId: z.string().min(1).optional(),
+  createdById: z.string().min(1).optional(),
   homeId: z.string().min(1).optional(),
   vehicleId: z.string().min(1).optional(),
   youngPersonId: z.string().min(1).optional(),
+  scope: z.enum(['my_tasks', 'assigned_to_me', 'approvals', 'all']).default('all'),
+  period: z
+    .enum(['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'all'])
+    .default('all'),
+  dateFrom: QueryDateSchema,
+  dateTo: QueryDateSchema,
+  formGroup: z.string().max(120).optional(),
   mine: BoolishSchema.optional(),
   sortBy: z
-    .enum(['title', 'status', 'approvalStatus', 'category', 'priority', 'dueDate', 'createdAt', 'updatedAt'])
+    .enum([
+      'taskRef',
+      'title',
+      'status',
+      'approvalStatus',
+      'category',
+      'type',
+      'priority',
+      'dueAt',
+      'submittedAt',
+      'createdAt',
+      'updatedAt',
+    ])
     .optional(),
   sortOrder: z.enum(['asc', 'desc']).default('asc'),
+}).superRefine((value, ctx) => {
+  if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['dateFrom'],
+      message: '`dateFrom` cannot be after `dateTo`.',
+    });
+  }
 });
 
 export const CreateTaskBodySchema = z.object({
@@ -114,13 +196,18 @@ export const CreateTaskBodySchema = z.object({
   description: z.string().max(5000).optional(),
   status: TaskStatusSchema.optional(),
   approvalStatus: TaskApprovalStatusSchema.optional(),
-  category: TaskCategorySchema.default('task_log'),
+  category: TaskCategoryInputSchema.default('task_log'),
   priority: TaskPrioritySchema.default('medium'),
   dueDate: NullableDateTimeSchema,
+  dueAt: NullableDateTimeSchema,
   assigneeId: z.string().min(1).optional(),
+  createdById: z.string().min(1).optional(),
   homeId: z.string().min(1).optional(),
   vehicleId: z.string().min(1).optional(),
   youngPersonId: z.string().min(1).optional(),
+  relatedEntityId: z.string().min(1).optional(),
+  type: TaskExplorerTypeSchema.optional(),
+  approverIds: z.array(z.string().min(1)).max(25).optional(),
   formTemplateKey: z.string().max(120).optional(),
   formName: z.string().max(200).optional(),
   formGroup: z.string().max(120).optional(),
@@ -137,13 +224,18 @@ export const UpdateTaskBodySchema = z
     description: z.string().max(5000).nullable().optional(),
     status: TaskStatusSchema.optional(),
     approvalStatus: TaskApprovalStatusSchema.optional(),
-    category: TaskCategorySchema.optional(),
+    category: TaskCategoryInputSchema.optional(),
     priority: TaskPrioritySchema.optional(),
     dueDate: NullableDateTimeSchema,
+    dueAt: NullableDateTimeSchema,
     assigneeId: z.string().min(1).nullable().optional(),
+    createdById: z.string().min(1).nullable().optional(),
     homeId: z.string().min(1).nullable().optional(),
     vehicleId: z.string().min(1).nullable().optional(),
     youngPersonId: z.string().min(1).nullable().optional(),
+    relatedEntityId: z.string().min(1).nullable().optional(),
+    type: TaskExplorerTypeSchema.nullable().optional(),
+    approverIds: z.array(z.string().min(1)).max(25).nullable().optional(),
     rejectionReason: z.string().max(2000).nullable().optional(),
     formTemplateKey: z.string().max(120).nullable().optional(),
     formName: z.string().max(200).nullable().optional(),
@@ -163,26 +255,44 @@ export const listTasksQueryJson = {
   additionalProperties: false,
   properties: {
     page: { type: 'integer', minimum: 1, default: 1 },
-    pageSize: { type: 'integer', minimum: 1, maximum: 500, default: 20 },
-    search: { type: 'string', maxLength: 100 },
-    status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
-    approvalStatus: {
-      type: 'string',
-      enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
-    },
-    category: {
-      type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
-    },
+    pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+    search: { type: 'string', maxLength: 200 },
+    status: { type: 'string', maxLength: 300 },
+    approvalStatus: { type: 'string', maxLength: 200 },
+    category: { type: 'string', maxLength: 300 },
+    type: { type: 'string', maxLength: 200 },
+    entityId: { type: 'string' },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     assigneeId: { type: 'string' },
+    createdById: { type: 'string' },
     homeId: { type: 'string' },
     vehicleId: { type: 'string' },
     youngPersonId: { type: 'string' },
+    scope: { type: 'string', enum: ['my_tasks', 'assigned_to_me', 'approvals', 'all'], default: 'all' },
+    period: {
+      type: 'string',
+      enum: ['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'all'],
+      default: 'all',
+    },
+    dateFrom: { type: 'string', format: 'date-time' },
+    dateTo: { type: 'string', format: 'date-time' },
+    formGroup: { type: 'string', maxLength: 120 },
     mine: { type: 'boolean' },
     sortBy: {
       type: 'string',
-      enum: ['title', 'status', 'approvalStatus', 'category', 'priority', 'dueDate', 'createdAt', 'updatedAt'],
+      enum: [
+        'taskRef',
+        'title',
+        'status',
+        'approvalStatus',
+        'category',
+        'type',
+        'priority',
+        'dueAt',
+        'submittedAt',
+        'createdAt',
+        'updatedAt',
+      ],
     },
     sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
   },
@@ -202,15 +312,43 @@ export const createTaskBodyJson = {
     },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+      enum: [
+        'task_log',
+        'document',
+        'system_link',
+        'checklist',
+        'incident',
+        'other',
+        'reg44',
+        'inspection',
+        'maintenance',
+        'checkup',
+        'meeting',
+        'documentation',
+        'report',
+        'compliance',
+        'general',
+      ],
       default: 'task_log',
     },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'], default: 'medium' },
     dueDate: { type: ['string', 'null'], format: 'date-time' },
+    dueAt: { type: ['string', 'null'], format: 'date-time' },
     assigneeId: { type: 'string' },
+    createdById: { type: 'string' },
     homeId: { type: 'string' },
     vehicleId: { type: 'string' },
     youngPersonId: { type: 'string' },
+    relatedEntityId: { type: 'string' },
+    type: {
+      type: 'string',
+      enum: ['home', 'young_person', 'vehicle', 'employee', 'document', 'event', 'upload', 'care_group', 'tenant', 'task', 'other'],
+    },
+    approverIds: {
+      type: 'array',
+      maxItems: 25,
+      items: { type: 'string', minLength: 1 },
+    },
     formTemplateKey: { type: 'string', maxLength: 120 },
     formName: { type: 'string', maxLength: 200 },
     formGroup: { type: 'string', maxLength: 120 },
@@ -262,14 +400,55 @@ export const updateTaskBodyJson = {
     },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+      enum: [
+        'task_log',
+        'document',
+        'system_link',
+        'checklist',
+        'incident',
+        'other',
+        'reg44',
+        'inspection',
+        'maintenance',
+        'checkup',
+        'meeting',
+        'documentation',
+        'report',
+        'compliance',
+        'general',
+      ],
     },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     dueDate: { type: ['string', 'null'], format: 'date-time' },
+    dueAt: { type: ['string', 'null'], format: 'date-time' },
     assigneeId: { type: ['string', 'null'] },
+    createdById: { type: ['string', 'null'] },
     homeId: { type: ['string', 'null'] },
     vehicleId: { type: ['string', 'null'] },
     youngPersonId: { type: ['string', 'null'] },
+    relatedEntityId: { type: ['string', 'null'] },
+    type: {
+      type: ['string', 'null'],
+      enum: [
+        'home',
+        'young_person',
+        'vehicle',
+        'employee',
+        'document',
+        'event',
+        'upload',
+        'care_group',
+        'tenant',
+        'task',
+        'other',
+        null,
+      ],
+    },
+    approverIds: {
+      type: ['array', 'null'],
+      maxItems: 25,
+      items: { type: 'string', minLength: 1 },
+    },
     rejectionReason: { type: ['string', 'null'], maxLength: 2000 },
     formTemplateKey: { type: ['string', 'null'], maxLength: 120 },
     formName: { type: ['string', 'null'], maxLength: 200 },
@@ -310,6 +489,57 @@ export const updateTaskBodyJson = {
   minProperties: 1,
 } as const;
 
+export const TaskActionBodySchema = z
+  .object({
+    action: z.enum(['submit', 'approve', 'reject', 'reassign', 'request_deletion', 'comment']),
+    comment: z.string().max(2000).optional(),
+    text: z.string().max(2000).optional(),
+    reason: z.string().max(2000).optional(),
+    assigneeId: z.string().min(1).optional(),
+    signatureFileId: z.string().min(1).optional(),
+    approverIds: z.array(z.string().min(1)).max(25).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.action === 'reassign' && !value.assigneeId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['assigneeId'],
+        message: '`assigneeId` is required when action is reassign.',
+      });
+    }
+
+    if (value.action === 'comment' && !(value.text || value.comment)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['text'],
+        message: '`text` or `comment` is required when action is comment.',
+      });
+    }
+  });
+
+export const taskActionBodyJson = {
+  type: 'object',
+  required: ['action'],
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['submit', 'approve', 'reject', 'reassign', 'request_deletion', 'comment'],
+    },
+    comment: { type: 'string', maxLength: 2000 },
+    text: { type: 'string', maxLength: 2000 },
+    reason: { type: 'string', maxLength: 2000 },
+    assigneeId: { type: 'string', minLength: 1 },
+    signatureFileId: { type: 'string', minLength: 1 },
+    approverIds: {
+      type: 'array',
+      maxItems: 25,
+      items: { type: 'string', minLength: 1 },
+    },
+  },
+} as const;
+
 export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
 export type CreateTaskBody = z.infer<typeof CreateTaskBodySchema>;
 export type UpdateTaskBody = z.infer<typeof UpdateTaskBodySchema>;
+export type TaskActionBody = z.infer<typeof TaskActionBodySchema>;
