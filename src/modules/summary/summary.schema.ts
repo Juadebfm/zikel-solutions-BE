@@ -152,23 +152,52 @@ export const todoItemJson = {
   properties: {
     id: { type: 'string' },
     taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
+    requestId: { type: 'string', nullable: true, example: '9921' },
     title: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    domain: { type: 'string', example: 'Compliance' },
     category: {
       type: 'string',
       enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
     },
     categoryLabel: { type: 'string', example: 'Task Log' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    statusLabel: { type: 'string', example: 'Pending' },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
     },
+    approvalStatusLabel: { type: 'string', example: 'Awaiting Approval' },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
+    submittedAt: { type: 'string', format: 'date-time', nullable: true },
     dueAt: { type: 'string', format: 'date-time', nullable: true },
     assignee: {},
     createdBy: {},
+    approvers: { type: 'array', items: { type: 'string' } },
     relatedEntity: {},
     links: {},
+    previewFields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['label', 'value'],
+        properties: {
+          label: { type: 'string' },
+          value: { type: 'string' },
+        },
+      },
+    },
+    referenceSummary: {
+      type: 'object',
+      required: ['documents', 'uploads', 'links', 'entities', 'total'],
+      properties: {
+        documents: { type: 'integer' },
+        uploads: { type: 'integer' },
+        links: { type: 'integer' },
+        entities: { type: 'integer' },
+        total: { type: 'integer' },
+      },
+    },
     review: {},
     timestamps: {},
     references: {
@@ -221,23 +250,53 @@ export const tasksToApproveItemJson = {
   properties: {
     id: { type: 'string' },
     taskRef: { type: 'string', example: 'TSK-20260321-HM5T7F' },
+    requestId: { type: 'string', nullable: true, example: '9921' },
     title: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    domain: { type: 'string', example: 'Staffing' },
     category: {
       type: 'string',
       enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
     },
     categoryLabel: { type: 'string', example: 'Document' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    statusLabel: { type: 'string', example: 'Pending' },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
     },
+    approvalStatusLabel: { type: 'string', example: 'Awaiting Approval' },
+    submittedAt: { type: 'string', format: 'date-time', nullable: true },
     dueAt: { type: 'string', format: 'date-time', nullable: true },
     assignee: {},
     createdBy: {},
+    requestedBy: {},
+    approvers: { type: 'array', items: { type: 'string' } },
     relatedEntity: {},
     links: {},
+    previewFields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['label', 'value'],
+        properties: {
+          label: { type: 'string' },
+          value: { type: 'string' },
+        },
+      },
+    },
+    referenceSummary: {
+      type: 'object',
+      required: ['documents', 'uploads', 'links', 'entities', 'total'],
+      properties: {
+        documents: { type: 'integer' },
+        uploads: { type: 'integer' },
+        links: { type: 'integer' },
+        entities: { type: 'integer' },
+        total: { type: 'integer' },
+      },
+    },
     review: {},
     timestamps: {},
     references: {
@@ -352,7 +411,10 @@ export const taskToApproveDetailJson = {
   properties: {
     id: { type: 'string' },
     taskRef: { type: 'string' },
+    requestId: { type: 'string', nullable: true, example: '9921' },
     title: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    domain: { type: 'string', example: 'Compliance' },
     formName: { type: 'string', nullable: true },
     formGroup: { type: 'string', nullable: true },
     category: {
@@ -361,12 +423,37 @@ export const taskToApproveDetailJson = {
     },
     categoryLabel: { type: 'string' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
+    statusLabel: { type: 'string', example: 'Pending' },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     approvalStatus: {
       type: 'string',
       enum: ['not_required', 'pending_approval', 'approved', 'rejected', 'processing'],
     },
     approvalStatusLabel: { type: 'string' },
+    submittedAt: { type: 'string', format: 'date-time' },
+    approvers: { type: 'array', items: { type: 'string' } },
+    previewFields: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['label', 'value'],
+        properties: {
+          label: { type: 'string' },
+          value: { type: 'string' },
+        },
+      },
+    },
+    referenceSummary: {
+      type: 'object',
+      required: ['documents', 'uploads', 'links', 'entities', 'total'],
+      properties: {
+        documents: { type: 'integer' },
+        uploads: { type: 'integer' },
+        links: { type: 'integer' },
+        entities: { type: 'integer' },
+        total: { type: 'integer' },
+      },
+    },
     meta: {
       type: 'object',
       required: ['taskId', 'taskRef', 'submittedOn', 'updatedOn', 'approvers'],
