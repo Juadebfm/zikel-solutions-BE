@@ -18,9 +18,9 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
     schema: {
       tags: ['AI'],
-      summary: 'Ask AI (summary assistant)',
+      summary: 'Ask AI (page-aware assistant)',
       description:
-        'Generates concise guidance from summary context. Returns provider output when available, with automatic fallback.',
+        'Generates concise, page-aware guidance. On the summary page it uses system-wide stats; on other pages it uses the items and filters visible on screen. Returns provider output when available, with automatic fallback.',
       body: askAiBodyJson,
       response: {
         200: {

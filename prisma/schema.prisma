@@ -111,6 +111,7 @@ enum TaskCategory {
   checklist
   incident
   other
+  daily_log
 }
 
 enum TaskReferenceType {
@@ -242,6 +243,11 @@ model User {
   announcementReads AnnouncementRead[]
   taskReviewEvents TaskReviewEvent[]
   uploadedFiles  UploadedFile[] @relation("UserUploadedFiles")
+  homesAsAdmin   Home[] @relation("HomeAdmin")
+  homesAsPersonInCharge Home[] @relation("HomePersonInCharge")
+  homesAsResponsibleIndividual Home[] @relation("HomeResponsibleIndividual")
+  youngPeopleAsAdmin YoungPerson[] @relation("YoungPersonAdmin")
+  youngPeopleAsPracticeManager YoungPerson[] @relation("YoungPersonPracticeManager")
 
   @@index([email])
   @@index([role])
@@ -277,6 +283,7 @@ model Tenant {
   securityAlertDeliveries SecurityAlertDelivery[]
   taskReviewEvents TaskReviewEvent[]
   uploadedFiles UploadedFile[]
+  roles         Role[]
 
   @@index([name])
   @@index([isActive])
@@ -396,57 +403,110 @@ model CareGroup {
 }
 
 model Home {
-  id          String    @id @default(cuid())
-  tenantId    String
-  careGroupId String
-  name        String
-  address     String?
-  capacity    Int?
-  avatarFileId String?
-  avatarUrl   String?
-  details     Json?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                       String    @id @default(cuid())
+  tenantId                 String
+  careGroupId              String
+  name                     String
+  description              String?
+  address                  String?
+  postCode                 String?
+  capacity                 Int?
+  category                 String?
+  region                   String?
+  status                   String    @default("current")
+  phoneNumber              String?
+  email                    String?
+  avatarFileId             String?
+  avatarUrl                String?
+  adminUserId              String?
+  personInChargeId         String?
+  responsibleIndividualId  String?
+  startDate                DateTime?
+  endDate                  DateTime?
+  isSecure                 Boolean   @default(false)
+  shortTermStays           Boolean   @default(false)
+  minAgeGroup              Int?
+  maxAgeGroup              Int?
+  ofstedUrn                String?
+  compliance               Json?
+  details                  Json?
+  isActive                 Boolean   @default(true)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  careGroup   CareGroup   @relation(fields: [careGroupId], references: [id])
-  avatarFile  UploadedFile? @relation("HomeAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
-  employees   Employee[]
-  youngPeople YoungPerson[]
-  vehicles    Vehicle[]
-  tasks       Task[]
-  events      HomeEvent[]
-  shifts      EmployeeShift[]
+  tenant                   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  careGroup                CareGroup      @relation(fields: [careGroupId], references: [id])
+  avatarFile               UploadedFile?  @relation("HomeAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  admin                    User?          @relation("HomeAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  personInCharge           User?          @relation("HomePersonInCharge", fields: [personInChargeId], references: [id], onDelete: SetNull)
+  responsibleIndividual    User?          @relation("HomeResponsibleIndividual", fields: [responsibleIndividualId], references: [id], onDelete: SetNull)
+  employees                Employee[]
+  youngPeople              YoungPerson[]
+  vehicles                 Vehicle[]
+  tasks                    Task[]
+  events                   HomeEvent[]
+  shifts                   EmployeeShift[]
 
   @@index([tenantId])
   @@index([careGroupId])
   @@index([avatarFileId])
+  @@index([status])
 }
 
 // ─── Employees ────────────────────────────────────────────────────────────────
 
 model Employee {
-  id          String    @id @default(cuid())
-  tenantId    String
-  userId      String
-  homeId      String?
-  jobTitle    String?
-  startDate   DateTime?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  tenantId        String
+  userId          String
+  homeId          String?
+  roleId          String?
+  jobTitle        String?
+  startDate       DateTime?
+  endDate         DateTime?
+  status          String    @default("current")
+  contractType    String?
+  dbsNumber       String?
+  dbsDate         DateTime?
+  qualifications  Json?
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User      @relation(fields: [userId], references: [id])
-  home        Home?     @relation(fields: [homeId], references: [id])
-  tasks       Task[]    @relation("TaskAssignee")
-  approvedTasks Task[]  @relation("TaskApprover")
-  shifts      EmployeeShift[]
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user            User      @relation(fields: [userId], references: [id])
+  home            Home?     @relation(fields: [homeId], references: [id])
+  role            Role?     @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  tasks           Task[]    @relation("TaskAssignee")
+  approvedTasks   Task[]    @relation("TaskApprover")
+  shifts          EmployeeShift[]
+  youngPeopleAsKeyWorker YoungPerson[] @relation("YoungPersonKeyWorker")
 
   @@unique([tenantId, userId])
   @@index([tenantId])
   @@index([homeId])
+  @@index([roleId])
+  @@index([status])
+}
+
+// ─── Roles ───────────────────────────────────────────────────────────────────
+
+model Role {
+  id                String    @id @default(cuid())
+  tenantId          String
+  name              String
+  description       String?
+  isActive          Boolean   @default(true)
+  isSystemGenerated Boolean   @default(false)
+  permissions       Json      @default("{}")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employees         Employee[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }
 
 // ─── Home Events & Shifts ────────────────────────────────────────────────────
@@ -491,56 +551,104 @@ model EmployeeShift {
 // ─── Young People ─────────────────────────────────────────────────────────────
 
 model YoungPerson {
-  id          String    @id @default(cuid())
-  tenantId    String
-  homeId      String
-  firstName   String
-  lastName    String
-  dateOfBirth DateTime?
-  referenceNo String?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id                          String    @id @default(cuid())
+  tenantId                    String
+  homeId                      String
+  firstName                   String
+  lastName                    String
+  preferredName               String?
+  namePronunciation           String?
+  description                 String?
+  dateOfBirth                 DateTime?
+  gender                      String?
+  ethnicity                   String?
+  religion                    String?
+  referenceNo                 String?
+  niNumber                    String?
+  roomNumber                  String?
+  status                      String    @default("current")
+  type                        String?
+  admissionDate               DateTime?
+  placementEndDate            DateTime?
+  avatarFileId                String?
+  avatarUrl                   String?
+  keyWorkerId                 String?
+  practiceManagerId           String?
+  adminUserId                 String?
+  socialWorkerName            String?
+  independentReviewingOfficer String?
+  placingAuthority            String?
+  legalStatus                 String?
+  isEmergencyPlacement        Boolean   @default(false)
+  isAsylumSeeker              Boolean   @default(false)
+  contact                     Json?
+  health                      Json?
+  education                   Json?
+  isActive                    Boolean   @default(true)
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home      @relation(fields: [homeId], references: [id])
-  tasks       Task[]
+  tenant                      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home                        Home          @relation(fields: [homeId], references: [id])
+  avatarFile                  UploadedFile? @relation("YoungPersonAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  keyWorker                   Employee?     @relation("YoungPersonKeyWorker", fields: [keyWorkerId], references: [id], onDelete: SetNull)
+  practiceManager             User?         @relation("YoungPersonPracticeManager", fields: [practiceManagerId], references: [id], onDelete: SetNull)
+  admin                       User?         @relation("YoungPersonAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  tasks                       Task[]
 
   @@unique([tenantId, referenceNo])
   @@index([tenantId])
   @@index([homeId])
+  @@index([status])
   @@index([lastName, firstName])
 }
 
 // ─── Vehicles ─────────────────────────────────────────────────────────────────
 
 model Vehicle {
-  id             String    @id @default(cuid())
-  tenantId       String
-  homeId         String?
-  registration   String    @unique
-  make           String?
-  model          String?
-  year           Int?
-  colour         String?
-  avatarFileId   String?
-  avatarUrl      String?
-  details        Json?
-  isActive       Boolean   @default(true)
-  nextServiceDue DateTime?
-  motDue         DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id               String    @id @default(cuid())
+  tenantId         String
+  homeId           String?
+  registration     String    @unique
+  make             String?
+  model            String?
+  year             Int?
+  colour           String?
+  description      String?
+  status           String    @default("current")
+  vin              String?
+  registrationDate DateTime?
+  taxDate          DateTime?
+  fuelType         String?
+  insuranceDate    DateTime?
+  ownership        String?
+  leaseStartDate   DateTime?
+  leaseEndDate     DateTime?
+  purchasePrice    Decimal?
+  purchaseDate     DateTime?
+  startDate        DateTime?
+  endDate          DateTime?
+  adminUserId      String?
+  contactPhone     String?
+  avatarFileId     String?
+  avatarUrl        String?
+  details          Json?
+  isActive         Boolean   @default(true)
+  nextServiceDue   DateTime?
+  motDue           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home           Home?     @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  avatarFile     UploadedFile? @relation("VehicleAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
-  tasks          Task[]
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home             Home?         @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  avatarFile       UploadedFile? @relation("VehicleAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  tasks            Task[]
 
   @@index([tenantId])
   @@index([registration])
   @@index([homeId])
   @@index([avatarFileId])
+  @@index([status])
 }
 
 // ─── Form Templates ───────────────────────────────────────────────────────────
@@ -687,8 +795,9 @@ model UploadedFile {
 
   tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   uploadedBy     User?        @relation("UserUploadedFiles", fields: [uploadedById], references: [id], onDelete: SetNull)
-  homeAvatars    Home[]       @relation("HomeAvatarFile")
+  homeAvatars    Home[]        @relation("HomeAvatarFile")
   vehicleAvatars Vehicle[]    @relation("VehicleAvatarFile")
+  youngPersonAvatars YoungPerson[] @relation("YoungPersonAvatarFile")
   taskSignatures Task[]       @relation("TaskSignatureFile")
   taskReferences TaskReference[] @relation("TaskReferenceFile")
 

@@ -408,7 +408,7 @@ export const TaskSchema = {
     },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other'],
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log'],
     },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     dueDate: { type: 'string', format: 'date-time', nullable: true },

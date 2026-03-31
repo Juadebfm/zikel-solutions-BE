@@ -16,6 +16,8 @@ import vehicleRoutes from '../modules/vehicles/vehicles.routes.js';
 import taskRoutes from '../modules/tasks/tasks.routes.js';
 import formsRoutes from '../modules/forms/forms.routes.js';
 import uploadsRoutes from '../modules/uploads/uploads.routes.js';
+import dailyLogRoutes from '../modules/daily-logs/daily-logs.routes.js';
+import roleRoutes from '../modules/roles/roles.routes.js';
 import auditRoutes from '../modules/audit/audit.routes.js';
 import integrationsRoutes from '../modules/integrations/integrations.routes.js';
 
@@ -42,6 +44,8 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(taskRoutes, { prefix: '/tasks' });
       await v1.register(formsRoutes, { prefix: '/forms' });
       await v1.register(uploadsRoutes, { prefix: '/uploads' });
+      await v1.register(dailyLogRoutes, { prefix: '/daily-logs' });
+      await v1.register(roleRoutes, { prefix: '/roles' });
       await v1.register(auditRoutes, { prefix: '/audit' });
       await v1.register(integrationsRoutes, { prefix: '/integrations' });
     },

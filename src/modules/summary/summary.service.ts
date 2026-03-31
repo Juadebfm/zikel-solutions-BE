@@ -62,6 +62,7 @@ const CATEGORY_LABELS: Record<TaskCategory, string> = {
   checklist: 'Checklist',
   incident: 'Incident',
   other: 'Other',
+  daily_log: 'Daily Log',
 };
 const SHARED_TASK_LABELS = {
   listTitle: 'Tasks',

@@ -64,6 +64,7 @@ const TASK_CATEGORY_LABELS: Record<TaskCategory, string> = {
   checklist: 'Checklist',
   incident: 'Incident',
   other: 'General',
+  daily_log: 'Daily Log',
 };
 
 const EXPLORER_CATEGORY_MAP: Record<
@@ -110,6 +111,7 @@ const EXPLORER_CATEGORY_MAP: Record<
     types: ['home'],
   },
   general: { value: 'general', label: 'General Task', taskCategory: TaskCategory.other, types: null },
+  daily_log: { value: 'daily_log', label: 'Daily Log', taskCategory: TaskCategory.daily_log, types: ['home', 'young_person', 'vehicle'] },
 };
 
 const EXPLORER_STATUS_VALUES = new Set([
@@ -153,6 +155,7 @@ const TASK_CATEGORY_VALUES = new Set<TaskCategory>([
   TaskCategory.checklist,
   TaskCategory.incident,
   TaskCategory.other,
+  TaskCategory.daily_log,
 ]);
 
 const EXPLORER_CATEGORY_VALUES = new Set([
@@ -665,6 +668,8 @@ function toExplorerCategory(task: Pick<Task, 'category'>) {
       return EXPLORER_CATEGORY_MAP.report;
     case TaskCategory.task_log:
       return EXPLORER_CATEGORY_MAP.general;
+    case TaskCategory.daily_log:
+      return EXPLORER_CATEGORY_MAP.daily_log;
     case TaskCategory.other:
     default:
       return EXPLORER_CATEGORY_MAP.general;

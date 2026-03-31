@@ -9,32 +9,37 @@ import type {
   UpdateEmployeeBody,
 } from './employees.schema.js';
 
-function mapEmployee(employee: {
-  id: string;
-  userId: string;
-  homeId: string | null;
-  jobTitle: string | null;
-  startDate: Date | null;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
+const EMP_INCLUDE = {
   user: {
-    id: string;
-    email: string;
-    firstName: string;
-    lastName: string;
-    role: string;
-  };
-  home: { id: string; name: string } | null;
-}) {
+    select: {
+      id: true,
+      email: true,
+      firstName: true,
+      lastName: true,
+      role: true,
+    },
+  },
+  home: { select: { id: true, name: true } },
+  role: { select: { id: true, name: true } },
+} as const;
+
+function mapEmployee(employee: Prisma.EmployeeGetPayload<{ include: typeof EMP_INCLUDE }>) {
   return {
     id: employee.id,
     userId: employee.userId,
     user: employee.user,
     homeId: employee.homeId,
     homeName: employee.home?.name ?? null,
+    roleId: employee.roleId,
+    roleName: employee.role?.name ?? null,
     jobTitle: employee.jobTitle,
     startDate: employee.startDate,
+    endDate: employee.endDate,
+    status: employee.status,
+    contractType: employee.contractType,
+    dbsNumber: employee.dbsNumber,
+    dbsDate: employee.dbsDate,
+    qualifications: employee.qualifications,
     isActive: employee.isActive,
     createdAt: employee.createdAt,
     updatedAt: employee.updatedAt,
@@ -79,12 +84,16 @@ async function ensureHomeExists(homeId: string, tenantId: string) {
   }
 }
 
+// ─── List ────────────────────────────────────────────────────────────────────
+
 export async function listEmployees(actorId: string, query: ListEmployeesQuery) {
   const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
   const where: Prisma.EmployeeWhereInput = {
     tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
+    ...(query.status && query.status !== 'all' ? { status: query.status } : {}),
+    ...(query.roleId ? { roleId: query.roleId } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     ...(query.search
       ? {
@@ -103,18 +112,7 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
     prisma.employee.count({ where }),
     prisma.employee.findMany({
       where,
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-            role: true,
-          },
-        },
-        home: { select: { id: true, name: true } },
-      },
+      include: EMP_INCLUDE,
       orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
       skip,
       take: query.pageSize,
@@ -132,6 +130,8 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
       page: query.page,
       pageSize: query.pageSize,
       homeId: query.homeId ?? null,
+      status: query.status ?? null,
+      roleId: query.roleId ?? null,
       hasSearch: Boolean(query.search),
       isActive: query.isActive ?? null,
     },
@@ -148,22 +148,13 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
   };
 }
 
+// ─── Get ─────────────────────────────────────────────────────────────────────
+
 export async function getEmployee(actorId: string, id: string) {
   const tenant = await requireTenantContext(actorId);
   const employee = await prisma.employee.findFirst({
     where: { id, tenantId: tenant.tenantId },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          role: true,
-        },
-      },
-      home: { select: { id: true, name: true } },
-    },
+    include: EMP_INCLUDE,
   });
   if (!employee) {
     throw httpError(404, 'EMPLOYEE_NOT_FOUND', 'Employee not found.');
@@ -182,6 +173,8 @@ export async function getEmployee(actorId: string, id: string) {
   return mapEmployee(employee);
 }
 
+// ─── Create ──────────────────────────────────────────────────────────────────
+
 export async function createEmployee(actorId: string, body: CreateEmployeeBody) {
   const tenant = await requireTenantContext(actorId);
   await ensureUserHasTenantAccess(body.userId, tenant.tenantId);
@@ -193,22 +186,18 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
         tenantId: tenant.tenantId,
         userId: body.userId,
         homeId: body.homeId ?? null,
+        roleId: body.roleId ?? null,
         jobTitle: body.jobTitle ?? null,
-        startDate: body.startDate ? new Date(body.startDate) : null,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
+        status: body.status ?? 'current',
+        contractType: body.contractType ?? null,
+        dbsNumber: body.dbsNumber ?? null,
+        dbsDate: body.dbsDate ?? null,
+        qualifications: (body.qualifications ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
         isActive: body.isActive ?? true,
       },
-      include: {
-        user: {
-          select: {
-            id: true,
-            email: true,
-            firstName: true,
-            lastName: true,
-            role: true,
-          },
-        },
-        home: { select: { id: true, name: true } },
-      },
+      include: EMP_INCLUDE,
     });
 
     await prisma.auditLog.create({
@@ -223,15 +212,14 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
 
     return mapEmployee(employee);
   } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
       throw httpError(409, 'EMPLOYEE_EXISTS', 'An employee record already exists for this user.');
     }
     throw error;
   }
 }
+
+// ─── Update ──────────────────────────────────────────────────────────────────
 
 export async function updateEmployee(actorId: string, id: string, body: UpdateEmployeeBody) {
   const tenant = await requireTenantContext(actorId);
@@ -249,29 +237,27 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
 
   const updateData: Prisma.EmployeeUpdateInput = {};
   if (body.homeId !== undefined) {
-    updateData.home = body.homeId === null
-      ? { disconnect: true }
-      : { connect: { id: body.homeId } };
+    updateData.home = body.homeId === null ? { disconnect: true } : { connect: { id: body.homeId } };
+  }
+  if (body.roleId !== undefined) {
+    updateData.role = body.roleId === null ? { disconnect: true } : { connect: { id: body.roleId } };
   }
   if (body.jobTitle !== undefined) updateData.jobTitle = body.jobTitle;
-  if (body.startDate !== undefined) updateData.startDate = body.startDate ? new Date(body.startDate) : null;
+  if (body.startDate !== undefined) updateData.startDate = body.startDate;
+  if (body.endDate !== undefined) updateData.endDate = body.endDate;
+  if (body.status !== undefined) updateData.status = body.status;
+  if (body.contractType !== undefined) updateData.contractType = body.contractType;
+  if (body.dbsNumber !== undefined) updateData.dbsNumber = body.dbsNumber;
+  if (body.dbsDate !== undefined) updateData.dbsDate = body.dbsDate;
+  if (body.qualifications !== undefined) {
+    updateData.qualifications = (body.qualifications ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
+  }
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
   const employee = await prisma.employee.update({
     where: { id },
     data: updateData,
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          role: true,
-        },
-      },
-      home: { select: { id: true, name: true } },
-    },
+    include: EMP_INCLUDE,
   });
 
   await prisma.auditLog.create({
@@ -287,6 +273,8 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
 
   return mapEmployee(employee);
 }
+
+// ─── Deactivate ──────────────────────────────────────────────────────────────
 
 export async function deactivateEmployee(actorId: string, id: string) {
   const tenant = await requireTenantContext(actorId);
