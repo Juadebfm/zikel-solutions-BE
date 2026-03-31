@@ -33,6 +33,22 @@ function mapVehicle(vehicle: Vehicle) {
     model: vehicle.model,
     year: vehicle.year,
     colour: vehicle.colour,
+    description: vehicle.description,
+    status: vehicle.status,
+    vin: vehicle.vin,
+    registrationDate: vehicle.registrationDate,
+    taxDate: vehicle.taxDate,
+    fuelType: vehicle.fuelType,
+    insuranceDate: vehicle.insuranceDate,
+    ownership: vehicle.ownership,
+    leaseStartDate: vehicle.leaseStartDate,
+    leaseEndDate: vehicle.leaseEndDate,
+    purchasePrice: vehicle.purchasePrice,
+    purchaseDate: vehicle.purchaseDate,
+    startDate: vehicle.startDate,
+    endDate: vehicle.endDate,
+    adminUserId: vehicle.adminUserId,
+    contactPhone: vehicle.contactPhone,
     avatarFileId: vehicle.avatarFileId,
     avatarUrl: vehicle.avatarUrl,
     details: vehicle.details,
@@ -87,6 +103,8 @@ export async function listVehicles(actorUserId: string, query: ListVehiclesQuery
         }
       : {}),
     ...(query.homeId ? { homeId: query.homeId } : {}),
+    ...(query.status && query.status !== 'all' ? { status: query.status } : {}),
+    ...(query.fuelType ? { fuelType: query.fuelType } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
   };
 
@@ -164,6 +182,22 @@ export async function createVehicle(actorUserId: string, body: CreateVehicleBody
         model: body.model ?? null,
         year: body.year ?? null,
         colour: body.colour ?? null,
+        description: body.description ?? null,
+        status: body.status ?? 'current',
+        vin: body.vin ?? null,
+        registrationDate: body.registrationDate ?? null,
+        taxDate: body.taxDate ?? null,
+        fuelType: body.fuelType ?? null,
+        insuranceDate: body.insuranceDate ?? null,
+        ownership: body.ownership ?? null,
+        leaseStartDate: body.leaseStartDate ?? null,
+        leaseEndDate: body.leaseEndDate ?? null,
+        purchasePrice: body.purchasePrice ?? null,
+        purchaseDate: body.purchaseDate ?? null,
+        startDate: body.startDate ?? null,
+        endDate: body.endDate ?? null,
+        adminUserId: body.adminUserId ?? null,
+        contactPhone: body.contactPhone ?? null,
         ...(body.avatarFileId ? { avatarFileId: body.avatarFileId } : {}),
         avatarUrl: body.avatarUrl ?? null,
         details: (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
@@ -227,6 +261,22 @@ export async function updateVehicle(actorUserId: string, vehicleId: string, body
       : { connect: { id: body.avatarFileId } };
   }
   if (body.avatarUrl !== undefined) updateData.avatarUrl = body.avatarUrl;
+  if (body.description !== undefined) updateData.description = body.description;
+  if (body.status !== undefined) updateData.status = body.status;
+  if (body.vin !== undefined) updateData.vin = body.vin;
+  if (body.registrationDate !== undefined) updateData.registrationDate = body.registrationDate;
+  if (body.taxDate !== undefined) updateData.taxDate = body.taxDate;
+  if (body.fuelType !== undefined) updateData.fuelType = body.fuelType;
+  if (body.insuranceDate !== undefined) updateData.insuranceDate = body.insuranceDate;
+  if (body.ownership !== undefined) updateData.ownership = body.ownership;
+  if (body.leaseStartDate !== undefined) updateData.leaseStartDate = body.leaseStartDate;
+  if (body.leaseEndDate !== undefined) updateData.leaseEndDate = body.leaseEndDate;
+  if (body.purchasePrice !== undefined) updateData.purchasePrice = body.purchasePrice;
+  if (body.purchaseDate !== undefined) updateData.purchaseDate = body.purchaseDate;
+  if (body.startDate !== undefined) updateData.startDate = body.startDate;
+  if (body.endDate !== undefined) updateData.endDate = body.endDate;
+  if (body.adminUserId !== undefined) updateData.adminUserId = body.adminUserId;
+  if (body.contactPhone !== undefined) updateData.contactPhone = body.contactPhone;
   if (body.details !== undefined) {
     updateData.details = (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
   }

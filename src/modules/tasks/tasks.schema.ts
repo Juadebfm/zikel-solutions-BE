@@ -53,6 +53,7 @@ export const TASK_EXPLORER_CATEGORY_VALUES = [
   'report',
   'compliance',
   'general',
+  'daily_log',
 ] as const;
 
 export const TASK_EXPLORER_TYPE_VALUES = [
@@ -89,6 +90,7 @@ export const TaskCategorySchema = z.enum([
   'checklist',
   'incident',
   'other',
+  'daily_log',
 ]);
 export const TaskCategoryInputSchema = z.union([TaskCategorySchema, TaskExplorerCategorySchema]);
 export const TaskReferenceTypeSchema = z.enum([
@@ -319,6 +321,7 @@ export const createTaskBodyJson = {
         'checklist',
         'incident',
         'other',
+        'daily_log',
         'reg44',
         'inspection',
         'maintenance',
@@ -407,6 +410,7 @@ export const updateTaskBodyJson = {
         'checklist',
         'incident',
         'other',
+        'daily_log',
         'reg44',
         'inspection',
         'maintenance',

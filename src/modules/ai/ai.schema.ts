@@ -22,15 +22,56 @@ const SummaryListItemContextSchema = z
   })
   .strict();
 
+export const AI_PAGE_VALUES = [
+  'summary',
+  'tasks',
+  'care_groups',
+  'homes',
+  'young_people',
+  'employees',
+  'vehicles',
+  'form_designer',
+  'users',
+  'audit',
+] as const;
+
+export type AiPage = (typeof AI_PAGE_VALUES)[number];
+
+const PageItemSchema = z
+  .object({
+    id: z.string().max(64).optional(),
+    title: z.string().min(1).max(300),
+    status: z.string().max(50).optional(),
+    priority: z.string().max(20).optional(),
+    category: z.string().max(50).optional(),
+    type: z.string().max(50).optional(),
+    dueDate: z.string().max(64).nullable().optional(),
+    assignee: z.string().max(120).optional(),
+    home: z.string().max(120).optional(),
+    extra: z.record(z.string(), z.string().max(200)).optional(),
+  })
+  .strict();
+
 export const AskAiBodySchema = z
   .object({
     query: z.string().min(3).max(1200),
-    page: z.enum(['summary']).default('summary'),
+    page: z.enum(AI_PAGE_VALUES).default('summary'),
     context: z
       .object({
         stats: SummaryStatsContextSchema.optional(),
         todos: z.array(SummaryListItemContextSchema).max(10).optional(),
         tasksToApprove: z.array(SummaryListItemContextSchema).max(10).optional(),
+        items: z.array(PageItemSchema).max(25).optional(),
+        filters: z.record(z.string(), z.string().max(200)).optional(),
+        meta: z
+          .object({
+            total: z.number().int().min(0).optional(),
+            page: z.number().int().min(1).optional(),
+            pageSize: z.number().int().min(1).optional(),
+            totalPages: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -49,7 +90,11 @@ export const askAiBodyJson = {
   additionalProperties: false,
   properties: {
     query: { type: 'string', minLength: 3, maxLength: 1200 },
-    page: { type: 'string', enum: ['summary'], default: 'summary' },
+    page: {
+      type: 'string',
+      enum: ['summary', 'tasks', 'care_groups', 'homes', 'young_people', 'employees', 'vehicles', 'form_designer', 'users', 'audit'],
+      default: 'summary',
+    },
     context: {
       type: 'object',
       additionalProperties: false,
@@ -96,6 +141,38 @@ export const askAiBodyJson = {
               priority: { type: 'string', minLength: 1, maxLength: 20 },
               dueDate: { type: ['string', 'null'], maxLength: 64 },
             },
+          },
+        },
+        items: {
+          type: 'array',
+          maxItems: 25,
+          items: {
+            type: 'object',
+            required: ['title'],
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', maxLength: 64 },
+              title: { type: 'string', minLength: 1, maxLength: 300 },
+              status: { type: 'string', maxLength: 50 },
+              priority: { type: 'string', maxLength: 20 },
+              category: { type: 'string', maxLength: 50 },
+              type: { type: 'string', maxLength: 50 },
+              dueDate: { type: ['string', 'null'], maxLength: 64 },
+              assignee: { type: 'string', maxLength: 120 },
+              home: { type: 'string', maxLength: 120 },
+              extra: { type: 'object', additionalProperties: { type: 'string', maxLength: 200 } },
+            },
+          },
+        },
+        filters: { type: 'object', additionalProperties: { type: 'string', maxLength: 200 } },
+        meta: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            total: { type: 'integer', minimum: 0 },
+            page: { type: 'integer', minimum: 1 },
+            pageSize: { type: 'integer', minimum: 1 },
+            totalPages: { type: 'integer', minimum: 0 },
           },
         },
       },

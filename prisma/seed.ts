@@ -9,6 +9,7 @@ import {
   UserRole,
   TenantRole,
   MembershipStatus,
+  TaskCategory,
   TaskStatus,
   TaskApprovalStatus,
   TaskPriority,
@@ -93,27 +94,275 @@ const rawFormTemplateCatalog: Array<{
   { name: 'Safe and well check', group: 'Safety Checks', description: 'Safe and well checks for residents.' },
 ];
 
-const seedFormTemplates: SeedFormTemplate[] = rawFormTemplateCatalog.map((entry) => ({
-  key: toTemplateKey(entry.name),
-  name: entry.name,
-  group: entry.group,
-  description: entry.description,
-  schemaJson: {
-    version: 1,
-    renderer: 'dynamic',
-    sections: [
-      {
-        key: 'details',
-        title: `${entry.name} Details`,
-        fields: [
-          { key: 'date', label: 'Date', type: 'date', required: true },
-          { key: 'notes', label: 'Notes', type: 'textarea', required: false },
-          { key: 'signature', label: 'Signature', type: 'signature', required: false },
-        ],
+// ─── Rich form template builder ──────────────────────────────────────────────
+// Each template gets a realistic builder, access, trigger, and designer block
+// so the Form Designer FE has meaningful data for every endpoint.
+
+type FieldDef = {
+  id: string;
+  key: string;
+  type: string;
+  label: string;
+  section: string;
+  required: boolean;
+  placeholder?: string;
+  options?: string[];
+  helpText?: string;
+  defaultValue?: unknown;
+  validation?: Record<string, unknown>;
+};
+
+type SectionDef = {
+  id: string;
+  key: string;
+  title: string;
+  order: number;
+  description?: string;
+};
+
+function buildRichSections(formName: string): SectionDef[] {
+  return [
+    { id: 'sec-general', key: 'general', title: `${formName} — General`, order: 0, description: 'Basic information and date/time.' },
+    { id: 'sec-details', key: 'details', title: `${formName} — Details`, order: 1, description: 'Detailed notes and observations.' },
+    { id: 'sec-sign-off', key: 'sign_off', title: 'Sign-off', order: 2, description: 'Signature and confirmation.' },
+  ];
+}
+
+function buildRichFields(formName: string, group: string): FieldDef[] {
+  const base: FieldDef[] = [
+    { id: 'f-date', key: 'date', type: 'date_input', label: 'Date', section: 'sec-general', required: true },
+    { id: 'f-time', key: 'time', type: 'time_input', label: 'Time', section: 'sec-general', required: false },
+    { id: 'f-staff', key: 'staff_member', type: 'system_list', label: 'Staff Member', section: 'sec-general', required: true, helpText: 'Select the staff completing this form.' },
+    { id: 'f-notes', key: 'notes', type: 'multi_line_text_input', label: 'Notes / Observations', section: 'sec-details', required: false, placeholder: 'Enter details…' },
+    { id: 'f-signature', key: 'signature', type: 'signature_image', label: 'Signature', section: 'sec-sign-off', required: true },
+  ];
+
+  const lowerName = formName.toLowerCase();
+  const lowerGroup = group.toLowerCase();
+
+  // Incident forms
+  if (lowerName.includes('incident')) {
+    base.push(
+      { id: 'f-incident-type', key: 'incident_type', type: 'dropdown_select_list', label: 'Incident Type', section: 'sec-details', required: true, options: ['Physical', 'Verbal', 'Self-harm', 'Abscond', 'Property damage', 'Other'] },
+      { id: 'f-severity', key: 'severity', type: 'radio_buttons', label: 'Severity', section: 'sec-details', required: true, options: ['Low', 'Medium', 'High', 'Critical'] },
+      { id: 'f-witnesses', key: 'witnesses', type: 'multi_line_text_input', label: 'Witnesses', section: 'sec-details', required: false },
+      { id: 'f-followup', key: 'follow_up_required', type: 'yes_or_no', label: 'Follow-up Required?', section: 'sec-details', required: true },
+      { id: 'f-images', key: 'evidence_images', type: 'embed_files', label: 'Evidence / Photos', section: 'sec-details', required: false },
+    );
+  }
+
+  // Safety check forms
+  if (lowerGroup.includes('safety')) {
+    base.push(
+      { id: 'f-areas', key: 'areas_checked', type: 'checkbox_list', label: 'Areas Checked', section: 'sec-details', required: true, options: ['Kitchen', 'Bathrooms', 'Bedrooms', 'Garden', 'Office', 'Corridors', 'Utility'] },
+      { id: 'f-issues', key: 'issues_found', type: 'yes_or_no', label: 'Issues Found?', section: 'sec-details', required: true },
+      { id: 'f-issue-details', key: 'issue_details', type: 'multi_line_text_input', label: 'Issue Details', section: 'sec-details', required: false },
+    );
+  }
+
+  // Vehicle forms
+  if (lowerName.includes('vehicle') || lowerGroup.includes('transport')) {
+    base.push(
+      { id: 'f-registration', key: 'vehicle_registration', type: 'single_line_text_input', label: 'Vehicle Registration', section: 'sec-general', required: true },
+      { id: 'f-mileage', key: 'mileage', type: 'numeric_input', label: 'Current Mileage', section: 'sec-details', required: true },
+      { id: 'f-tyres', key: 'tyres_ok', type: 'yes_or_no', label: 'Tyres OK?', section: 'sec-details', required: true },
+      { id: 'f-lights', key: 'lights_ok', type: 'yes_or_no', label: 'Lights OK?', section: 'sec-details', required: true },
+      { id: 'f-fuel', key: 'fuel_level', type: 'dropdown_select_list', label: 'Fuel Level', section: 'sec-details', required: true, options: ['Full', '3/4', '1/2', '1/4', 'Empty'] },
+    );
+  }
+
+  // Medication forms
+  if (lowerGroup.includes('medication')) {
+    base.push(
+      { id: 'f-yp', key: 'young_person', type: 'system_list', label: 'Young Person', section: 'sec-general', required: true },
+      { id: 'f-med-name', key: 'medication_name', type: 'single_line_text_input', label: 'Medication Name', section: 'sec-details', required: true },
+      { id: 'f-dosage', key: 'dosage', type: 'single_line_text_input', label: 'Dosage', section: 'sec-details', required: true },
+      { id: 'f-administered', key: 'administered', type: 'yes_or_no', label: 'Administered?', section: 'sec-details', required: true },
+      { id: 'f-refusal-reason', key: 'refusal_reason', type: 'multi_line_text_input', label: 'Refusal Reason', section: 'sec-details', required: false },
+    );
+  }
+
+  // Finance forms
+  if (lowerGroup.includes('finance')) {
+    base.push(
+      { id: 'f-yp-finance', key: 'young_person', type: 'system_list', label: 'Young Person', section: 'sec-general', required: true },
+      { id: 'f-opening', key: 'opening_balance', type: 'numeric_input', label: 'Opening Balance (£)', section: 'sec-details', required: true },
+      { id: 'f-transactions', key: 'transactions', type: 'table', label: 'Transactions', section: 'sec-details', required: false },
+      { id: 'f-closing', key: 'closing_balance', type: 'numeric_input', label: 'Closing Balance (£)', section: 'sec-details', required: true },
+      { id: 'f-variance', key: 'variance_notes', type: 'multi_line_text_input', label: 'Variance Notes', section: 'sec-details', required: false },
+    );
+  }
+
+  // Cleaning / household forms
+  if (lowerGroup.includes('household')) {
+    base.push(
+      { id: 'f-kitchen', key: 'kitchen_clean', type: 'yes_or_no', label: 'Kitchen Cleaned?', section: 'sec-details', required: true },
+      { id: 'f-bathrooms', key: 'bathrooms_clean', type: 'yes_or_no', label: 'Bathrooms Cleaned?', section: 'sec-details', required: true },
+      { id: 'f-lounge', key: 'lounge_clean', type: 'yes_or_no', label: 'Lounge Vacuumed?', section: 'sec-details', required: true },
+      { id: 'f-maintenance', key: 'maintenance_needed', type: 'yes_or_no', label: 'Maintenance Needed?', section: 'sec-details', required: true },
+    );
+  }
+
+  // Shift handover forms
+  if (lowerGroup.includes('handover')) {
+    base.push(
+      { id: 'f-shift-type', key: 'shift_type', type: 'dropdown_select_list', label: 'Shift Type', section: 'sec-general', required: true, options: ['Day', 'Evening', 'Waking Night', 'Sleep-in'] },
+      { id: 'f-summary', key: 'shift_summary', type: 'multi_line_text_input', label: 'Shift Summary', section: 'sec-details', required: true },
+      { id: 'f-concerns', key: 'concerns', type: 'multi_line_text_input', label: 'Concerns / Escalations', section: 'sec-details', required: false },
+      { id: 'f-tasks-outstanding', key: 'tasks_outstanding', type: 'multi_line_text_input', label: 'Outstanding Tasks', section: 'sec-details', required: false },
+    );
+  }
+
+  // Meeting forms
+  if (lowerGroup.includes('meeting') || lowerName.includes('meeting')) {
+    base.push(
+      { id: 'f-attendees', key: 'attendees', type: 'checkbox_list', label: 'Attendees', section: 'sec-general', required: true, options: ['Young Person', 'Keyworker', 'Manager', 'Social Worker', 'Parent/Carer', 'IRO', 'Other'] },
+      { id: 'f-agenda', key: 'agenda', type: 'multi_line_text_input', label: 'Agenda', section: 'sec-details', required: true },
+      { id: 'f-outcomes', key: 'outcomes', type: 'multi_line_text_input', label: 'Outcomes & Actions', section: 'sec-details', required: true },
+    );
+  }
+
+  // Keywork / care planning
+  if (lowerGroup.includes('keywork') || lowerGroup.includes('care planning')) {
+    base.push(
+      { id: 'f-yp-kw', key: 'young_person', type: 'system_list', label: 'Young Person', section: 'sec-general', required: true },
+      { id: 'f-session-topic', key: 'session_topic', type: 'single_line_text_input', label: 'Session Topic', section: 'sec-details', required: true },
+      { id: 'f-engagement', key: 'engagement_level', type: 'radio_buttons', label: 'Engagement Level', section: 'sec-details', required: true, options: ['Excellent', 'Good', 'Fair', 'Poor', 'Refused'] },
+      { id: 'f-actions', key: 'action_items', type: 'multi_line_text_input', label: 'Action Items', section: 'sec-details', required: false },
+    );
+  }
+
+  // Nutrition
+  if (lowerGroup.includes('nutrition')) {
+    base.push(
+      { id: 'f-breakfast', key: 'breakfast', type: 'single_line_text_input', label: 'Breakfast', section: 'sec-details', required: true },
+      { id: 'f-lunch', key: 'lunch', type: 'single_line_text_input', label: 'Lunch', section: 'sec-details', required: true },
+      { id: 'f-dinner', key: 'dinner', type: 'single_line_text_input', label: 'Dinner', section: 'sec-details', required: true },
+      { id: 'f-snacks', key: 'snacks', type: 'single_line_text_input', label: 'Snacks', section: 'sec-details', required: false },
+      { id: 'f-yp-input', key: 'yp_had_input', type: 'yes_or_no', label: 'Young People Had Input?', section: 'sec-details', required: true },
+    );
+  }
+
+  // Rewards
+  if (lowerGroup.includes('reward')) {
+    base.push(
+      { id: 'f-yp-reward', key: 'young_person', type: 'system_list', label: 'Young Person', section: 'sec-general', required: true },
+      { id: 'f-points', key: 'points_awarded', type: 'numeric_input', label: 'Points Awarded', section: 'sec-details', required: true },
+      { id: 'f-reason', key: 'reason', type: 'single_line_text_input', label: 'Reason', section: 'sec-details', required: true },
+    );
+  }
+
+  // Risk assessment
+  if (lowerGroup.includes('risk') || lowerName.includes('risk')) {
+    base.push(
+      { id: 'f-risk-level', key: 'risk_level', type: 'radio_buttons', label: 'Risk Level', section: 'sec-details', required: true, options: ['Low', 'Medium', 'High'] },
+      { id: 'f-hazards', key: 'hazards_identified', type: 'multi_line_text_input', label: 'Hazards Identified', section: 'sec-details', required: true },
+      { id: 'f-controls', key: 'control_measures', type: 'multi_line_text_input', label: 'Control Measures', section: 'sec-details', required: true },
+      { id: 'f-residual', key: 'residual_risk', type: 'radio_buttons', label: 'Residual Risk', section: 'sec-details', required: true, options: ['Low', 'Medium', 'High'] },
+    );
+  }
+
+  return base;
+}
+
+// Assign different statuses, sensitivities, acknowledgement to vary data
+function pickStatus(index: number): 'draft' | 'released' | 'archived' {
+  if (index % 7 === 0) return 'archived';
+  if (index % 5 === 0) return 'draft';
+  return 'released';
+}
+
+function pickSensitivity(group: string): 'sensitive' | 'not_sensitive' {
+  const lower = group.toLowerCase();
+  if (lower.includes('incident') || lower.includes('medication') || lower.includes('finance')) return 'sensitive';
+  return 'not_sensitive';
+}
+
+function pickAcknowledgement(group: string): 'no' | 'optional' | 'mandatory' {
+  const lower = group.toLowerCase();
+  if (lower.includes('safety') || lower.includes('incident') || lower.includes('compliance')) return 'mandatory';
+  if (lower.includes('handover') || lower.includes('medication')) return 'optional';
+  return 'no';
+}
+
+function pickFormTypes(name: string, group: string): string[] {
+  const lower = `${name} ${group}`.toLowerCase();
+  const types: string[] = [];
+  if (lower.includes('young person') || lower.includes('resident') || lower.includes('yp')) types.push('young_person');
+  if (lower.includes('vehicle') || lower.includes('transport')) types.push('vehicle');
+  if (lower.includes('home') || lower.includes('house') || lower.includes('room')) types.push('home');
+  if (lower.includes('employee') || lower.includes('staff')) types.push('employee');
+  if (types.length === 0) types.push('other');
+  return types;
+}
+
+const seedFormTemplates: SeedFormTemplate[] = rawFormTemplateCatalog.map((entry, index) => {
+  const key = toTemplateKey(entry.name);
+  const status = pickStatus(index);
+  const sections = buildRichSections(entry.name);
+  const fields = buildRichFields(entry.name, entry.group);
+  const formTypes = pickFormTypes(entry.name, entry.group);
+  const sensitivity = pickSensitivity(entry.group);
+  const acknowledgement = pickAcknowledgement(entry.group);
+  const isOneOff = entry.group === 'Placement';
+  const usableInProcedure = ['Safety Checks', 'Incidents', 'Compliance'].includes(entry.group);
+  const enableTrigger = index % 4 === 0;
+
+  return {
+    key,
+    name: entry.name,
+    group: entry.group,
+    description: entry.description,
+    schemaJson: {
+      version: 1,
+      renderer: 'dynamic',
+      sections: sections.map(({ id, key: k, title, order }) => ({ id, key: k, title, order })),
+      fields: fields.map(({ id, key: k, type, label, section, required }) => ({ id, key: k, type, label, section, required })),
+      designer: {
+        // tenantId will be set to null so they appear as global forms;
+        // tenant-scoped ones get patched after tenant is created.
+        tenantId: null,
+        status,
+        visibility: 'visible',
+        formTypes,
+        keywords: [entry.group.toLowerCase(), ...entry.name.toLowerCase().split(/\s+/).slice(0, 3)],
+        defaultTaskSensitivity: sensitivity,
+        isOneOff,
+        usableInProcedure,
+        requiresAcknowledgement: acknowledgement,
+        forceDisplayOnTrigger: enableTrigger,
+        instructions: `Complete all required fields for ${entry.name}. Ensure accuracy before submitting.`,
+        notifications: {
+          mode: sensitivity === 'sensitive' ? 'roles' : 'users',
+          userIds: [],
+          roles: sensitivity === 'sensitive' ? ['tenant_admin', 'sub_admin'] : [],
+        },
+        access: {
+          confidentialityMode: sensitivity === 'sensitive' ? 'roles' : 'users',
+          confidentialityUserIds: [],
+          confidentialityRoles: sensitivity === 'sensitive' ? ['tenant_admin', 'sub_admin'] : ['tenant_admin', 'sub_admin', 'staff'],
+          approverMode: 'roles',
+          approverUserIds: [],
+          approverRoles: ['tenant_admin', 'sub_admin'],
+        },
+        triggerTask: {
+          enabled: enableTrigger,
+          followUpFormId: null,
+          allowUserChooseTriggerTime: enableTrigger,
+          alwaysTriggerSameProject: false,
+          restrictProjectByAssociation: enableTrigger,
+          restrictProjectByPermission: false,
+          allowCopyPreviousTaskData: enableTrigger,
+        },
+        builder: {
+          version: 1,
+          sections,
+          fields,
+        },
       },
-    ],
-  },
-}));
+    } as Prisma.InputJsonValue,
+  };
+});
 
 const formTemplateByName = new Map(
   seedFormTemplates.map((template) => [template.name.toLowerCase(), template] as const),
@@ -629,25 +878,39 @@ async function main() {
   });
 
   for (const template of seedFormTemplates) {
+    // Patch tenantId into schemaJson.designer so forms are tenant-scoped.
+    // Keep every 7th form as global (tenantId: null) for variety.
+    const schema = template.schemaJson as Record<string, unknown>;
+    const designer = (schema.designer ?? {}) as Record<string, unknown>;
+    const templateIndex = seedFormTemplates.indexOf(template);
+    if (templateIndex % 7 !== 0) {
+      designer.tenantId = tenant.id;
+    }
+    schema.designer = designer;
+
+    const status = (designer.status as string) ?? 'released';
+    const isActive = status === 'released';
+
     await prisma.formTemplate.upsert({
       where: { key: template.key },
       update: {
         name: template.name,
         group: template.group,
         description: template.description,
-        schemaJson: template.schemaJson,
-        isActive: true,
+        schemaJson: schema as Prisma.InputJsonValue,
+        isActive,
       },
       create: {
         key: template.key,
         name: template.name,
         group: template.group,
         description: template.description,
-        schemaJson: template.schemaJson,
-        isActive: true,
+        schemaJson: schema as Prisma.InputJsonValue,
+        isActive,
       },
     });
   }
+  console.log(`Seeded ${seedFormTemplates.length} form templates with rich builder data.`);
 
   // Reset previous showcase seed data for a deterministic rerun.
   await prisma.employeeShift.deleteMany({
@@ -764,6 +1027,7 @@ async function main() {
     updatedById: string | null;
     title: string;
     description: string;
+    category: TaskCategory;
     status: TaskStatus;
     approvalStatus: TaskApprovalStatus;
     priority: TaskPriority;
@@ -773,6 +1037,8 @@ async function main() {
     approvedAt: Date | null;
     assigneeId: string | null;
     approvedById: string | null;
+    homeId: string | null;
+    vehicleId: string | null;
     youngPersonId: string | null;
     createdById: string;
     createdAt: Date;
@@ -789,6 +1055,7 @@ async function main() {
     updatedById?: string | null;
     title: string;
     details: string;
+    category?: TaskCategory;
     dueDate: Date | null;
     createdAt: Date;
     updatedAt?: Date;
@@ -797,6 +1064,8 @@ async function main() {
     approvalStatus?: TaskApprovalStatus;
     priority?: TaskPriority;
     assigneeId?: string | null;
+    homeId?: string | null;
+    vehicleId?: string | null;
     youngPersonId?: string | null;
     approvedById?: string | null;
     approvedAt?: Date | null;
@@ -815,6 +1084,7 @@ async function main() {
       updatedById: input.updatedById ?? null,
       title: input.title,
       description: `${seedMarker} ${input.details}`,
+      category: input.category ?? TaskCategory.task_log,
       status: input.status ?? TaskStatus.pending,
       approvalStatus: input.approvalStatus ?? TaskApprovalStatus.not_required,
       priority: input.priority ?? TaskPriority.medium,
@@ -824,6 +1094,8 @@ async function main() {
       approvedAt: input.approvedAt ?? null,
       assigneeId: input.assigneeId ?? northEmployee.id,
       approvedById: input.approvedById ?? null,
+      homeId: input.homeId ?? null,
+      vehicleId: input.vehicleId ?? null,
       youngPersonId: input.youngPersonId ?? ypNorth.id,
       createdById: input.createdById ?? managerUser.id,
       createdAt: input.createdAt,
@@ -1408,6 +1680,76 @@ async function main() {
       priority: TaskPriority.medium,
     });
   }
+
+  // ─── Daily Log seed data ──────────────────────────────────────────────────
+
+  // Clean up previous daily log seeds
+  await prisma.task.deleteMany({
+    where: {
+      tenantId: tenant.id,
+      category: TaskCategory.daily_log,
+      description: { startsWith: seedMarker },
+    },
+  });
+
+  const dailyLogCategories = ['General', 'Incident', 'Medication', 'Behaviour', 'Education', 'Personal Care', 'Contact', 'Safeguarding'];
+
+  // 20 daily logs spread over the last 14 days, various homes/YPs/vehicles/categories
+  for (let i = 0; i < 20; i++) {
+    const dayOffset = -Math.floor(i * 0.7); // spread across ~14 days
+    const hour = 7 + (i % 12); // vary the time between 7am-7pm
+    const isNorth = i % 3 !== 0; // 2/3 Fortuna, 1/3 Oakview
+    const home = isNorth ? northHome : southHome;
+    const yp = i % 4 === 0 ? ypSouth : i % 2 === 0 ? ypNorth : null;
+    const cat = dailyLogCategories[i % dailyLogCategories.length];
+    const noteDate = atDay(now, dayOffset, hour, (i * 7) % 60);
+
+    const dailyLogNotes: Record<string, string> = {
+      General: `<p>${home.name} — general daily observations. Residents settled well today. Activities included art session in the morning and group cooking in the afternoon. All routines followed as planned.</p>`,
+      Incident: `<p>Minor incident reported at ${home.name}. ${yp ? `${ypNorth.firstName} became upset` : 'A resident became upset'} during transition to evening routine. De-escalation techniques used successfully. No injuries. Staff debriefed.</p>`,
+      Medication: `<p>Medication round completed at ${home.name}. All medications administered as prescribed. ${yp ? `${ypNorth.firstName} required prompting for evening dose.` : 'No refusals.'} MAR chart updated and signed.</p>`,
+      Behaviour: `<p>Behavioural observations for ${home.name}. ${yp ? `${ypNorth.firstName} showed improved engagement` : 'Positive engagement observed'} during structured activities. Reward points awarded for cooperative behaviour during mealtimes.</p>`,
+      Education: `<p>Education update for ${home.name}. ${yp ? `${ypNorth.firstName} attended school` : 'School attendance confirmed'} — full day with no absences. Homework support provided after school. Teacher feedback was positive regarding classroom participation.</p>`,
+      'Personal Care': `<p>Personal care log for ${home.name}. All residents supported with morning routines. ${yp ? `${ypNorth.firstName} managed independently` : 'Routines completed without issues'}. Laundry done and rooms tidied.</p>`,
+      Contact: `<p>Contact log for ${home.name}. ${yp ? `Phone call with ${ypNorth.firstName}'s social worker` : 'Social worker contact'} — discussed upcoming LAC review and placement objectives. Next review scheduled for next month.</p>`,
+      Safeguarding: `<p>Safeguarding note for ${home.name}. Routine checks completed. ${yp ? `Welfare check on ${ypNorth.firstName} — no concerns.` : 'No concerns identified.'} All ligature points checked, doors and windows secure.</p>`,
+    };
+
+    const triggerKeys = [null, 'daily-handover', 'daily-summary', null, 'contact-form', null, 'incident', null, 'keyworker-session', null];
+    const triggerKey = triggerKeys[i % triggerKeys.length];
+
+    const creators = [adminUser.id, managerUser.id, staffNorthUser.id, staffSouthUser.id];
+    const assignees = [managerEmployee.id, northEmployee.id, southEmployee.id];
+
+    pushTask({
+      title: `Daily Log — ${home.name} — ${noteDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}`,
+      details: dailyLogNotes[cat] ?? dailyLogNotes.General,
+      category: TaskCategory.daily_log,
+      homeId: home.id,
+      youngPersonId: yp?.id ?? null,
+      vehicleId: null,
+      dueDate: null,
+      createdAt: noteDate,
+      submittedAt: noteDate,
+      submittedById: creators[i % creators.length],
+      createdById: creators[i % creators.length],
+      assigneeId: assignees[i % assignees.length],
+      formTemplateKey: triggerKey,
+      status: i < 15 ? TaskStatus.completed : TaskStatus.pending,
+      approvalStatus: i < 10 ? TaskApprovalStatus.approved : i < 15 ? TaskApprovalStatus.not_required : TaskApprovalStatus.pending_approval,
+      approvedById: i < 10 ? managerEmployee.id : null,
+      approvedAt: i < 10 ? atDay(now, dayOffset, hour + 2) : null,
+      priority: cat === 'Incident' || cat === 'Safeguarding' ? TaskPriority.high : TaskPriority.medium,
+      submissionPayload: {
+        dailyLogCategory: cat,
+        noteDate: noteDate.toISOString(),
+        relatesTo: yp ? { type: 'young_person', id: yp.id } : null,
+        triggerTaskFormKey: triggerKey,
+      } as Prisma.InputJsonValue,
+    });
+  }
+
+  // ─── Insert all seed data ────────────────────────────────────────────────
 
   await prisma.homeEvent.createMany({ data: eventsData });
   await prisma.employeeShift.createMany({ data: shiftsData });
