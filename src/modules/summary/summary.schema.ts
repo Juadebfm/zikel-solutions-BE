@@ -36,6 +36,7 @@ export const SummaryListQuerySchema = z.object({
 export const ApproveTaskBodySchema = z.object({
   comment: z.string().max(500).optional(),
   signatureFileId: z.string().min(1).optional(),
+  gateScope: z.enum(['task', 'global']).default('task'),
 });
 
 export const BatchApproveBodySchema = z.object({
@@ -43,6 +44,7 @@ export const BatchApproveBodySchema = z.object({
   action: z.enum(['approve', 'reject']),
   rejectionReason: z.string().max(500).optional(),
   signatureFileId: z.string().min(1).optional(),
+  gateScope: z.enum(['task', 'global']).default('global'),
 });
 
 export const ReviewTaskBodySchema = z.object({
@@ -60,6 +62,13 @@ export const approveTaskBodyJson = {
       type: 'string',
       minLength: 1,
       description: 'Optional uploaded signature file ID to attach as acknowledgement evidence.',
+    },
+    gateScope: {
+      type: 'string',
+      enum: ['task', 'global'],
+      default: 'task',
+      description:
+        '`task` requires only the current item to be reviewed before approving. `global` enforces all overdue pending approvals reviewed first.',
     },
   },
 } as const;
@@ -81,6 +90,13 @@ export const batchApproveBodyJson = {
       type: 'string',
       minLength: 1,
       description: 'Optional uploaded signature file ID used when action=approve.',
+    },
+    gateScope: {
+      type: 'string',
+      enum: ['task', 'global'],
+      default: 'global',
+      description:
+        '`global` blocks submit until all overdue pending approvals are reviewed. `task` enforces review only per selected task IDs.',
     },
   },
 } as const;
@@ -243,6 +259,7 @@ export const tasksToApproveItemJson = {
     'createdBy',
     'relatedEntity',
     'links',
+    'context',
     'review',
     'timestamps',
     'references',
@@ -284,6 +301,29 @@ export const tasksToApproveItemJson = {
           label: { type: 'string' },
           value: { type: 'string' },
         },
+      },
+    },
+    context: {
+      type: 'object',
+      required: [
+        'formName',
+        'formGroup',
+        'homeOrSchool',
+        'relatedTo',
+        'taskDate',
+        'submittedBy',
+        'updatedBy',
+        'summary',
+      ],
+      properties: {
+        formName: { type: 'string', nullable: true, description: 'Originating form name.' },
+        formGroup: { type: 'string', nullable: true, description: 'Form group/category label.' },
+        homeOrSchool: { type: 'string', nullable: true, description: 'Resolved location context.' },
+        relatedTo: { type: 'string', nullable: true, description: 'Primary related person/entity name.' },
+        taskDate: { type: 'string', format: 'date-time', nullable: true, description: 'Due date used for approval queueing.' },
+        submittedBy: { type: 'string', nullable: true, description: 'User that submitted/requested this item.' },
+        updatedBy: { type: 'string', nullable: true, description: 'User that most recently updated this item.' },
+        summary: { type: 'string', description: 'Short human-readable summary describing what this task/event is about.' },
       },
     },
     referenceSummary: {

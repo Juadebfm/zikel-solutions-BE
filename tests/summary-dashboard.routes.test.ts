@@ -774,7 +774,7 @@ describe('Summary routes', () => {
       method: 'POST',
       url: '/api/v1/summary/tasks-to-approve/task_1/approve',
       headers: authHeader(),
-      payload: {},
+      payload: { gateScope: 'global' },
     });
 
     expect(res.statusCode).toBe(409);
@@ -786,6 +786,96 @@ describe('Summary routes', () => {
       },
     });
     expect(mockPrisma.task.update).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/v1/summary/tasks-to-approve/:id/approve uses per-task gate by default', async () => {
+    mockTenantContext('user_1', 'manager', 'sub_admin');
+    mockPrisma.user.findUnique.mockResolvedValueOnce({
+      id: 'user_1',
+      role: 'manager',
+    });
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    mockPrisma.task.findFirst.mockResolvedValueOnce({
+      id: 'task_1',
+      tenantId: 'tenant_1',
+      submissionPayload: { sections: [] },
+      approvalStatus: 'pending_approval',
+      title: 'Task 1',
+      description: null,
+      status: 'pending',
+      priority: 'medium',
+      dueDate: null,
+      completedAt: null,
+      rejectionReason: null,
+      approvedAt: null,
+      assigneeId: null,
+      approvedById: null,
+      youngPersonId: null,
+      createdById: 'user_2',
+      submittedAt: null,
+      submittedById: null,
+      updatedById: 'user_2',
+      formTemplateKey: null,
+      formName: null,
+      formGroup: null,
+      category: 'task_log',
+      deletedAt: null,
+      createdAt: new Date('2026-03-20T11:00:00.000Z'),
+      updatedAt: new Date('2026-03-20T11:00:00.000Z'),
+    });
+    mockPrisma.taskReviewEvent.findFirst.mockResolvedValueOnce({
+      taskId: 'task_1',
+    });
+    mockPrisma.task.update.mockResolvedValueOnce({
+      id: 'task_1',
+      tenantId: 'tenant_1',
+      title: 'Task 1',
+      description: null,
+      status: 'pending',
+      priority: 'medium',
+      dueDate: null,
+      completedAt: null,
+      rejectionReason: null,
+      approvedAt: new Date('2026-03-24T10:00:00.000Z'),
+      assigneeId: null,
+      approvedById: 'emp_1',
+      youngPersonId: null,
+      createdById: 'user_2',
+      submittedAt: null,
+      submittedById: null,
+      updatedById: 'user_2',
+      formTemplateKey: null,
+      formName: null,
+      formGroup: null,
+      category: 'task_log',
+      approvalStatus: 'approved',
+      signatureFileId: null,
+      submissionPayload: { sections: [] },
+      references: [],
+      deletedAt: null,
+      createdAt: new Date('2026-03-20T11:00:00.000Z'),
+      updatedAt: new Date('2026-03-24T10:00:00.000Z'),
+    });
+    mockPrisma.auditLog.create.mockResolvedValueOnce({});
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/summary/tasks-to-approve/task_1/approve',
+      headers: authHeader(),
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ success: true });
+    expect(mockPrisma.taskReviewEvent.findFirst).toHaveBeenCalledWith({
+      where: {
+        tenantId: 'tenant_1',
+        userId: 'user_1',
+        taskId: 'task_1',
+      },
+      select: { taskId: true },
+    });
+    expect(mockPrisma.task.findMany).not.toHaveBeenCalled();
   });
 
   it('POST /api/v1/summary/tasks-to-approve/:id/approve stores signature evidence when provided', async () => {
@@ -824,8 +914,7 @@ describe('Summary routes', () => {
       updatedAt: new Date('2026-03-20T11:00:00.000Z'),
     });
     mockPrisma.uploadedFile.findMany.mockResolvedValueOnce([{ id: 'file_sig_1' }]);
-    mockPrisma.task.findMany.mockResolvedValueOnce([{ id: 'task_1' }]);
-    mockPrisma.taskReviewEvent.findMany.mockResolvedValueOnce([{ taskId: 'task_1' }]);
+    mockPrisma.taskReviewEvent.findFirst.mockResolvedValueOnce({ taskId: 'task_1' });
     mockPrisma.task.update.mockResolvedValueOnce({
       id: 'task_1',
       tenantId: 'tenant_1',

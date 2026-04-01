@@ -135,6 +135,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Items awaiting my approval',
       description:
         'Returns tasks with approvalStatus = pending_approval that the current user has permission to approve. ' +
+        'Each row includes `context` metadata for quick understanding (form, related entity, submitter, and short summary). ' +
         'Default scope is `all` (full pending queue). Use `scope=gate` for unreviewed overdue blockers or `scope=popup` for unreviewed non-overdue reminders. ' +
         'Users without approval permission receive a 403.',
       querystring: tasksToApproveQueryJson,
@@ -207,7 +208,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Record that actor reviewed an item before acknowledgement',
       description:
         'Persists a review event for the current user on the target pending-approval task. ' +
-        'Frontend should call this when user opens detail, downloads document, or navigates into task content.',
+        'Frontend should call this when user opens detail, downloads document, or navigates into task content. ' +
+        'This endpoint returns only review-state metadata; use GET /summary/tasks-to-approve/:id for full task context.',
       params: { $ref: 'CuidParam#' },
       body: reviewTaskBodyJson,
       response: {
@@ -260,7 +262,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       description:
         'Approves or rejects multiple tasks in a single operation. ' +
         'Requires approval permission. Partial success returns details per task. ' +
-        'When action=approve, an optional signatureFileId can be provided as acknowledgement evidence.',
+        'When action=approve, an optional signatureFileId can be provided as acknowledgement evidence. ' +
+        'Use gateScope=global to enforce global overdue review-gate or gateScope=task for selected-task review gate.',
       body: batchApproveBodyJson,
       response: {
         200: {
@@ -317,7 +320,8 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'Approve a single task',
       description:
         'Approves the specified task. Requires approval permission. ' +
-        'Stores approver ID, timestamp, optional comment, and optional signatureFileId.',
+        'Stores approver ID, timestamp, optional comment, and optional signatureFileId. ' +
+        'Use gateScope=task (default) to enforce per-task review, or gateScope=global for global overdue review gate.',
       params: { $ref: 'CuidParam#' },
       body: approveTaskBodyJson,
       response: {
@@ -338,6 +342,155 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
             'Task is not in pending_approval state, or review is required before acknowledgement.',
           $ref: 'ApiError#',
         },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ApproveTaskBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await summaryService.approveTask(userId, id, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /summary/tasks-to-approve/:id/review-event (alias) ───────────────
+  fastify.post('/tasks-to-approve/:id/review-event', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Record review event (alias)',
+      description:
+        'Alias of /summary/tasks-to-approve/:id/review-events. ' +
+        'Persists review event for the current actor on the target task.',
+      params: { $ref: 'CuidParam#' },
+      body: reviewTaskBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['taskId', 'reviewedByCurrentUser', 'reviewedAt', 'reviewedByCurrentUserName', 'action'],
+              properties: {
+                taskId: { type: 'string' },
+                reviewedByCurrentUser: { type: 'boolean', enum: [true] },
+                reviewedAt: { type: 'string', format: 'date-time' },
+                reviewedByCurrentUserName: { type: 'string' },
+                action: { type: 'string', enum: ['view_detail', 'open_document', 'open_task'] },
+              },
+            },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        404: { description: 'Task not found.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ReviewTaskBodySchema.safeParse(request.body ?? {});
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await summaryService.recordTaskReviewEvent(userId, id, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /summary/tasks-to-approve/approvals (alias) ───────────────────────
+  fastify.post('/tasks-to-approve/approvals', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Batch approve or reject tasks (alias)',
+      description: 'Alias of /summary/tasks-to-approve/process-batch.',
+      body: batchApproveBodyJson,
+      response: {
+        200: {
+          description: 'Batch processed.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['processed', 'failed'],
+              properties: {
+                processed: { type: 'integer', example: 5 },
+                failed: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      reason: { type: 'string' },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        409: { description: 'Review is required before acknowledge submit.', $ref: 'ApiError#' },
+        422: { description: 'Validation error.', $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = BatchApproveBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const userId = (request.user as JwtPayload).sub;
+      const data = await summaryService.processTaskBatch(userId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /summary/tasks-to-approve/:id/approval (alias) ────────────────────
+  fastify.post('/tasks-to-approve/:id/approval', {
+    schema: {
+      tags: ['Summary'],
+      summary: 'Approve a single task (alias)',
+      description: 'Alias of /summary/tasks-to-approve/:id/approve.',
+      params: { $ref: 'CuidParam#' },
+      body: approveTaskBodyJson,
+      response: {
+        200: {
+          description: 'Task approved.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { $ref: 'Task#' },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { description: 'User lacks approval permission.', $ref: 'ApiError#' },
+        404: { description: 'Task not found.', $ref: 'ApiError#' },
+        409: { $ref: 'ApiError#' },
         422: { description: 'Validation error.', $ref: 'ApiError#' },
       },
     },

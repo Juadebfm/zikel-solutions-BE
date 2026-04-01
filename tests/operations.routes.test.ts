@@ -15,6 +15,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     },
     employee: {
       findFirst: vi.fn(),
+      findUnique: vi.fn(),
     },
     youngPerson: {
       findFirst: vi.fn(),
@@ -79,6 +80,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.employee.findUnique.mockResolvedValue(null);
   mockPrisma.$transaction.mockImplementation(async (arg: unknown) => {
     if (typeof arg === 'function') {
       return arg({

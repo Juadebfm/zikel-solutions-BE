@@ -269,6 +269,25 @@ async function ensureActorReviewedAllPendingApprovals(user: UserContext) {
   }
 }
 
+async function ensureActorReviewedTask(user: UserContext, taskId: string) {
+  const review = await prisma.taskReviewEvent.findFirst({
+    where: {
+      tenantId: user.tenantId,
+      userId: user.id,
+      taskId,
+    },
+    select: { taskId: true },
+  });
+
+  if (!review) {
+    throw httpError(
+      409,
+      'REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE',
+      'Please review the item(s) before acknowledging.',
+    );
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
@@ -345,6 +364,31 @@ type PreviewField = {
   label: string;
   value: string;
 };
+
+function truncateText(value: string, maxLength = 220) {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
+function buildContextSummary(args: {
+  title: string;
+  description: string | null;
+  previewFields: PreviewField[];
+}) {
+  const description = args.description?.trim() ?? '';
+  if (description) return truncateText(description);
+
+  if (args.previewFields.length > 0) {
+    const compactPreview = args.previewFields
+      .slice(0, 2)
+      .map((field) => `${field.label}: ${field.value}`)
+      .join(' | ')
+      .trim();
+    if (compactPreview) return truncateText(compactPreview);
+  }
+
+  return truncateText(args.title.trim());
+}
 
 function extractPreviewFields(payload: Prisma.JsonValue | null): PreviewField[] {
   const payloadObj = asRecord(payload);
@@ -653,6 +697,11 @@ function toTasksToApproveItem(
   const approvers = parseApprovers(row.submissionPayload);
   const requestId = extractRequestId(row.submissionPayload);
   const previewFields = extractPreviewFields(row.submissionPayload);
+  const contextSummary = buildContextSummary({
+    title: row.title,
+    description,
+    previewFields,
+  });
   const relatedEntity = resolveRelatedEntity({
     youngPersonId: row.youngPerson?.id ?? null,
     youngPersonName: relatedTo,
@@ -665,6 +714,15 @@ function toTasksToApproveItem(
     vehicleHomeId: row.vehicle?.homeId ?? null,
     references,
   });
+  const submittedBy =
+    (row.submittedById ? userIdentityMap.get(row.submittedById)?.name : null)
+    ?? createdByIdentity?.name
+    ?? null;
+  const updatedBy =
+    (row.updatedById ? userIdentityMap.get(row.updatedById)?.name : null)
+    ?? submittedBy
+    ?? null;
+  const homeOrSchool = row.home?.name ?? row.youngPerson?.home?.name ?? row.assignee?.home?.name ?? null;
 
   return {
     id: row.id,
@@ -692,6 +750,16 @@ function toTasksToApproveItem(
     links,
     previewFields,
     referenceSummary,
+    context: {
+      formName: row.formName ?? null,
+      formGroup: row.formGroup ?? row.formName ?? null,
+      homeOrSchool,
+      relatedTo,
+      taskDate: row.dueDate,
+      submittedBy,
+      updatedBy,
+      summary: contextSummary,
+    },
     review: {
       reviewedByCurrentUser: reviewedAt !== null,
       reviewedAt,
@@ -1027,13 +1095,11 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
     { tenantId: user.tenantId, deletedAt: null, approvalStatus: TaskApprovalStatus.pending_approval },
   ];
 
-  // Gate scope disabled — approvals are non-blocking; shown as notifications instead.
   if (query.scope === 'gate') {
-    return {
-      data: [],
-      meta: { total: 0, page: query.page, pageSize: query.pageSize, totalPages: 1 },
-      labels: SHARED_TASK_LABELS,
-    };
+    filters.push(
+      { dueDate: { lt: start } },
+      { reviewEvents: { none: { userId: user.id } } },
+    );
   } else if (query.scope === 'popup') {
     filters.push(
       {
@@ -1347,7 +1413,11 @@ export async function approveTask(userId: string, taskId: string, body: ApproveT
   }
 
   await assertValidSignatureFile(user.tenantId, body.signatureFileId);
-  await ensureActorReviewedAllPendingApprovals(user);
+  if (body.gateScope === 'global') {
+    await ensureActorReviewedAllPendingApprovals(user);
+  } else {
+    await ensureActorReviewedTask(user, taskId);
+  }
   const approvedAt = new Date();
 
   const updated = await prisma.task.update({
@@ -1411,7 +1481,7 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
 
   await assertValidSignatureFile(user.tenantId, body.signatureFileId);
 
-  if (body.action === 'approve') {
+  if (body.action === 'approve' && body.gateScope === 'global') {
     await ensureActorReviewedAllPendingApprovals(user);
   }
 
@@ -1420,6 +1490,9 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
     select: { id: true, approvalStatus: true, submissionPayload: true },
   });
   const taskMap = new Map(tasks.map((task) => [task.id, task]));
+  const reviewMap = body.action === 'approve' && body.gateScope === 'task'
+    ? await getReviewMap(user.id, body.taskIds)
+    : new Map<string, Date>();
 
   let processed = 0;
   const failed: Array<{ id: string; reason: string }> = [];
@@ -1433,6 +1506,10 @@ export async function processTaskBatch(userId: string, body: BatchApproveBody) {
 
     if (task.approvalStatus !== TaskApprovalStatus.pending_approval) {
       failed.push({ id: taskId, reason: 'Task is not in pending_approval state.' });
+      continue;
+    }
+    if (body.action === 'approve' && body.gateScope === 'task' && !reviewMap.has(taskId)) {
+      failed.push({ id: taskId, reason: 'Please review the item(s) before acknowledging.' });
       continue;
     }
 
