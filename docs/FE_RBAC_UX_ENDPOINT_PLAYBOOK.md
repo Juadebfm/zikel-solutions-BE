@@ -269,11 +269,19 @@ Summary:
   - default `scope=all`: full pending queue (including reviewed/non-overdue)
   - `scope=gate`: unreviewed overdue items (dashboard-blocking set)
   - `scope=popup`: unreviewed upcoming/undated items (non-blocking reminders)
+  - each row includes `context` (`formName`, `formGroup`, `homeOrSchool`, `relatedTo`, `taskDate`, `submittedBy`, `updatedBy`, `summary`) for quick human-readable meaning
 - `GET /api/v1/summary/tasks-to-approve/:id` (approver roles only)
+  - use for full item detail/render payload before final approve decision
 - `POST /api/v1/summary/tasks-to-approve/:id/review-events` (approver roles only)
+  - lightweight review audit endpoint (not a detail payload)
+- `POST /api/v1/summary/tasks-to-approve/:id/review-event` (alias)
 - `POST /api/v1/summary/tasks-to-approve/process-batch` (approver roles only)
+  - optional `gateScope`: `global` (default) or `task`
+- `POST /api/v1/summary/tasks-to-approve/approvals` (alias)
 - `POST /api/v1/summary/tasks-to-approve/:id/approve` (approver roles only)
+  - optional `gateScope`: `task` (default) or `global`
   - approve endpoints now accept optional `signatureFileId` for acknowledgement evidence
+- `POST /api/v1/summary/tasks-to-approve/:id/approval` (alias)
 
 Uploads (`/api/v1/uploads`):
 

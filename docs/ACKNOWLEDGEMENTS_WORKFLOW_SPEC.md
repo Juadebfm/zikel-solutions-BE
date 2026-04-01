@@ -71,8 +71,18 @@ Note: there is no dedicated `acknowledged` enum in current DB schema.
 - Full pending queue (admin table views only): `GET /api/v1/summary/tasks-to-approve?scope=all`
 - Get item detail: `GET /api/v1/summary/tasks-to-approve/:id`
 - Record review evidence: `POST /api/v1/summary/tasks-to-approve/:id/review-events`
+- Record review evidence (alias): `POST /api/v1/summary/tasks-to-approve/:id/review-event`
 - Single approve: `POST /api/v1/summary/tasks-to-approve/:id/approve`
+- Single approve (alias): `POST /api/v1/summary/tasks-to-approve/:id/approval`
 - Batch approve/reject: `POST /api/v1/summary/tasks-to-approve/process-batch`
+- Batch approve/reject (alias): `POST /api/v1/summary/tasks-to-approve/approvals`
+
+### Response Responsibilities
+
+- `GET /summary/tasks-to-approve` is the queue endpoint and now includes `context` per row:
+  - `formName`, `formGroup`, `homeOrSchool`, `relatedTo`, `taskDate`, `submittedBy`, `updatedBy`, `summary`
+- `GET /summary/tasks-to-approve/:id` is the canonical full-detail endpoint for rendering complete task/event context.
+- `POST /summary/tasks-to-approve/:id/review-events` intentionally returns only review-state metadata and does not return full task details.
 
 Batch request for acknowledge:
 
@@ -89,9 +99,14 @@ Single acknowledge request now supports optional signature evidence:
 ```json
 {
   "comment": "Approved",
-  "signatureFileId": "file_sig_123"
+  "signatureFileId": "file_sig_123",
+  "gateScope": "task"
 }
 ```
+
+`gateScope` behavior:
+- `task` (default for single approve): requires review of the current task only.
+- `global`: requires all overdue pending approvals to be reviewed before submit.
 
 Batch response shape:
 
@@ -101,6 +116,10 @@ Batch response shape:
   "failed": []
 }
 ```
+
+Batch also supports `gateScope`:
+- `global` (default for batch approve): global overdue review gate.
+- `task`: requires review per selected task IDs.
 
 ## UX Flow (target behavior)
 
@@ -144,8 +163,9 @@ Current backend enforcement:
    - `reviewedAt: string | null`
    - `reviewedByCurrentUserName: string | null`
    - `category: "document" | "task log"`
-3. Approve and batch-approve enforce a server-side review gate.
-4. If review prerequisite is not met, backend returns:
+3. Queue payload exposes concise business context for each row via `context.*`, so users can understand what each task/event is about before opening detail.
+4. Approve and batch-approve enforce a server-side review gate.
+5. If review prerequisite is not met, backend returns:
    - `409 REVIEW_REQUIRED_BEFORE_ACKNOWLEDGE`
 
 ## Error Handling Contract
