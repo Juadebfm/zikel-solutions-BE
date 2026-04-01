@@ -16,7 +16,17 @@ import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type { CreateTaskBody, ListTasksQuery, TaskActionBody, UpdateTaskBody } from './tasks.schema.js';
+import { emitNotification } from '../../lib/notification-emitter.js';
+import type {
+  BatchArchiveBody,
+  BatchPostponeBody,
+  BatchReassignBody,
+  CreateTaskBody,
+  ListTasksQuery,
+  PostponeTaskBody,
+  TaskActionBody,
+  UpdateTaskBody,
+} from './tasks.schema.js';
 
 type TaskActorContext = {
   userId: string;
@@ -1556,6 +1566,26 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
     },
   });
 
+  // Notify assignee if the task is assigned to someone other than the creator
+  if (task.assigneeId) {
+    const assigneeEmployee = await prisma.employee.findUnique({
+      where: { id: task.assigneeId },
+      select: { userId: true },
+    });
+    if (assigneeEmployee && assigneeEmployee.userId !== actor.userId) {
+      void emitNotification({
+        level: 'tenant',
+        category: 'task_assigned',
+        tenantId: actor.tenantId,
+        title: 'New task assigned to you',
+        body: `You have been assigned: "${task.title}".`,
+        metadata: { taskId: task.id },
+        recipientUserIds: [assigneeEmployee.userId],
+        createdById: actor.userId,
+      });
+    }
+  }
+
   return mapTask(task);
 }
 
@@ -1849,6 +1879,44 @@ export async function runTaskAction(actorUserId: string, taskId: string, body: T
     },
   });
 
+  // Emit notifications based on action type
+  if (body.action === 'approve' || body.action === 'reject') {
+    // Notify the task creator about the approval/rejection
+    if (existing.createdById && existing.createdById !== actor.userId) {
+      void emitNotification({
+        level: 'tenant',
+        category: body.action === 'approve' ? 'task_approved' : 'task_rejected',
+        tenantId: actor.tenantId,
+        title: body.action === 'approve' ? 'Task approved' : 'Task rejected',
+        body: body.action === 'approve'
+          ? 'Your task has been approved.'
+          : `Your task has been rejected. Reason: ${body.reason ?? body.comment ?? 'No reason provided.'}`,
+        metadata: { taskId },
+        recipientUserIds: [existing.createdById],
+        createdById: actor.userId,
+      });
+    }
+  }
+
+  if (body.action === 'reassign' && body.assigneeId) {
+    const assigneeEmployee = await prisma.employee.findUnique({
+      where: { id: body.assigneeId },
+      select: { userId: true },
+    });
+    if (assigneeEmployee && assigneeEmployee.userId !== actor.userId) {
+      void emitNotification({
+        level: 'tenant',
+        category: 'task_assigned',
+        tenantId: actor.tenantId,
+        title: 'Task reassigned to you',
+        body: 'A task has been reassigned to you.',
+        metadata: { taskId },
+        recipientUserIds: [assigneeEmployee.userId],
+        createdById: actor.userId,
+      });
+    }
+  }
+
   return getTask(actorUserId, taskId);
 }
 
@@ -1933,4 +2001,207 @@ export async function deleteTask(actorUserId: string, taskId: string) {
   });
 
   return { message: 'Task archived.' };
+}
+
+export async function batchArchiveTasks(actorUserId: string, body: BatchArchiveBody) {
+  const actor = await resolveActorContext(actorUserId);
+
+  const tasks = await prisma.task.findMany({
+    where: { id: { in: body.taskIds }, tenantId: actor.tenantId, deletedAt: null },
+    select: { id: true, createdById: true, assigneeId: true },
+  });
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const privileged = isPrivilegedActor(actor);
+
+  let processed = 0;
+  const failed: Array<{ id: string; reason: string }> = [];
+  const deletedAt = new Date();
+
+  for (const taskId of body.taskIds) {
+    const task = taskMap.get(taskId);
+    if (!task) {
+      failed.push({ id: taskId, reason: 'Task not found.' });
+      continue;
+    }
+    if (!privileged && !ownsTask(actor, task)) {
+      failed.push({ id: taskId, reason: 'Permission denied.' });
+      continue;
+    }
+    try {
+      await prisma.task.update({ where: { id: taskId }, data: { deletedAt } });
+      processed += 1;
+    } catch {
+      failed.push({ id: taskId, reason: 'Failed to archive task.' });
+    }
+  }
+
+  if (processed > 0) {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        action: AuditAction.record_deleted,
+        entityType: 'task_archive_batch',
+        metadata: {
+          softDelete: true,
+          processed,
+          failed: failed.length,
+          deletedAt: deletedAt.toISOString(),
+        },
+      },
+    });
+  }
+
+  return { processed, failed };
+}
+
+export async function postponeTask(actorUserId: string, taskId: string, body: PostponeTaskBody) {
+  const actor = await resolveActorContext(actorUserId);
+  const existing = await prisma.task.findFirst({
+    where: { id: taskId, tenantId: actor.tenantId, deletedAt: null },
+    select: { id: true, dueDate: true, createdById: true, assigneeId: true },
+  });
+
+  if (!existing) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  if (!isPrivilegedActor(actor) && !ownsTask(actor, existing)) {
+    throw httpError(404, 'TASK_NOT_FOUND', 'Task not found.');
+  }
+
+  await prisma.task.update({
+    where: { id: taskId },
+    data: { dueDate: body.dueDate, updatedById: actor.userId },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: actor.tenantId,
+      userId: actor.userId,
+      action: AuditAction.record_updated,
+      entityType: 'task_action',
+      entityId: taskId,
+      metadata: {
+        action: 'postpone',
+        previousDueDate: existing.dueDate?.toISOString() ?? null,
+        newDueDate: body.dueDate.toISOString(),
+        reason: body.reason ?? null,
+      },
+    },
+  });
+
+  return getTask(actorUserId, taskId);
+}
+
+export async function batchPostponeTasks(actorUserId: string, body: BatchPostponeBody) {
+  const actor = await resolveActorContext(actorUserId);
+
+  const tasks = await prisma.task.findMany({
+    where: { id: { in: body.taskIds }, tenantId: actor.tenantId, deletedAt: null },
+    select: { id: true, dueDate: true, createdById: true, assigneeId: true },
+  });
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const privileged = isPrivilegedActor(actor);
+
+  let processed = 0;
+  const failed: Array<{ id: string; reason: string }> = [];
+
+  for (const taskId of body.taskIds) {
+    const task = taskMap.get(taskId);
+    if (!task) {
+      failed.push({ id: taskId, reason: 'Task not found.' });
+      continue;
+    }
+    if (!privileged && !ownsTask(actor, task)) {
+      failed.push({ id: taskId, reason: 'Permission denied.' });
+      continue;
+    }
+    try {
+      await prisma.task.update({
+        where: { id: taskId },
+        data: { dueDate: body.dueDate, updatedById: actor.userId },
+      });
+      processed += 1;
+    } catch {
+      failed.push({ id: taskId, reason: 'Failed to postpone task.' });
+    }
+  }
+
+  if (processed > 0) {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        action: AuditAction.record_updated,
+        entityType: 'task_postpone_batch',
+        metadata: {
+          action: 'postpone',
+          newDueDate: body.dueDate.toISOString(),
+          reason: body.reason ?? null,
+          processed,
+          failed: failed.length,
+        },
+      },
+    });
+  }
+
+  return { processed, failed };
+}
+
+export async function batchReassignTasks(actorUserId: string, body: BatchReassignBody) {
+  const actor = await resolveActorContext(actorUserId);
+
+  await ensureTaskRelationsInTenant(actor.tenantId, { assigneeId: body.assigneeId });
+
+  const tasks = await prisma.task.findMany({
+    where: { id: { in: body.taskIds }, tenantId: actor.tenantId, deletedAt: null },
+    select: { id: true, assigneeId: true, createdById: true },
+  });
+  const taskMap = new Map(tasks.map((t) => [t.id, t]));
+  const privileged = isPrivilegedActor(actor);
+
+  let processed = 0;
+  const failed: Array<{ id: string; reason: string }> = [];
+
+  for (const taskId of body.taskIds) {
+    const task = taskMap.get(taskId);
+    if (!task) {
+      failed.push({ id: taskId, reason: 'Task not found.' });
+      continue;
+    }
+    if (!privileged && !ownsTask(actor, task)) {
+      failed.push({ id: taskId, reason: 'Permission denied.' });
+      continue;
+    }
+    try {
+      await prisma.task.update({
+        where: { id: taskId },
+        data: { assigneeId: body.assigneeId, updatedById: actor.userId },
+      });
+      processed += 1;
+    } catch {
+      failed.push({ id: taskId, reason: 'Failed to reassign task.' });
+    }
+  }
+
+  if (processed > 0) {
+    await prisma.auditLog.create({
+      data: {
+        tenantId: actor.tenantId,
+        userId: actor.userId,
+        action: AuditAction.record_updated,
+        entityType: 'task_reassign_batch',
+        metadata: {
+          action: 'reassign',
+          assigneeId: body.assigneeId,
+          reason: body.reason ?? null,
+          processed,
+          failed: failed.length,
+        },
+      },
+    });
+  }
+
+  return { processed, failed };
 }

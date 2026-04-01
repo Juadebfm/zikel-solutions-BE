@@ -121,6 +121,29 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
+  // ─── Bulk update permissions ─────────────────────────────────────────────
+
+  fastify.patch('/:id/permissions', {
+    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    schema: {
+      tags: ['Roles'],
+      summary: 'Bulk update role permissions',
+      params: { $ref: 'CuidParam#' },
+      response: {
+        200: { type: 'object', required: ['success', 'data'], properties: { success: { type: 'boolean', enum: [true] }, data: { type: 'object', additionalProperties: true } } },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const userId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const body = request.body as Record<string, unknown>;
+      const data = await rolesService.updateRole(userId, id, { permissions: body });
+      return reply.send({ success: true, data });
+    },
+  });
+
   // ─── Delete role ───────────────────────────────────────────────────────────
 
   fastify.delete('/:id', {

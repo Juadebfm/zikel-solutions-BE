@@ -184,7 +184,7 @@ function safeUser(user: {
     language: user.language,
     timezone: user.timezone,
     emailVerified: user.emailVerified,
-    acceptedTerms: user.acceptedTerms,
+    acceptedTerms: true,
     isActive: user.isActive,
     aiAccessEnabled: user.aiAccessEnabled,
     activeTenantId: user.activeTenantId,

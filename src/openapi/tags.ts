@@ -75,6 +75,18 @@ export const TAGS = [
     name: 'Integrations',
     description: 'Inbound and outbound integration endpoints (webhooks and connector targets).',
   },
+  {
+    name: 'Help Center',
+    description: 'Support tickets and FAQ articles for platform help.',
+  },
+  {
+    name: 'Notifications',
+    description: 'Platform and tenant-level notifications with polling and read tracking.',
+  },
+  {
+    name: 'Webhooks',
+    description: 'Tenant-configurable webhook endpoint management and delivery logs.',
+  },
 ] as const;
 
 export type TagName = (typeof TAGS)[number]['name'];

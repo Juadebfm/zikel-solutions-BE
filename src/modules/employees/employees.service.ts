@@ -3,8 +3,11 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { hashPassword } from '../../lib/password.js';
+import { emitNotification, getTenantAdminUserIds } from '../../lib/notification-emitter.js';
 import type {
   CreateEmployeeBody,
+  CreateEmployeeWithUserBody,
   ListEmployeesQuery,
   UpdateEmployeeBody,
 } from './employees.schema.js';
@@ -210,6 +213,23 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
       },
     });
 
+    // Notify tenant admins about the new employee
+    void getTenantAdminUserIds(tenant.tenantId).then((adminIds) => {
+      const recipients = adminIds.filter((id) => id !== actorId);
+      if (recipients.length > 0) {
+        void emitNotification({
+          level: 'tenant',
+          category: 'employee_added',
+          tenantId: tenant.tenantId,
+          title: 'New employee added',
+          body: `A new employee has been added to the organization.`,
+          metadata: { employeeId: employee.id },
+          recipientUserIds: recipients,
+          createdById: actorId,
+        });
+      }
+    });
+
     return mapEmployee(employee);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -272,6 +292,93 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
   });
 
   return mapEmployee(employee);
+}
+
+// ─── Create with User (multi-step) ───────────────────────────────────────────
+
+export async function createEmployeeWithUser(actorId: string, body: CreateEmployeeWithUserBody) {
+  const tenant = await requireTenantContext(actorId);
+  if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
+
+  const passwordHash = await hashPassword(body.password);
+
+  try {
+    const user = await prisma.user.create({
+      data: {
+        email: body.email,
+        passwordHash,
+        firstName: body.firstName,
+        lastName: body.lastName,
+        otherNames: body.otherNames ?? null,
+        dateOfBirth: body.dateOfBirth ?? null,
+        userType: body.userType ?? 'internal',
+        avatarUrl: body.avatarUrl ?? null,
+        landingPage: body.landingPage ?? null,
+        hideFutureTasks: body.hideFutureTasks ?? false,
+        enableIpRestriction: body.enableIpRestriction ?? false,
+        passwordExpiresInstantly: body.passwordExpiresInstantly ?? false,
+        disableLoginAt: body.disableLoginAt ?? null,
+        passwordExpiresAt: body.passwordExpiresAt ?? null,
+        isActive: body.isActive ?? true,
+        emailVerified: true,
+        acceptedTerms: true,
+        activeTenantId: tenant.tenantId,
+      },
+    });
+
+    await prisma.tenantMembership.create({
+      data: {
+        tenantId: tenant.tenantId,
+        userId: user.id,
+        role: MembershipStatus.active ? 'staff' : 'staff',
+        status: MembershipStatus.active,
+        invitedById: actorId,
+      },
+    });
+
+    const employee = await prisma.employee.create({
+      data: {
+        tenantId: tenant.tenantId,
+        userId: user.id,
+        homeId: body.homeId ?? null,
+        roleId: body.roleId ?? null,
+        jobTitle: body.jobTitle ?? null,
+        startDate: body.startDate ?? null,
+        contractType: body.contractType ?? null,
+        status: 'current',
+        isActive: body.isActive ?? true,
+      },
+      include: EMP_INCLUDE,
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        tenantId: tenant.tenantId,
+        userId: actorId,
+        action: AuditAction.record_created,
+        entityType: 'employee',
+        entityId: employee.id,
+        metadata: { createdWithUser: true, userId: user.id },
+      },
+    });
+
+    return {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        userType: user.userType,
+        isActive: user.isActive,
+      },
+      employee: mapEmployee(employee),
+    };
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw httpError(409, 'EMAIL_TAKEN', 'A user with this email already exists.');
+    }
+    throw error;
+  }
 }
 
 // ─── Deactivate ──────────────────────────────────────────────────────────────
