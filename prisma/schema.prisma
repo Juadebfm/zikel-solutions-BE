@@ -146,6 +146,58 @@ enum UploadStatus {
   failed
 }
 
+// ─── Help Center ─────────────────────────────────────────────────────────────
+
+enum TicketStatus {
+  open
+  in_progress
+  waiting_on_customer
+  resolved
+  closed
+}
+
+enum TicketPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum TicketCategory {
+  bug_report
+  feature_request
+  account_issue
+  billing
+  technical_support
+  general_question
+  other
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+enum NotificationLevel {
+  platform
+  tenant
+}
+
+enum NotificationCategory {
+  maintenance
+  new_feature
+  policy_change
+  platform_announcement
+  task_assigned
+  task_approved
+  task_rejected
+  task_completed
+  task_overdue
+  employee_added
+  announcement_posted
+  shift_changed
+  daily_log_submitted
+  ticket_update
+  general
+}
+
 // ─── Public / Marketing ───────────────────────────────────────────────────────
 
 enum ServiceOfInterest {
@@ -221,6 +273,15 @@ model User {
   acceptedTerms  Boolean   @default(false)
   isActive       Boolean   @default(true)
   aiAccessEnabled Boolean  @default(false)
+  userType       String    @default("internal")
+  dateOfBirth    DateTime?
+  otherNames     String?
+  landingPage    String?
+  hideFutureTasks Boolean  @default(false)
+  enableIpRestriction Boolean @default(false)
+  passwordExpiresInstantly Boolean @default(false)
+  disableLoginAt DateTime?
+  passwordExpiresAt DateTime?
   activeTenantId String?
   lastLoginAt    DateTime?
   failedAttempts Int       @default(0)
@@ -248,6 +309,13 @@ model User {
   homesAsResponsibleIndividual Home[] @relation("HomeResponsibleIndividual")
   youngPeopleAsAdmin YoungPerson[] @relation("YoungPersonAdmin")
   youngPeopleAsPracticeManager YoungPerson[] @relation("YoungPersonPracticeManager")
+  faqArticles        FaqArticle[] @relation("UserFaqArticles")
+  supportTickets     SupportTicket[] @relation("UserSupportTickets")
+  ticketComments     TicketComment[] @relation("UserTicketComments")
+  createdNotifications Notification[] @relation("UserCreatedNotifications")
+  notificationRecipients NotificationRecipient[] @relation("UserNotificationRecipients")
+  notificationPreferences NotificationPreference[] @relation("UserNotificationPreferences")
+  webhookEndpoints   WebhookEndpoint[] @relation("UserWebhookEndpoints")
 
   @@index([email])
   @@index([role])
@@ -283,7 +351,10 @@ model Tenant {
   securityAlertDeliveries SecurityAlertDelivery[]
   taskReviewEvents TaskReviewEvent[]
   uploadedFiles UploadedFile[]
-  roles         Role[]
+  roles              Role[]
+  supportTickets     SupportTicket[]
+  notifications      Notification[]
+  webhookEndpoints   WebhookEndpoint[]
 
   @@index([name])
   @@index([isActive])
@@ -914,4 +985,162 @@ model SecurityAlertDelivery {
   @@index([status, createdAt])
   @@index([tenantId, type, createdAt])
   @@index([userId, type, createdAt])
+}
+
+// ─── Help Center: FAQ ────────────────────────────────────────────────────────
+
+model FaqArticle {
+  id          String    @id @default(cuid())
+  title       String
+  body        String
+  category    String
+  tags        String[]  @default([])
+  sortOrder   Int       @default(0)
+  isPublished Boolean   @default(true)
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  createdBy   User?     @relation("UserFaqArticles", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([category])
+  @@index([isPublished])
+  @@index([deletedAt])
+}
+
+// ─── Help Center: Support Tickets ────────────────────────────────────────────
+
+model SupportTicket {
+  id          String          @id @default(cuid())
+  tenantId    String
+  userId      String
+  title       String
+  description String
+  status      TicketStatus    @default(open)
+  priority    TicketPriority  @default(medium)
+  category    TicketCategory  @default(general_question)
+  externalId  String?
+  resolvedAt  DateTime?
+  closedAt    DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User            @relation("UserSupportTickets", fields: [userId], references: [id], onDelete: Cascade)
+  comments    TicketComment[]
+
+  @@index([tenantId, status])
+  @@index([userId])
+  @@index([category])
+  @@index([priority])
+  @@index([createdAt])
+}
+
+model TicketComment {
+  id         String        @id @default(cuid())
+  ticketId   String
+  userId     String
+  body       String
+  isInternal Boolean       @default(false)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user       User          @relation("UserTicketComments", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId, createdAt])
+  @@index([userId])
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+
+model Notification {
+  id          String               @id @default(cuid())
+  level       NotificationLevel
+  category    NotificationCategory
+  tenantId    String?
+  title       String
+  body        String
+  metadata    Json?
+  createdById String?
+  expiresAt   DateTime?
+  createdAt   DateTime             @default(now())
+
+  tenant      Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User?                @relation("UserCreatedNotifications", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients  NotificationRecipient[]
+
+  @@index([level, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([category])
+  @@index([expiresAt])
+}
+
+model NotificationRecipient {
+  id             String       @id @default(cuid())
+  notificationId String
+  userId         String
+  readAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user           User         @relation("UserNotificationRecipients", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
+}
+
+model NotificationPreference {
+  id        String               @id @default(cuid())
+  userId    String
+  category  NotificationCategory
+  enabled   Boolean              @default(true)
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  user      User                 @relation("UserNotificationPreferences", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@index([userId])
+}
+
+// ─── Webhook Configuration ───────────────────────────────────────────────────
+
+model WebhookEndpoint {
+  id          String    @id @default(cuid())
+  tenantId    String
+  url         String
+  secret      String
+  events      String[]
+  isActive    Boolean   @default(true)
+  description String?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User?     @relation("UserWebhookEndpoints", fields: [createdById], references: [id], onDelete: SetNull)
+  deliveries  WebhookDelivery[]
+
+  @@index([tenantId, isActive])
+}
+
+model WebhookDelivery {
+  id           String          @id @default(cuid())
+  endpointId   String
+  eventType    String
+  status       String          @default("pending")
+  payload      Json
+  attemptCount Int             @default(0)
+  lastError    String?
+  dispatchedAt DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  @@index([endpointId, status])
+  @@index([status, createdAt])
 }

@@ -347,6 +347,22 @@ export async function createHomeEvent(actorId: string, homeId: string, body: { t
   return event;
 }
 
+export async function updateHomeEvent(actorId: string, homeId: string, eventId: string, body: { title?: string; description?: string | null; startsAt?: string; endsAt?: string | null }) {
+  const tenant = await requireTenantContext(actorId);
+  const event = await prisma.homeEvent.findFirst({ where: { id: eventId, homeId, tenantId: tenant.tenantId } });
+  if (!event) throw httpError(404, 'EVENT_NOT_FOUND', 'Event not found.');
+
+  const updateData: Prisma.HomeEventUpdateInput = {};
+  if (body.title !== undefined) updateData.title = body.title;
+  if (body.description !== undefined) updateData.description = body.description;
+  if (body.startsAt !== undefined) updateData.startsAt = new Date(body.startsAt);
+  if (body.endsAt !== undefined) updateData.endsAt = body.endsAt ? new Date(body.endsAt) : null;
+
+  const updated = await prisma.homeEvent.update({ where: { id: eventId }, data: updateData });
+  await prisma.auditLog.create({ data: { tenantId: tenant.tenantId, userId: actorId, action: AuditAction.record_updated, entityType: 'home_event', entityId: eventId, metadata: { fields: Object.keys(body) } } });
+  return updated;
+}
+
 export async function deleteHomeEvent(actorId: string, homeId: string, eventId: string) {
   const tenant = await requireTenantContext(actorId);
   const event = await prisma.homeEvent.findFirst({ where: { id: eventId, homeId, tenantId: tenant.tenantId } });
@@ -419,6 +435,36 @@ export async function createHomeShift(actorId: string, homeId: string, body: { e
     endTime: shift.endTime,
     createdAt: shift.createdAt,
     updatedAt: shift.updatedAt,
+  };
+}
+
+export async function updateHomeShift(actorId: string, homeId: string, shiftId: string, body: { employeeId?: string; startTime?: string; endTime?: string }) {
+  const tenant = await requireTenantContext(actorId);
+  const shift = await prisma.employeeShift.findFirst({ where: { id: shiftId, homeId, tenantId: tenant.tenantId } });
+  if (!shift) throw httpError(404, 'SHIFT_NOT_FOUND', 'Shift not found.');
+
+  const updateData: Prisma.EmployeeShiftUpdateInput = {};
+  if (body.employeeId !== undefined) updateData.employee = { connect: { id: body.employeeId } };
+  if (body.startTime !== undefined) updateData.startTime = new Date(body.startTime);
+  if (body.endTime !== undefined) updateData.endTime = new Date(body.endTime);
+
+  const updated = await prisma.employeeShift.update({
+    where: { id: shiftId },
+    data: updateData,
+    include: { employee: { select: { id: true, user: { select: { firstName: true, lastName: true } } } } },
+  });
+
+  await prisma.auditLog.create({ data: { tenantId: tenant.tenantId, userId: actorId, action: AuditAction.record_updated, entityType: 'employee_shift', entityId: shiftId, metadata: { fields: Object.keys(body) } } });
+
+  return {
+    id: updated.id,
+    homeId: updated.homeId,
+    employeeId: updated.employeeId,
+    employeeName: `${updated.employee.user.firstName ?? ''} ${updated.employee.user.lastName ?? ''}`.trim(),
+    startTime: updated.startTime,
+    endTime: updated.endTime,
+    createdAt: updated.createdAt,
+    updatedAt: updated.updatedAt,
   };
 }
 
@@ -616,6 +662,190 @@ export async function getHomeStatistics(actorId: string, homeId: string) {
     vehicles: totalVehicles,
     upcomingEvents,
   };
+}
+
+// ─── Access Report ───────────────────────────────────────────────────────────
+
+export async function getHomeAccessReport(actorId: string, homeId: string, query: { page: number; pageSize: number }) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true, name: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const skip = (query.page - 1) * query.pageSize;
+  const where = {
+    tenantId: tenant.tenantId,
+    entityType: { in: ['task', 'daily_log', 'home'] },
+    OR: [
+      { entityId: homeId },
+      { metadata: { path: ['homeId'], equals: homeId } },
+    ],
+    action: AuditAction.record_accessed,
+  };
+
+  const [total, rows] = await Promise.all([
+    prisma.auditLog.count({ where }),
+    prisma.auditLog.findMany({
+      where,
+      include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: query.pageSize,
+    }),
+  ]);
+
+  return {
+    home: { id: home.id, name: home.name },
+    data: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      user: r.user ? { id: r.user.id, name: `${r.user.firstName} ${r.user.lastName}`.trim(), email: r.user.email } : null,
+      metadata: r.metadata,
+      accessedAt: r.createdAt,
+    })),
+    meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) },
+  };
+}
+
+// ─── Weekly / Monthly Record Reports ─────────────────────────────────────────
+
+export async function getHomePeriodRecord(actorId: string, homeId: string, startDate: string, endDate: string) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true, name: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const from = new Date(startDate);
+  from.setHours(0, 0, 0, 0);
+  const to = new Date(endDate);
+  to.setHours(23, 59, 59, 999);
+
+  const [tasks, dailyLogs, events, shifts] = await Promise.all([
+    prisma.task.findMany({
+      where: { tenantId: tenant.tenantId, homeId, deletedAt: null, createdAt: { gte: from, lte: to } },
+      select: { id: true, title: true, category: true, status: true, priority: true, createdAt: true },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.task.findMany({
+      where: { tenantId: tenant.tenantId, homeId, category: 'daily_log', deletedAt: null, submittedAt: { gte: from, lte: to } },
+      select: { id: true, title: true, description: true, submittedAt: true, createdById: true },
+      orderBy: { submittedAt: 'asc' },
+    }),
+    prisma.homeEvent.findMany({
+      where: { tenantId: tenant.tenantId, homeId, startsAt: { gte: from, lte: to } },
+      orderBy: { startsAt: 'asc' },
+    }),
+    prisma.employeeShift.findMany({
+      where: { tenantId: tenant.tenantId, homeId, startTime: { gte: from, lte: to } },
+      include: { employee: { select: { user: { select: { firstName: true, lastName: true } } } } },
+      orderBy: { startTime: 'asc' },
+    }),
+  ]);
+
+  const tasksByStatus: Record<string, number> = {};
+  for (const t of tasks) { tasksByStatus[t.status] = (tasksByStatus[t.status] ?? 0) + 1; }
+
+  const tasksByCategory: Record<string, number> = {};
+  for (const t of tasks) { tasksByCategory[t.category] = (tasksByCategory[t.category] ?? 0) + 1; }
+
+  return {
+    home: { id: home.id, name: home.name },
+    period: { from: startDate, to: endDate },
+    tasks,
+    dailyLogs,
+    events,
+    shifts: shifts.map((s) => ({
+      id: s.id,
+      employeeName: `${s.employee.user.firstName} ${s.employee.user.lastName}`.trim(),
+      startTime: s.startTime,
+      endTime: s.endTime,
+    })),
+    summary: {
+      totalTasks: tasks.length,
+      tasksByStatus,
+      tasksByCategory,
+      totalDailyLogs: dailyLogs.length,
+      totalEvents: events.length,
+      totalShifts: shifts.length,
+    },
+  };
+}
+
+// ─── Home Sub-Resource Lists ─────────────────────────────────────────────────
+
+export async function listHomeYoungPeople(actorId: string, homeId: string, query: { page: number; pageSize: number }) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const skip = (query.page - 1) * query.pageSize;
+  const where = { tenantId: tenant.tenantId, homeId, isActive: true };
+  const [total, rows] = await Promise.all([
+    prisma.youngPerson.count({ where }),
+    prisma.youngPerson.findMany({ where, orderBy: { lastName: 'asc' }, skip, take: query.pageSize }),
+  ]);
+
+  return { data: rows, meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) } };
+}
+
+export async function listHomeEmployees(actorId: string, homeId: string, query: { page: number; pageSize: number }) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const skip = (query.page - 1) * query.pageSize;
+  const where = { tenantId: tenant.tenantId, homeId, isActive: true };
+  const [total, rows] = await Promise.all([
+    prisma.employee.count({ where }),
+    prisma.employee.findMany({
+      where,
+      include: { user: { select: { firstName: true, lastName: true, email: true } }, role: { select: { name: true } } },
+      orderBy: { createdAt: 'asc' },
+      skip,
+      take: query.pageSize,
+    }),
+  ]);
+
+  return {
+    data: rows.map((e) => ({ id: e.id, name: `${e.user.firstName} ${e.user.lastName}`.trim(), email: e.user.email, jobTitle: e.jobTitle, roleName: e.role?.name ?? null, status: e.status })),
+    meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) },
+  };
+}
+
+export async function listHomeVehicles(actorId: string, homeId: string, query: { page: number; pageSize: number }) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const skip = (query.page - 1) * query.pageSize;
+  const where = { tenantId: tenant.tenantId, homeId, isActive: true };
+  const [total, rows] = await Promise.all([
+    prisma.vehicle.count({ where }),
+    prisma.vehicle.findMany({ where, orderBy: { registration: 'asc' }, skip, take: query.pageSize }),
+  ]);
+
+  return { data: rows, meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) } };
+}
+
+export async function listHomeTasks(actorId: string, homeId: string, query: { page: number; pageSize: number }) {
+  const tenant = await requireTenantContext(actorId);
+  const home = await prisma.home.findFirst({ where: { id: homeId, tenantId: tenant.tenantId }, select: { id: true } });
+  if (!home) throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
+
+  const skip = (query.page - 1) * query.pageSize;
+  const where = { tenantId: tenant.tenantId, homeId, deletedAt: null };
+  const [total, rows] = await Promise.all([
+    prisma.task.count({ where }),
+    prisma.task.findMany({
+      where,
+      select: { id: true, title: true, category: true, status: true, priority: true, dueDate: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: query.pageSize,
+    }),
+  ]);
+
+  return { data: rows, meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) } };
 }
 
 // ─── Deactivate ──────────────────────────────────────────────────────────────

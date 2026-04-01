@@ -5,9 +5,11 @@ import { requireScopedRole } from '../../middleware/rbac.js';
 import * as employeesService from './employees.service.js';
 import {
   CreateEmployeeBodySchema,
+  CreateEmployeeWithUserBodySchema,
   ListEmployeesQuerySchema,
   UpdateEmployeeBodySchema,
   createEmployeeBodyJson,
+  createEmployeeWithUserBodyJson,
   listEmployeesQueryJson,
   updateEmployeeBodyJson,
 } from './employees.schema.js';
@@ -195,6 +197,32 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
       const { id } = request.params as { id: string };
       const data = await employeesService.deactivateEmployee(actorId, id);
       return reply.send({ success: true, data });
+    },
+  });
+  // ─── Create employee with user (multi-step) ────────────────────────────────
+
+  fastify.post('/create-with-user', {
+    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    schema: {
+      tags: ['Employees'],
+      summary: 'Create employee with new user account (multi-step)',
+      body: createEmployeeWithUserBodyJson,
+      response: {
+        201: { type: 'object', required: ['success', 'data'], properties: { success: { type: 'boolean', enum: [true] }, data: { type: 'object', additionalProperties: true } } },
+        403: { $ref: 'ApiError#' },
+        409: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = CreateEmployeeWithUserBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message } });
+      }
+      const actorId = (request.user as JwtPayload).sub;
+      const data = await employeesService.createEmployeeWithUser(actorId, parse.data);
+      return reply.status(201).send({ success: true, data });
     },
   });
 };

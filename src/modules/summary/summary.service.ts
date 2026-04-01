@@ -1027,12 +1027,13 @@ export async function listTasksToApprove(userId: string, query: SummaryListQuery
     { tenantId: user.tenantId, deletedAt: null, approvalStatus: TaskApprovalStatus.pending_approval },
   ];
 
-  // Default gate feed: only actionable blocking items (unreviewed and overdue).
+  // Gate scope disabled — approvals are non-blocking; shown as notifications instead.
   if (query.scope === 'gate') {
-    filters.push(
-      { dueDate: { lt: start } },
-      { reviewEvents: { none: { userId: user.id } } },
-    );
+    return {
+      data: [],
+      meta: { total: 0, page: query.page, pageSize: query.pageSize, totalPages: 1 },
+      labels: SHARED_TASK_LABELS,
+    };
   } else if (query.scope === 'popup') {
     filters.push(
       {

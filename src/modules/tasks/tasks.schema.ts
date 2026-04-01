@@ -543,7 +543,92 @@ export const taskActionBodyJson = {
   },
 } as const;
 
+export const BatchArchiveBodySchema = z.object({
+  taskIds: z.array(z.string().min(1)).min(1).max(100),
+});
+
+export const PostponeTaskBodySchema = z.object({
+  dueDate: z.union([z.string().datetime(), z.date()]).transform((v) =>
+    v instanceof Date ? v : new Date(v),
+  ),
+  reason: z.string().max(2000).optional(),
+});
+
+export const BatchPostponeBodySchema = z.object({
+  taskIds: z.array(z.string().min(1)).min(1).max(100),
+  dueDate: z.union([z.string().datetime(), z.date()]).transform((v) =>
+    v instanceof Date ? v : new Date(v),
+  ),
+  reason: z.string().max(2000).optional(),
+});
+
+export const BatchReassignBodySchema = z.object({
+  taskIds: z.array(z.string().min(1)).min(1).max(100),
+  assigneeId: z.string().min(1),
+  reason: z.string().max(2000).optional(),
+});
+
+export const batchArchiveBodyJson = {
+  type: 'object',
+  required: ['taskIds'],
+  additionalProperties: false,
+  properties: {
+    taskIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: { type: 'string', minLength: 1 },
+    },
+  },
+} as const;
+
+export const postponeTaskBodyJson = {
+  type: 'object',
+  required: ['dueDate'],
+  additionalProperties: false,
+  properties: {
+    dueDate: { type: 'string', format: 'date-time' },
+    reason: { type: 'string', maxLength: 2000 },
+  },
+} as const;
+
+export const batchPostponeBodyJson = {
+  type: 'object',
+  required: ['taskIds', 'dueDate'],
+  additionalProperties: false,
+  properties: {
+    taskIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: { type: 'string', minLength: 1 },
+    },
+    dueDate: { type: 'string', format: 'date-time' },
+    reason: { type: 'string', maxLength: 2000 },
+  },
+} as const;
+
+export const batchReassignBodyJson = {
+  type: 'object',
+  required: ['taskIds', 'assigneeId'],
+  additionalProperties: false,
+  properties: {
+    taskIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: { type: 'string', minLength: 1 },
+    },
+    assigneeId: { type: 'string', minLength: 1 },
+    reason: { type: 'string', maxLength: 2000 },
+  },
+} as const;
+
 export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
 export type CreateTaskBody = z.infer<typeof CreateTaskBodySchema>;
 export type UpdateTaskBody = z.infer<typeof UpdateTaskBodySchema>;
 export type TaskActionBody = z.infer<typeof TaskActionBodySchema>;
+export type BatchArchiveBody = z.infer<typeof BatchArchiveBodySchema>;
+export type PostponeTaskBody = z.infer<typeof PostponeTaskBodySchema>;
+export type BatchPostponeBody = z.infer<typeof BatchPostponeBodySchema>;
+export type BatchReassignBody = z.infer<typeof BatchReassignBodySchema>;

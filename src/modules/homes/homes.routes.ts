@@ -259,6 +259,93 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
+  // ─── Home Sub-Resource Lists ─────────────────────────────────────────────
+
+  fastify.get('/:id/young-people', {
+    schema: { tags: ['Homes'], summary: 'List young people for a home', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, meta: { $ref: 'PaginationMeta#' } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { page?: string; pageSize?: string };
+      const result = await homesService.listHomeYoungPeople(actorId, id, { page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 20 });
+      return reply.send({ success: true, ...result });
+    },
+  });
+
+  fastify.get('/:id/employees', {
+    schema: { tags: ['Homes'], summary: 'List employees for a home', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, meta: { $ref: 'PaginationMeta#' } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { page?: string; pageSize?: string };
+      const result = await homesService.listHomeEmployees(actorId, id, { page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 20 });
+      return reply.send({ success: true, ...result });
+    },
+  });
+
+  fastify.get('/:id/vehicles', {
+    schema: { tags: ['Homes'], summary: 'List vehicles for a home', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, meta: { $ref: 'PaginationMeta#' } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { page?: string; pageSize?: string };
+      const result = await homesService.listHomeVehicles(actorId, id, { page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 20 });
+      return reply.send({ success: true, ...result });
+    },
+  });
+
+  fastify.get('/:id/tasks', {
+    schema: { tags: ['Homes'], summary: 'List tasks for a home', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'array', items: { type: 'object', additionalProperties: true } }, meta: { $ref: 'PaginationMeta#' } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { page?: string; pageSize?: string };
+      const result = await homesService.listHomeTasks(actorId, id, { page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 20 });
+      return reply.send({ success: true, ...result });
+    },
+  });
+
+  // ─── Additional Reports ────────────────────────────────────────────────────
+
+  fastify.get('/:id/reports/access', {
+    schema: { tags: ['Homes'], summary: 'Access audit report — who accessed task logs', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { page?: string; pageSize?: string };
+      const data = await homesService.getHomeAccessReport(actorId, id, { page: Number(q.page) || 1, pageSize: Number(q.pageSize) || 50 });
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.get('/:id/reports/weekly-record', {
+    schema: { tags: ['Homes'], summary: 'Weekly record report', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { startDate?: string; endDate?: string };
+      const now = new Date();
+      const weekStart = q.startDate ?? new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const weekEnd = q.endDate ?? now.toISOString().slice(0, 10);
+      const data = await homesService.getHomePeriodRecord(actorId, id, weekStart, weekEnd);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.get('/:id/reports/monthly-record', {
+    schema: { tags: ['Homes'], summary: 'Monthly record report', params: { $ref: 'CuidParam#' }, response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const q = request.query as { startDate?: string; endDate?: string };
+      const now = new Date();
+      const monthStart = q.startDate ?? new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+      const monthEnd = q.endDate ?? now.toISOString().slice(0, 10);
+      const data = await homesService.getHomePeriodRecord(actorId, id, monthStart, monthEnd);
+      return reply.send({ success: true, data });
+    },
+  });
+
   // ─── Home Events ──────────────────────────────────────────────────────────
 
   fastify.get('/:id/events', {
@@ -281,6 +368,18 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body as { title: string; description?: string; startsAt: string; endsAt?: string };
       const data = await homesService.createHomeEvent(actorId, id, body);
       return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  fastify.patch('/:id/events/:eventId', {
+    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    schema: { tags: ['Homes'], summary: 'Update event', response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id, eventId } = request.params as { id: string; eventId: string };
+      const body = request.body as { title?: string; description?: string | null; startsAt?: string; endsAt?: string | null };
+      const data = await homesService.updateHomeEvent(actorId, id, eventId, body);
+      return reply.send({ success: true, data });
     },
   });
 
@@ -317,6 +416,18 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
       const body = request.body as { employeeId: string; startTime: string; endTime: string };
       const data = await homesService.createHomeShift(actorId, id, body);
       return reply.status(201).send({ success: true, data });
+    },
+  });
+
+  fastify.patch('/:id/shifts/:shiftId', {
+    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    schema: { tags: ['Homes'], summary: 'Update shift', response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
+    handler: async (request, reply) => {
+      const actorId = (request.user as JwtPayload).sub;
+      const { id, shiftId } = request.params as { id: string; shiftId: string };
+      const body = request.body as { employeeId?: string; startTime?: string; endTime?: string };
+      const data = await homesService.updateHomeShift(actorId, id, shiftId, body);
+      return reply.send({ success: true, data });
     },
   });
 

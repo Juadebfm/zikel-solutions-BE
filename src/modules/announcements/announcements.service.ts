@@ -2,6 +2,7 @@ import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { emitNotification, getTenantMemberUserIds } from '../../lib/notification-emitter.js';
 import type {
   CreateAnnouncementBody,
   ListAnnouncementsQuery,
@@ -192,6 +193,23 @@ export async function createAnnouncement(actorId: string, body: CreateAnnounceme
       entityType: 'announcement',
       entityId: created.id,
     },
+  });
+
+  // Notify all tenant members about the new announcement
+  void getTenantMemberUserIds(tenant.tenantId).then((memberIds) => {
+    const recipients = memberIds.filter((id) => id !== actorId);
+    if (recipients.length > 0) {
+      void emitNotification({
+        level: 'tenant',
+        category: 'announcement_posted',
+        tenantId: tenant.tenantId,
+        title: 'New announcement',
+        body: created.title,
+        metadata: { announcementId: created.id },
+        recipientUserIds: recipients,
+        createdById: actorId,
+      });
+    }
   });
 
   return mapAnnouncement(created, false);

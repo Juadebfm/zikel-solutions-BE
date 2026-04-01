@@ -3,12 +3,20 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as tasksService from './tasks.service.js';
 import {
+  BatchArchiveBodySchema,
+  BatchPostponeBodySchema,
+  BatchReassignBodySchema,
   CreateTaskBodySchema,
   ListTasksQuerySchema,
+  PostponeTaskBodySchema,
   TaskActionBodySchema,
   UpdateTaskBodySchema,
+  batchArchiveBodyJson,
+  batchPostponeBodyJson,
+  batchReassignBodyJson,
   createTaskBodyJson,
   listTasksQueryJson,
+  postponeTaskBodyJson,
   taskActionBodyJson,
   updateTaskBodyJson,
 } from './tasks.schema.js';
@@ -212,6 +220,151 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(201).send({ success: true, data });
     },
   });
+
+  /* ── Batch operations ─────────────────────────────────────────────────── */
+
+  const batchResponseSchema = {
+    type: 'object',
+    required: ['success', 'data'],
+    properties: {
+      success: { type: 'boolean', enum: [true] },
+      data: {
+        type: 'object',
+        required: ['processed', 'failed'],
+        properties: {
+          processed: { type: 'integer' },
+          failed: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                reason: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+    },
+  } as const;
+
+  fastify.post('/batch-archive', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Archive multiple tasks',
+      body: batchArchiveBodyJson,
+      response: {
+        200: batchResponseSchema,
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = BatchArchiveBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await tasksService.batchArchiveTasks(actorUserId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.post('/batch-postpone', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Postpone multiple tasks',
+      body: batchPostponeBodyJson,
+      response: {
+        200: batchResponseSchema,
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = BatchPostponeBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await tasksService.batchPostponeTasks(actorUserId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  fastify.post('/batch-reassign', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Reassign multiple tasks',
+      body: batchReassignBodyJson,
+      response: {
+        200: batchResponseSchema,
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = BatchReassignBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const data = await tasksService.batchReassignTasks(actorUserId, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  /* ── Single-task postpone ──────────────────────────────────────────────── */
+
+  fastify.post('/:id/postpone', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Postpone task due date',
+      params: { $ref: 'CuidParam#' },
+      body: postponeTaskBodyJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'object', additionalProperties: true },
+          },
+        },
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = PostponeTaskBodySchema.safeParse(request.body);
+      if (!parse.success) {
+        const message = parse.error.issues[0]?.message ?? 'Validation error.';
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { id } = request.params as { id: string };
+      const data = await tasksService.postponeTask(actorUserId, id, parse.data);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  /* ── Standard CRUD (parameterized) ─────────────────────────────────── */
 
   fastify.patch('/:id', {
     schema: {
