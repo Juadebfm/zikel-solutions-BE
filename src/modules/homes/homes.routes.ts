@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireScopedRole } from '../../middleware/rbac.js';
+import { generateExport, type ExportColumn } from '../../lib/export.js';
+import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as homesService from './homes.service.js';
 import {
   CreateHomeBodySchema,
@@ -64,6 +66,52 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
       const actorId = (request.user as JwtPayload).sub;
       const { data, meta } = await homesService.listHomes(actorId, parse.data);
       return reply.send({ success: true, data, meta });
+    },
+  });
+
+  fastify.get('/export', {
+    schema: {
+      tags: ['Homes'],
+      summary: 'Export homes as PDF or Excel',
+      querystring: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ...listHomesQueryJson.properties,
+          format: { type: 'string', enum: ['pdf', 'excel'], default: 'pdf' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 5000, default: 500 },
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const query = request.query as Record<string, unknown>;
+      const format = ExportFormatSchema.catch('pdf').parse(query.format);
+      const parse = ListHomesQuerySchema.safeParse({ ...query, pageSize: Math.min(Number(query.pageSize) || 500, 5000) });
+      if (!parse.success) {
+        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
+      }
+
+      const actorId = (request.user as JwtPayload).sub;
+      const { data } = await homesService.listHomes(actorId, parse.data);
+
+      const columns: ExportColumn[] = [
+        { header: 'Name', key: 'name', width: 140 },
+        { header: 'Address', key: 'address', width: 180 },
+        { header: 'Region', key: 'region', width: 90 },
+        { header: 'Capacity', key: 'capacity', width: 60 },
+        { header: 'Status', key: 'status', width: 70 },
+        { header: 'Category', key: 'category', width: 100 },
+        { header: 'Care Group', key: 'careGroupName', width: 110 },
+        { header: 'Ofsted URN', key: 'ofstedUrn', width: 80 },
+      ];
+
+      const rows = data.map((h) => ({ ...h }));
+      const result = await generateExport({ title: 'Homes', columns, rows, format });
+
+      return reply
+        .header('Content-Type', result.contentType)
+        .header('Content-Disposition', `attachment; filename="${result.filename}"`)
+        .send(result.buffer);
     },
   });
 

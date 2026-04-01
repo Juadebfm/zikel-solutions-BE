@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { generateExport, type ExportColumn } from '../../lib/export.js';
+import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as tasksService from './tasks.service.js';
 import {
   BatchArchiveBodySchema,
@@ -57,6 +59,70 @@ const taskRoutes: FastifyPluginAsync = async (fastify) => {
       const actorUserId = (request.user as JwtPayload).sub;
       const { data, meta, labels } = await tasksService.listTasks(actorUserId, parse.data);
       return reply.send({ success: true, data, meta, labels });
+    },
+  });
+
+  fastify.get('/export', {
+    schema: {
+      tags: ['Tasks'],
+      summary: 'Export tasks as PDF or Excel',
+      querystring: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ...listTasksQueryJson.properties,
+          format: { type: 'string', enum: ['pdf', 'excel'], default: 'pdf' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 5000, default: 500 },
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const query = request.query as Record<string, unknown>;
+      const format = ExportFormatSchema.catch('pdf').parse(query.format);
+      const parse = ListTasksQuerySchema.safeParse({ ...query, pageSize: Math.min(Number(query.pageSize) || 500, 5000) });
+      if (!parse.success) {
+        return reply.status(422).send({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
+        });
+      }
+
+      const actorUserId = (request.user as JwtPayload).sub;
+      const { data } = await tasksService.listTasks(actorUserId, parse.data);
+
+      const columns: ExportColumn[] = [
+        { header: 'ID', key: 'taskRef', width: 80 },
+        { header: 'Title', key: 'title', width: 180 },
+        { header: 'Form Group', key: 'formGroup', width: 120 },
+        { header: 'Status', key: 'lifecycleStatusLabel', width: 70 },
+        { header: 'Priority', key: 'priority', width: 60 },
+        { header: 'Relates To', key: 'relatesTo', width: 120 },
+        { header: 'Assignee', key: 'assigneeName', width: 110 },
+        { header: 'Task Date', key: 'taskDate', width: 80 },
+      ];
+
+      const rows = data.map((task: Record<string, unknown>) => ({
+        taskRef: task.taskRef ?? task.id,
+        title: task.title,
+        formGroup: task.formGroup ?? task.category,
+        lifecycleStatusLabel: task.lifecycleStatusLabel ?? task.status,
+        priority: task.priority,
+        relatesTo: (task.relatedEntity as Record<string, unknown> | null)?.name
+          ?? (task.home as Record<string, unknown> | null)?.name
+          ?? '',
+        assigneeName: (task.assignee as Record<string, unknown> | null)?.name ?? '',
+        taskDate: task.submittedAt
+          ? new Date(task.submittedAt as string).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' })
+          : '',
+      }));
+
+      const subtitle = parse.data.status ?? parse.data.scope ?? undefined;
+      const result = await generateExport({ title: 'Task Overview', subtitle, columns, rows, format });
+
+      return reply
+        .header('Content-Type', result.contentType)
+        .header('Content-Disposition', `attachment; filename="${result.filename}"`)
+        .send(result.buffer);
     },
   });
 
