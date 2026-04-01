@@ -2,6 +2,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireScopedRole } from '../../middleware/rbac.js';
+import { generateExport, type ExportColumn } from '../../lib/export.js';
+import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as youngPeopleService from './young-people.service.js';
 import {
   CreateYoungPersonBodySchema,
@@ -47,6 +49,60 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
       const actorId = (request.user as JwtPayload).sub;
       const { data, meta } = await youngPeopleService.listYoungPeople(actorId, parse.data);
       return reply.send({ success: true, data, meta });
+    },
+  });
+
+  fastify.get('/export', {
+    schema: {
+      tags: ['Young People'],
+      summary: 'Export young people as PDF or Excel',
+      querystring: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          ...listYoungPeopleQueryJson.properties,
+          format: { type: 'string', enum: ['pdf', 'excel'], default: 'pdf' },
+          pageSize: { type: 'integer', minimum: 1, maximum: 5000, default: 500 },
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const query = request.query as Record<string, unknown>;
+      const format = ExportFormatSchema.catch('pdf').parse(query.format);
+      const parse = ListYoungPeopleQuerySchema.safeParse({ ...query, pageSize: Math.min(Number(query.pageSize) || 500, 5000) });
+      if (!parse.success) {
+        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
+      }
+
+      const actorId = (request.user as JwtPayload).sub;
+      const { data } = await youngPeopleService.listYoungPeople(actorId, parse.data);
+
+      const columns: ExportColumn[] = [
+        { header: 'Ref', key: 'referenceNo', width: 80 },
+        { header: 'Name', key: 'name', width: 130 },
+        { header: 'Date of Birth', key: 'dob', width: 80 },
+        { header: 'Gender', key: 'gender', width: 60 },
+        { header: 'Home', key: 'homeName', width: 120 },
+        { header: 'Status', key: 'status', width: 70 },
+        { header: 'Key Worker', key: 'keyWorkerName', width: 110 },
+        { header: 'Placing Authority', key: 'placingAuthority', width: 140 },
+        { header: 'Admission Date', key: 'admissionDate', width: 80 },
+      ];
+
+      const rows = data.map((yp) => ({
+        ...yp,
+        name: `${yp.firstName} ${yp.lastName}`,
+        dob: yp.dateOfBirth ? new Date(String(yp.dateOfBirth)).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
+        keyWorkerName: (yp.keyWorker as Record<string, unknown> | null)?.name ?? '',
+        admissionDate: yp.admissionDate ? new Date(String(yp.admissionDate)).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '',
+      }));
+
+      const result = await generateExport({ title: 'Young People', columns, rows, format });
+
+      return reply
+        .header('Content-Type', result.contentType)
+        .header('Content-Disposition', `attachment; filename="${result.filename}"`)
+        .send(result.buffer);
     },
   });
 
