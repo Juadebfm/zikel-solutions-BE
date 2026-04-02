@@ -10,6 +10,7 @@ import swaggerPlugin from './plugins/swagger.js';
 import corsPlugin from './plugins/cors.js';
 import helmetPlugin from './plugins/helmet.js';
 import rateLimitPlugin from './plugins/rate-limit.js';
+import cookiePlugin from './plugins/cookie.js';
 import authPlugin from './plugins/auth.js';
 import rootRouter from './routes/index.js';
 
@@ -71,6 +72,7 @@ export async function buildApp() {
   await fastify.register(helmetPlugin);
   await fastify.register(corsPlugin);
   await fastify.register(rateLimitPlugin);
+  await fastify.register(cookiePlugin);
   await fastify.register(authPlugin);
 
   // Error handler

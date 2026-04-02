@@ -14,6 +14,15 @@ const envSchema = z.object({
   JWT_ACCESS_EXPIRY: z.string().default('5m'),
   JWT_REFRESH_EXPIRY: z.string().default('12h'),
   SESSION_IDLE_TIMEOUT: z.string().default('15m'),
+  SESSION_WARNING_WINDOW_SECONDS: z.coerce.number().int().min(0).default(300),
+  AUTH_REFRESH_COOKIE_NAME: z.string().min(1).default('__Host-zikel_rt'),
+  AUTH_REFRESH_COOKIE_SAME_SITE: z.enum(['strict', 'lax', 'none']).default('lax'),
+  AUTH_REFRESH_COOKIE_PATH: z.string().min(1).default('/'),
+  AUTH_REFRESH_COOKIE_DOMAIN: z.string().min(1).optional(),
+  AUTH_LEGACY_REFRESH_TOKEN_IN_BODY: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
 
   // CORS
   CORS_ORIGINS: z.string().default('http://localhost:5173'),
@@ -131,6 +140,12 @@ function parseEnv(): Env {
       o.startsWith('http://localhost:') || o.startsWith('http://127.0.0.1:');
     if (origins.some((origin) => !origin.startsWith('https://') && !isLocalhost(origin))) {
       throw new Error('CORS_ORIGINS must be https:// origins (localhost is allowed for testing) in staging/production.');
+    }
+
+    if (!parsed.AUTH_REFRESH_COOKIE_NAME.startsWith('__Host-') && !parsed.AUTH_REFRESH_COOKIE_NAME.startsWith('__Secure-')) {
+      throw new Error(
+        'AUTH_REFRESH_COOKIE_NAME should use a secure prefix (__Host- or __Secure-) in staging/production.',
+      );
     }
 
     if (parsed.SECURITY_ALERT_PIPELINE_ENABLED && !parsed.SECURITY_ALERT_WEBHOOK_URL) {

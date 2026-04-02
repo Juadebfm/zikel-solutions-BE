@@ -162,8 +162,11 @@ export const CheckEmailQuerySchema = z.object({
 });
 
 export const LogoutBodySchema = z.object({
-  refreshToken: z.string().min(1),
-});
+  refreshToken: z.string().min(1).optional(),
+  token: z.string().min(1).optional(),
+}).transform((v) => ({
+  refreshToken: v.refreshToken ?? v.token,
+}));
 
 export const SwitchTenantBodySchema = z.object({
   tenantId: z.string().min(1),
@@ -304,12 +307,30 @@ export const checkEmailQueryJson = {
 } as const;
 
 export const logoutBodyJson = {
-  type: 'object',
-  required: ['refreshToken'],
-  additionalProperties: false,
-  properties: {
-    refreshToken: { type: 'string' },
-  },
+  anyOf: [
+    {
+      type: 'object',
+      required: ['refreshToken'],
+      additionalProperties: false,
+      properties: {
+        refreshToken: { type: 'string' },
+      },
+    },
+    {
+      type: 'object',
+      required: ['token'],
+      additionalProperties: false,
+      properties: {
+        token: { type: 'string' },
+      },
+    },
+    {
+      type: 'object',
+      additionalProperties: false,
+      maxProperties: 0,
+      properties: {},
+    },
+  ],
 } as const;
 
 export const switchTenantBodyJson = {
@@ -333,10 +354,15 @@ export const verifyMfaChallengeBodyJson = {
 export const RefreshBodySchema = z.object({
   refreshToken: z.string().min(1).optional(),
   token: z.string().min(1).optional(),
-}).refine((v) => Boolean(v.refreshToken || v.token), {
-  message: 'Either refreshToken or token is required.',
 }).transform((v) => ({
-  refreshToken: v.refreshToken ?? v.token!,
+  refreshToken: v.refreshToken ?? v.token,
+}));
+
+export const SessionExpiryQuerySchema = z.object({
+  refreshToken: z.string().min(1).optional(),
+  token: z.string().min(1).optional(),
+}).transform((v) => ({
+  refreshToken: v.refreshToken ?? v.token,
 }));
 
 export const refreshBodyJson = {
@@ -357,7 +383,22 @@ export const refreshBodyJson = {
         token: { type: 'string' },
       },
     },
+    {
+      type: 'object',
+      additionalProperties: false,
+      maxProperties: 0,
+      properties: {},
+    },
   ],
+} as const;
+
+export const sessionExpiryQueryJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    refreshToken: { type: 'string' },
+    token: { type: 'string' },
+  },
 } as const;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -373,5 +414,6 @@ export type LogoutBody = z.infer<typeof LogoutBodySchema>;
 export type SwitchTenantBody = z.infer<typeof SwitchTenantBodySchema>;
 export type VerifyMfaChallengeBody = z.infer<typeof VerifyMfaChallengeBodySchema>;
 export type RefreshBody = z.infer<typeof RefreshBodySchema>;
+export type SessionExpiryQuery = z.infer<typeof SessionExpiryQuerySchema>;
 export type ForgotPasswordBody = z.infer<typeof ForgotPasswordBodySchema>;
 export type ResetPasswordBody = z.infer<typeof ResetPasswordBodySchema>;
