@@ -11,6 +11,7 @@ import {
   SwitchTenantBodySchema,
   VerifyMfaChallengeBodySchema,
   RefreshBodySchema,
+  SessionExpiryQuerySchema,
   ForgotPasswordBodySchema,
   ResetPasswordBodySchema,
   registerBodyJson,
@@ -24,11 +25,14 @@ import {
   switchTenantBodyJson,
   verifyMfaChallengeBodyJson,
   refreshBodyJson,
+  sessionExpiryQueryJson,
   forgotPasswordBodyJson,
   resetPasswordBodyJson,
 } from './auth.schema.js';
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
+import { parseExpiryMs } from '../../lib/tokens.js';
+import { env } from '../../config/env.js';
 
 function signAccessToken(
   fastify: FastifyInstance,
@@ -47,6 +51,91 @@ function signAccessToken(
     tenantRole: session.activeTenantRole ?? null,
     mfaVerified: session.mfaVerified,
   });
+}
+
+const ACCESS_TOKEN_EXPIRY_MS = parseExpiryMs(env.JWT_ACCESS_EXPIRY);
+const SESSION_WARNING_WINDOW_SECONDS = env.SESSION_WARNING_WINDOW_SECONDS;
+const REFRESH_COOKIE_NAME = env.AUTH_REFRESH_COOKIE_NAME;
+const LEGACY_REFRESH_TOKEN_IN_BODY = env.AUTH_LEGACY_REFRESH_TOKEN_IN_BODY;
+const REFRESH_COOKIE_SECURE = env.NODE_ENV === 'staging' || env.NODE_ENV === 'production';
+const REFRESH_COOKIE_DOMAIN = env.AUTH_REFRESH_COOKIE_DOMAIN;
+const REFRESH_COOKIE_PATH = env.AUTH_REFRESH_COOKIE_PATH;
+const REFRESH_COOKIE_SAME_SITE = env.AUTH_REFRESH_COOKIE_SAME_SITE;
+
+function buildTimedAuthResponse(args: {
+  user: Record<string, unknown>;
+  session: {
+    activeTenantId: string | null;
+    activeTenantRole: JwtPayload['tenantRole'];
+    memberships: unknown[];
+    mfaRequired: boolean;
+    mfaVerified: boolean;
+  };
+  sessionExpiry: {
+    idleExpiresAt: Date;
+    absoluteExpiresAt: Date;
+  };
+  accessToken: string;
+  refreshToken?: string;
+}) {
+  const serverTime = new Date();
+  const tokens: Record<string, string> = {
+    accessToken: args.accessToken,
+    accessTokenExpiresAt: new Date(serverTime.getTime() + ACCESS_TOKEN_EXPIRY_MS).toISOString(),
+    refreshTokenExpiresAt: args.sessionExpiry.absoluteExpiresAt.toISOString(),
+  };
+
+  if (LEGACY_REFRESH_TOKEN_IN_BODY && args.refreshToken) {
+    tokens.refreshToken = args.refreshToken;
+  }
+
+  return {
+    user: args.user,
+    session: {
+      ...args.session,
+      idleExpiresAt: args.sessionExpiry.idleExpiresAt.toISOString(),
+      absoluteExpiresAt: args.sessionExpiry.absoluteExpiresAt.toISOString(),
+      warningWindowSeconds: SESSION_WARNING_WINDOW_SECONDS,
+    },
+    tokens,
+    serverTime: serverTime.toISOString(),
+  };
+}
+
+function setNoStoreHeaders(reply: import('fastify').FastifyReply) {
+  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  reply.header('Pragma', 'no-cache');
+  reply.header('Expires', '0');
+}
+
+function setRefreshTokenCookie(
+  reply: import('fastify').FastifyReply,
+  refreshToken: string,
+  expiresAt: Date,
+) {
+  reply.setCookie(REFRESH_COOKIE_NAME, refreshToken, {
+    httpOnly: true,
+    secure: REFRESH_COOKIE_SECURE,
+    sameSite: REFRESH_COOKIE_SAME_SITE,
+    path: REFRESH_COOKIE_PATH,
+    ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
+    expires: expiresAt,
+  });
+}
+
+function clearRefreshTokenCookie(reply: import('fastify').FastifyReply) {
+  reply.clearCookie(REFRESH_COOKIE_NAME, {
+    path: REFRESH_COOKIE_PATH,
+    ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
+  });
+}
+
+function resolveRefreshToken(
+  request: import('fastify').FastifyRequest,
+  bodyRefreshToken?: string,
+) {
+  const cookieToken = request.cookies?.[REFRESH_COOKIE_NAME];
+  return bodyRefreshToken ?? cookieToken ?? null;
 }
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
@@ -247,11 +336,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           error: { code: 'VALIDATION_ERROR', message: msg },
         });
       }
-      const { user, refreshToken, session } = await authService.staffActivate(parse.data);
+      const { user, refreshToken, session, sessionExpiry } = await authService.staffActivate(parse.data);
       const accessToken = signAccessToken(fastify, user, session);
+      setNoStoreHeaders(reply);
+      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
         success: true,
-        data: { user, session, tokens: { accessToken, refreshToken } },
+        data: buildTimedAuthResponse({
+          user,
+          session,
+          sessionExpiry,
+          accessToken,
+          refreshToken,
+        }),
       });
     },
   });
@@ -317,11 +414,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = VerifyOtpBodySchema.parse(request.body);
-      const { user, refreshToken, session } = await authService.verifyOtp(body);
+      const { user, refreshToken, session, sessionExpiry } = await authService.verifyOtp(body);
       const accessToken = signAccessToken(fastify, user, session);
+      setNoStoreHeaders(reply);
+      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
         success: true,
-        data: { user, session, tokens: { accessToken, refreshToken } },
+        data: buildTimedAuthResponse({
+          user,
+          session,
+          sessionExpiry,
+          accessToken,
+          refreshToken,
+        }),
       });
     },
   });
@@ -390,7 +495,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       tags: ['Auth'],
       summary: 'Login with email and password',
       description:
-        'Authenticates the user. On success returns an access token (5 min) and refresh token (12 hours absolute, 15 minutes inactivity). ' +
+        'Authenticates the user. On success returns an access token and sets a secure HttpOnly refresh-token cookie ' +
+        '(12 hours absolute, 15 minutes inactivity). ' +
         'Enforces account lockout after repeated failed attempts.',
       security: [],
       body: loginBodyJson,
@@ -409,11 +515,19 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = LoginBodySchema.parse(request.body);
-      const { user, refreshToken, session } = await authService.login(body);
+      const { user, refreshToken, session, sessionExpiry } = await authService.login(body);
       const accessToken = signAccessToken(fastify, user, session);
+      setNoStoreHeaders(reply);
+      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
         success: true,
-        data: { user, session, tokens: { accessToken, refreshToken } },
+        data: buildTimedAuthResponse({
+          user,
+          session,
+          sessionExpiry,
+          accessToken,
+          refreshToken,
+        }),
       });
     },
   });
@@ -510,6 +624,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       const actorUserId = (request.user as JwtPayload).sub;
       const { user, session } = await authService.verifyMfaChallenge(actorUserId, parse.data);
       const accessToken = signAccessToken(fastify, user, session);
+      setNoStoreHeaders(reply);
       return reply.send({
         success: true,
         data: {
@@ -528,7 +643,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       tags: ['Auth'],
       summary: 'Rotate refresh token and issue a new access token',
       description:
-        'Validates the provided refresh token. On success, atomically revokes the old token and ' +
+        'Validates a refresh token from secure cookie (preferred) or request body (legacy). ' +
+        'On success, atomically revokes the old token and ' +
         'issues a new access token + rotated refresh token while preserving the original absolute session expiry. ' +
         'Implements single-use token rotation — a token can only be used once. ' +
         'This endpoint does NOT require an Authorization header.',
@@ -547,12 +663,111 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const body = RefreshBodySchema.parse(request.body);
-      const { user, newRefreshToken, session } = await authService.refreshAccessToken(body);
-      const accessToken = signAccessToken(fastify, user, session);
+      const body = RefreshBodySchema.parse(request.body ?? {});
+      const providedRefreshToken = resolveRefreshToken(request, body.refreshToken);
+
+      if (!providedRefreshToken) {
+        setNoStoreHeaders(reply);
+        clearRefreshTokenCookie(reply);
+        return reply.status(401).send({
+          success: false,
+          error: {
+            code: 'REFRESH_TOKEN_INVALID',
+            message: 'Refresh token is invalid.',
+          },
+        });
+      }
+
+      try {
+        const { user, newRefreshToken, session, sessionExpiry } = await authService.refreshAccessToken(providedRefreshToken);
+        const accessToken = signAccessToken(fastify, user, session);
+        setNoStoreHeaders(reply);
+        setRefreshTokenCookie(reply, newRefreshToken, sessionExpiry.absoluteExpiresAt);
+        return reply.send({
+          success: true,
+          data: buildTimedAuthResponse({
+            user,
+            session,
+            sessionExpiry,
+            accessToken,
+            refreshToken: newRefreshToken,
+          }),
+        });
+      } catch (error) {
+        const err = error as { statusCode?: number; code?: string };
+        if (
+          err.statusCode === 401 &&
+          ['REFRESH_TOKEN_INVALID', 'SESSION_IDLE_EXPIRED', 'SESSION_ABSOLUTE_EXPIRED'].includes(
+            err.code ?? '',
+          )
+        ) {
+          setNoStoreHeaders(reply);
+          clearRefreshTokenCookie(reply);
+        }
+        throw error;
+      }
+    },
+  });
+
+  // ── GET /auth/session-expiry ───────────────────────────────────────────────
+  fastify.get('/session-expiry', {
+    schema: {
+      tags: ['Auth'],
+      summary: 'Resolve current session expiry timestamps',
+      description:
+        'Returns authoritative server time and session expiry metadata for countdown UX. ' +
+        'Optionally accepts a refresh token in query to resolve a specific browser session.',
+      querystring: sessionExpiryQueryJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['serverTime', 'session', 'tokens'],
+              properties: {
+                serverTime: { type: 'string', format: 'date-time' },
+                session: { $ref: 'AuthSessionExpiry#' },
+                tokens: {
+                  type: 'object',
+                  required: ['refreshTokenExpiresAt'],
+                  properties: {
+                    refreshTokenExpiresAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        401: {
+          description:
+            'Session expired or refresh token invalid. Uses SESSION_IDLE_EXPIRED, SESSION_ABSOLUTE_EXPIRED, REFRESH_TOKEN_INVALID.',
+          $ref: 'ApiError#',
+        },
+      },
+    },
+    preHandler: [fastify.authenticate],
+    handler: async (request, reply) => {
+      const actorUserId = (request.user as JwtPayload).sub;
+      const query = SessionExpiryQuerySchema.parse(request.query);
+      const data = await authService.getSessionExpiry(actorUserId, query.refreshToken);
+      setNoStoreHeaders(reply);
       return reply.send({
         success: true,
-        data: { user, session, tokens: { accessToken, refreshToken: newRefreshToken } },
+        data: {
+          ...data,
+          session: {
+            ...data.session,
+            idleExpiresAt: data.session.idleExpiresAt.toISOString(),
+            absoluteExpiresAt: data.session.absoluteExpiresAt.toISOString(),
+            warningWindowSeconds: SESSION_WARNING_WINDOW_SECONDS,
+          },
+          tokens: {
+            refreshTokenExpiresAt: data.tokens.refreshTokenExpiresAt.toISOString(),
+          },
+        },
       });
     },
   });
@@ -601,6 +816,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       const actorUserId = (request.user as JwtPayload).sub;
       const { user, session } = await authService.switchTenant(actorUserId, body.tenantId);
       const accessToken = signAccessToken(fastify, user, session);
+      setNoStoreHeaders(reply);
       return reply.send({
         success: true,
         data: {
@@ -618,8 +834,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       tags: ['Auth'],
       summary: 'Logout and revoke refresh token',
       description:
-        'Revokes the provided refresh token so it cannot be used to issue new access tokens. ' +
-        'The client should also clear its local token storage.',
+        'Revokes the active refresh token (from secure cookie or request body) so it cannot be used to issue new access tokens. ' +
+        'Also clears the refresh-token cookie.',
       body: logoutBodyJson,
       response: {
         200: {
@@ -640,9 +856,14 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     preHandler: [fastify.authenticate],
     handler: async (request, reply) => {
-      const body = LogoutBodySchema.parse(request.body);
+      const body = LogoutBodySchema.parse(request.body ?? {});
       const userId = (request.user as JwtPayload).sub;
-      await authService.logout(body.refreshToken, userId);
+      const refreshToken = resolveRefreshToken(request, body.refreshToken);
+      if (refreshToken) {
+        await authService.logout(refreshToken, userId);
+      }
+      setNoStoreHeaders(reply);
+      clearRefreshTokenCookie(reply);
       return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
     },
   });

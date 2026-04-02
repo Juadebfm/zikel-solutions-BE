@@ -19,7 +19,6 @@ import type {
   VerifyMfaChallengeBody,
   ResendOtpBody,
   LoginBody,
-  RefreshBody,
   ForgotPasswordBody,
   ResetPasswordBody,
 } from './auth.schema.js';
@@ -199,7 +198,7 @@ async function createRefreshTokenForUser(args: {
   absoluteExpiresAt?: Date;
 }) {
   const refreshToken = generateRefreshToken();
-  await prisma.refreshToken.create({
+  const record = await prisma.refreshToken.create({
     data: {
       userId: args.userId,
       token: refreshToken,
@@ -207,7 +206,52 @@ async function createRefreshTokenForUser(args: {
       idleExpiresAt: refreshIdleExpiresAt(),
     },
   });
-  return refreshToken;
+  return {
+    token: record.token,
+    absoluteExpiresAt: record.expiresAt,
+    idleExpiresAt: record.idleExpiresAt,
+  };
+}
+
+type RefreshTokenState = {
+  revokedAt: Date | null;
+  expiresAt: Date;
+  idleExpiresAt: Date;
+};
+
+function assertRefreshTokenState(
+  stored: RefreshTokenState,
+  now: Date,
+) {
+  if (stored.revokedAt !== null) {
+    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
+  }
+
+  if (stored.expiresAt <= now) {
+    throw httpError(
+      401,
+      'SESSION_ABSOLUTE_EXPIRED',
+      'Session expired due to maximum lifetime. Please sign in again.',
+    );
+  }
+
+  if (stored.idleExpiresAt <= now) {
+    throw httpError(
+      401,
+      'SESSION_IDLE_EXPIRED',
+      'Session expired due to inactivity. Please sign in again.',
+    );
+  }
+}
+
+function asSessionExpiryData(args: {
+  idleExpiresAt: Date;
+  absoluteExpiresAt: Date;
+}) {
+  return {
+    idleExpiresAt: args.idleExpiresAt,
+    absoluteExpiresAt: args.absoluteExpiresAt,
+  };
 }
 
 export interface AuthSessionMembership {
@@ -594,8 +638,12 @@ export async function staffActivate(body: StaffActivateBody) {
 
   return {
     user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
-    refreshToken,
+    refreshToken: refreshToken.token,
     session,
+    sessionExpiry: asSessionExpiryData({
+      idleExpiresAt: refreshToken.idleExpiresAt,
+      absoluteExpiresAt: refreshToken.absoluteExpiresAt,
+    }),
   };
 }
 
@@ -657,8 +705,12 @@ export async function verifyOtp(body: VerifyOtpBody) {
 
   return {
     user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
-    refreshToken,
+    refreshToken: refreshToken.token,
     session,
+    sessionExpiry: asSessionExpiryData({
+      idleExpiresAt: refreshToken.idleExpiresAt,
+      absoluteExpiresAt: refreshToken.absoluteExpiresAt,
+    }),
   };
 }
 
@@ -973,8 +1025,12 @@ export async function login(body: LoginBody) {
 
   return {
     user: { ...safeUser(user), activeTenantId: session.activeTenantId },
-    refreshToken,
+    refreshToken: refreshToken.token,
     session,
+    sessionExpiry: asSessionExpiryData({
+      idleExpiresAt: refreshToken.idleExpiresAt,
+      absoluteExpiresAt: refreshToken.absoluteExpiresAt,
+    }),
   };
 }
 
@@ -1105,21 +1161,17 @@ export async function switchTenant(actorUserId: string, tenantId: string) {
  *
  * The caller (route handler) is responsible for signing the JWT access token.
  */
-export async function refreshAccessToken(body: RefreshBody) {
+export async function refreshAccessToken(refreshToken: string) {
   const stored = await prisma.refreshToken.findUnique({
-    where: { token: body.refreshToken },
+    where: { token: refreshToken },
     include: { user: true },
   });
 
   const now = new Date();
-  if (
-    !stored ||
-    stored.revokedAt !== null ||
-    stored.expiresAt < now ||
-    stored.idleExpiresAt < now
-  ) {
-    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid or expired.');
+  if (!stored) {
+    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
   }
+  assertRefreshTokenState(stored, now);
 
   if (!stored.user.isActive) {
     throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
@@ -1163,6 +1215,51 @@ export async function refreshAccessToken(body: RefreshBody) {
     user: { ...safeUser(stored.user), activeTenantId: session.activeTenantId },
     newRefreshToken: newRawToken,
     session,
+    sessionExpiry: asSessionExpiryData({
+      idleExpiresAt: nextIdleExpiry,
+      absoluteExpiresAt: stored.expiresAt,
+    }),
+  };
+}
+
+export async function getSessionExpiry(userId: string, token?: string) {
+  const now = new Date();
+  const stored = token
+    ? await prisma.refreshToken.findUnique({
+        where: { token },
+        select: {
+          userId: true,
+          revokedAt: true,
+          expiresAt: true,
+          idleExpiresAt: true,
+        },
+      })
+    : await prisma.refreshToken.findFirst({
+        where: { userId, revokedAt: null },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          userId: true,
+          revokedAt: true,
+          expiresAt: true,
+          idleExpiresAt: true,
+        },
+      });
+
+  if (!stored || stored.userId !== userId) {
+    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
+  }
+
+  assertRefreshTokenState(stored, now);
+
+  return {
+    serverTime: now.toISOString(),
+    session: asSessionExpiryData({
+      idleExpiresAt: stored.idleExpiresAt,
+      absoluteExpiresAt: stored.expiresAt,
+    }),
+    tokens: {
+      refreshTokenExpiresAt: stored.expiresAt,
+    },
   };
 }
 

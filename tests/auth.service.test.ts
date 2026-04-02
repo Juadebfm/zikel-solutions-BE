@@ -33,7 +33,10 @@ const {
       create: vi.fn(),
     },
     refreshToken: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
       updateMany: vi.fn(),
     },
     auditLog: {
@@ -423,7 +426,11 @@ describe('auth.service', () => {
     mockPrisma.otpCode.findFirst.mockResolvedValueOnce({ id: 'otp_1' });
     mockPrisma.otpCode.update.mockResolvedValueOnce({});
     mockPrisma.user.update.mockResolvedValueOnce({ ...user, emailVerified: true });
-    mockPrisma.refreshToken.create.mockResolvedValueOnce({});
+    mockPrisma.refreshToken.create.mockResolvedValueOnce({
+      token: 'refresh-token',
+      expiresAt: new Date('2030-01-01T00:00:00.000Z'),
+      idleExpiresAt: new Date('2030-01-01T00:15:00.000Z'),
+    });
     mockPrisma.auditLog.create.mockResolvedValueOnce({});
 
     const result = await authService.verifyOtp({
@@ -462,6 +469,70 @@ describe('auth.service', () => {
       authService.login({ email: 'jane@example.com', password: 'Password123!' }),
     ).rejects.toMatchObject({
       code: 'ACCOUNT_INACTIVE',
+    });
+  });
+
+  it('returns SESSION_IDLE_EXPIRED when refresh token idle window has elapsed', async () => {
+    const user = makeUser({ emailVerified: true });
+    mockPrisma.refreshToken.findUnique.mockResolvedValueOnce({
+      id: 'rt_1',
+      userId: user.id,
+      token: 'refresh-token',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      idleExpiresAt: new Date(Date.now() - 1_000),
+      user,
+    });
+
+    await expect(
+      authService.refreshAccessToken('refresh-token'),
+    ).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'SESSION_IDLE_EXPIRED',
+    });
+  });
+
+  it('returns SESSION_ABSOLUTE_EXPIRED when refresh token absolute lifetime has elapsed', async () => {
+    const user = makeUser({ emailVerified: true });
+    mockPrisma.refreshToken.findUnique.mockResolvedValueOnce({
+      id: 'rt_2',
+      userId: user.id,
+      token: 'refresh-token',
+      revokedAt: null,
+      expiresAt: new Date(Date.now() - 1_000),
+      idleExpiresAt: new Date(Date.now() + 60_000),
+      user,
+    });
+
+    await expect(
+      authService.refreshAccessToken('refresh-token'),
+    ).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'SESSION_ABSOLUTE_EXPIRED',
+    });
+  });
+
+  it('returns session expiry metadata for the current authenticated user', async () => {
+    const absoluteExpiresAt = new Date('2030-01-01T00:00:00.000Z');
+    const idleExpiresAt = new Date('2030-01-01T00:15:00.000Z');
+    mockPrisma.refreshToken.findFirst.mockResolvedValueOnce({
+      userId: 'user_1',
+      revokedAt: null,
+      expiresAt: absoluteExpiresAt,
+      idleExpiresAt,
+    });
+
+    const result = await authService.getSessionExpiry('user_1');
+
+    expect(result).toMatchObject({
+      serverTime: expect.any(String),
+      session: {
+        idleExpiresAt,
+        absoluteExpiresAt,
+      },
+      tokens: {
+        refreshTokenExpiresAt: absoluteExpiresAt,
+      },
     });
   });
 

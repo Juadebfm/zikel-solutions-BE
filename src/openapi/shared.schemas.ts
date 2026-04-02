@@ -102,10 +102,23 @@ export const UserSchema = {
 export const TokenPairSchema = {
   $id: 'TokenPair',
   type: 'object',
-  required: ['accessToken', 'refreshToken'],
+  required: ['accessToken', 'accessTokenExpiresAt', 'refreshTokenExpiresAt'],
   properties: {
     accessToken: { type: 'string' },
     refreshToken: { type: 'string' },
+    accessTokenExpiresAt: { type: 'string', format: 'date-time' },
+    refreshTokenExpiresAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
+export const AuthSessionExpirySchema = {
+  $id: 'AuthSessionExpiry',
+  type: 'object',
+  required: ['idleExpiresAt', 'absoluteExpiresAt', 'warningWindowSeconds'],
+  properties: {
+    idleExpiresAt: { type: 'string', format: 'date-time' },
+    absoluteExpiresAt: { type: 'string', format: 'date-time' },
+    warningWindowSeconds: { type: 'integer', minimum: 0, example: 300 },
   },
 } as const;
 
@@ -147,11 +160,14 @@ export const AuthResponseSchema = {
     success: { type: 'boolean', enum: [true] },
     data: {
       type: 'object',
-      required: ['user', 'tokens', 'session'],
+      required: ['user', 'tokens', 'session', 'serverTime'],
       properties: {
         user: { $ref: 'User#' },
         tokens: { $ref: 'TokenPair#' },
-        session: { $ref: 'AuthSession#' },
+        session: {
+          allOf: [{ $ref: 'AuthSession#' }, { $ref: 'AuthSessionExpiry#' }],
+        },
+        serverTime: { type: 'string', format: 'date-time' },
       },
     },
   },
@@ -602,6 +618,7 @@ export const ALL_SHARED_SCHEMAS = [
   UserSchema,
   TenantRoleSchema,
   TokenPairSchema,
+  AuthSessionExpirySchema,
   AuthSessionMembershipSchema,
   AuthSessionSchema,
   AuthResponseSchema,
