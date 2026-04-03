@@ -71,6 +71,37 @@ describe('AI routes', () => {
       model: null,
       statsSource: 'server',
       generatedAt: '2026-03-12T07:00:00.000Z',
+      minimalResponse: {
+        enabled: true,
+        headline: 'Start with overdue tasks.',
+        focusNow: ['Review overdue tasks'],
+        nextLook: 'Review overdue tasks',
+        reassurance: 'Take one step at a time.',
+      },
+      languageSafety: {
+        nonBlamingGuardrailsApplied: false,
+        flaggedTerms: [],
+        rubric: {
+          version: 'pace-language-v1',
+          passed: true,
+          checks: {
+            nonBlamingLanguage: true,
+            avoidsDiagnosisOrLegalConclusion: true,
+            evidenceGrounded: true,
+          },
+          notes: [],
+        },
+      },
+      promptQa: {
+        version: 'pace-language-v1',
+        passed: true,
+        checks: {
+          nonBlamingLanguage: true,
+          avoidsDiagnosisOrLegalConclusion: true,
+          evidenceGrounded: true,
+        },
+        notes: [],
+      },
     });
 
     const res = await app.inject({
@@ -84,12 +115,92 @@ describe('AI routes', () => {
     expect(askAi).toHaveBeenCalledWith('user_42', {
       query: 'What should I focus on?',
       page: 'summary',
+      displayMode: 'auto',
     });
     expect(res.json()).toMatchObject({
       success: true,
       data: {
         source: 'fallback',
         model: null,
+      },
+    });
+  });
+
+  it('accepts daily_logs page payload', async () => {
+    askAi.mockResolvedValueOnce({
+      answer: 'Daily logs summary.',
+      suggestions: [{ label: 'Show submitted logs', action: 'filter_daily_logs_submitted' }],
+      source: 'fallback',
+      model: null,
+      statsSource: 'none',
+      generatedAt: '2026-03-12T07:00:00.000Z',
+      minimalResponse: {
+        enabled: true,
+        headline: 'Review submitted logs first.',
+        focusNow: ['Review submitted logs'],
+        nextLook: 'Show submitted logs',
+        reassurance: 'Keep updates concise and factual.',
+      },
+      languageSafety: {
+        nonBlamingGuardrailsApplied: false,
+        flaggedTerms: [],
+        rubric: {
+          version: 'pace-language-v1',
+          passed: true,
+          checks: {
+            nonBlamingLanguage: true,
+            avoidsDiagnosisOrLegalConclusion: true,
+            evidenceGrounded: true,
+          },
+          notes: [],
+        },
+      },
+      promptQa: {
+        version: 'pace-language-v1',
+        passed: true,
+        checks: {
+          nonBlamingLanguage: true,
+          avoidsDiagnosisOrLegalConclusion: true,
+          evidenceGrounded: true,
+        },
+        notes: [],
+      },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/ai/ask',
+      headers: authHeader('user_daily_logs'),
+      payload: {
+        query: 'Summarize today logs',
+        page: 'daily_logs',
+        context: {
+          items: [
+            {
+              id: 'log_1',
+              title: 'Daily Log - Northbridge',
+              status: 'submitted',
+              category: 'daily_log',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(askAi).toHaveBeenCalledWith('user_daily_logs', {
+      query: 'Summarize today logs',
+      page: 'daily_logs',
+      displayMode: 'auto',
+      context: {
+        items: [
+          {
+            id: 'log_1',
+            title: 'Daily Log - Northbridge',
+            status: 'submitted',
+            category: 'daily_log',
+          },
+        ],
       },
     });
   });

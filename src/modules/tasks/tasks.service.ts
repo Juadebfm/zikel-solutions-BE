@@ -17,6 +17,7 @@ import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import { emitNotification } from '../../lib/notification-emitter.js';
+import { triggerRiskEvaluationForTaskMutation } from '../safeguarding/risk-alerts.service.js';
 import type {
   BatchArchiveBody,
   BatchPostponeBody,
@@ -1586,6 +1587,13 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
     }
   }
 
+  void triggerRiskEvaluationForTaskMutation({
+    tenantId: actor.tenantId,
+    homeId: task.homeId,
+    youngPersonId: task.youngPersonId,
+    actorUserId: actor.userId,
+  });
+
   return mapTask(task);
 }
 
@@ -1756,6 +1764,13 @@ export async function updateTask(actorUserId: string, taskId: string, body: Upda
     },
   });
 
+  void triggerRiskEvaluationForTaskMutation({
+    tenantId: actor.tenantId,
+    homeId: task.homeId,
+    youngPersonId: task.youngPersonId,
+    actorUserId: actor.userId,
+  });
+
   return mapTask(task);
 }
 
@@ -1770,6 +1785,8 @@ export async function runTaskAction(actorUserId: string, taskId: string, body: T
       assigneeId: true,
       createdById: true,
       submissionPayload: true,
+      homeId: true,
+      youngPersonId: true,
     },
   });
 
@@ -1917,6 +1934,13 @@ export async function runTaskAction(actorUserId: string, taskId: string, body: T
     }
   }
 
+  void triggerRiskEvaluationForTaskMutation({
+    tenantId: actor.tenantId,
+    homeId: existing.homeId,
+    youngPersonId: existing.youngPersonId,
+    actorUserId: actor.userId,
+  });
+
   return getTask(actorUserId, taskId);
 }
 
@@ -1969,6 +1993,8 @@ export async function deleteTask(actorUserId: string, taskId: string) {
       id: true,
       createdById: true,
       assigneeId: true,
+      homeId: true,
+      youngPersonId: true,
     },
   });
 
@@ -1998,6 +2024,13 @@ export async function deleteTask(actorUserId: string, taskId: string) {
         deletedAt: deletedAt.toISOString(),
       },
     },
+  });
+
+  void triggerRiskEvaluationForTaskMutation({
+    tenantId: actor.tenantId,
+    homeId: existing.homeId,
+    youngPersonId: existing.youngPersonId,
+    actorUserId: actor.userId,
   });
 
   return { message: 'Task archived.' };
@@ -2050,6 +2083,13 @@ export async function batchArchiveTasks(actorUserId: string, body: BatchArchiveB
         },
       },
     });
+
+    void triggerRiskEvaluationForTaskMutation({
+      tenantId: actor.tenantId,
+      homeId: null,
+      youngPersonId: null,
+      actorUserId: actor.userId,
+    });
   }
 
   return { processed, failed };
@@ -2089,6 +2129,13 @@ export async function postponeTask(actorUserId: string, taskId: string, body: Po
         reason: body.reason ?? null,
       },
     },
+  });
+
+  void triggerRiskEvaluationForTaskMutation({
+    tenantId: actor.tenantId,
+    homeId: null,
+    youngPersonId: null,
+    actorUserId: actor.userId,
   });
 
   return getTask(actorUserId, taskId);
@@ -2143,6 +2190,13 @@ export async function batchPostponeTasks(actorUserId: string, body: BatchPostpon
           failed: failed.length,
         },
       },
+    });
+
+    void triggerRiskEvaluationForTaskMutation({
+      tenantId: actor.tenantId,
+      homeId: null,
+      youngPersonId: null,
+      actorUserId: actor.userId,
     });
   }
 
@@ -2200,6 +2254,13 @@ export async function batchReassignTasks(actorUserId: string, body: BatchReassig
           failed: failed.length,
         },
       },
+    });
+
+    void triggerRiskEvaluationForTaskMutation({
+      tenantId: actor.tenantId,
+      homeId: null,
+      youngPersonId: null,
+      actorUserId: actor.userId,
     });
   }
 

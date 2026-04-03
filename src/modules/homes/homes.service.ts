@@ -4,6 +4,7 @@ import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
+import { triggerRiskEvaluationForHomeEventMutation } from '../safeguarding/risk-alerts.service.js';
 import type { CreateHomeBody, ListHomesQuery, UpdateHomeBody } from './homes.schema.js';
 
 type HomeRow = Prisma.HomeGetPayload<{
@@ -344,6 +345,13 @@ export async function createHomeEvent(actorId: string, homeId: string, body: { t
   });
 
   await prisma.auditLog.create({ data: { tenantId: tenant.tenantId, userId: actorId, action: AuditAction.record_created, entityType: 'home_event', entityId: event.id } });
+
+  void triggerRiskEvaluationForHomeEventMutation({
+    tenantId: tenant.tenantId,
+    homeId,
+    actorUserId: actorId,
+  });
+
   return event;
 }
 
@@ -360,6 +368,13 @@ export async function updateHomeEvent(actorId: string, homeId: string, eventId: 
 
   const updated = await prisma.homeEvent.update({ where: { id: eventId }, data: updateData });
   await prisma.auditLog.create({ data: { tenantId: tenant.tenantId, userId: actorId, action: AuditAction.record_updated, entityType: 'home_event', entityId: eventId, metadata: { fields: Object.keys(body) } } });
+
+  void triggerRiskEvaluationForHomeEventMutation({
+    tenantId: tenant.tenantId,
+    homeId,
+    actorUserId: actorId,
+  });
+
   return updated;
 }
 
@@ -370,6 +385,13 @@ export async function deleteHomeEvent(actorId: string, homeId: string, eventId: 
 
   await prisma.homeEvent.delete({ where: { id: eventId } });
   await prisma.auditLog.create({ data: { tenantId: tenant.tenantId, userId: actorId, action: AuditAction.record_deleted, entityType: 'home_event', entityId: eventId } });
+
+  void triggerRiskEvaluationForHomeEventMutation({
+    tenantId: tenant.tenantId,
+    homeId,
+    actorUserId: actorId,
+  });
+
   return { message: 'Event deleted.' };
 }
 

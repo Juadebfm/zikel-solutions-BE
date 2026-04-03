@@ -36,6 +36,44 @@ describe('ai schema contracts', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts daily logs page context payload', () => {
+    const result = AskAiBodySchema.safeParse({
+      query: 'Summarize today daily logs',
+      page: 'daily_logs',
+      context: {
+        items: [
+          {
+            id: 'log_1',
+            title: 'Daily Log - Oakview House',
+            status: 'submitted',
+            category: 'daily_log',
+            type: 'daily_log',
+            home: 'Oakview House',
+            extra: {
+              relatedTo: 'Ava Morris',
+              submittedBy: 'Admin User',
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts explicit minimal display mode', () => {
+    const result = AskAiBodySchema.safeParse({
+      query: 'Show only top priorities',
+      page: 'summary',
+      displayMode: 'minimal',
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.displayMode).toBe('minimal');
+    }
+  });
+
   it('accepts AI access toggle body', () => {
     const result = SetAiAccessBodySchema.safeParse({ enabled: true });
     expect(result.success).toBe(true);

@@ -55,6 +55,33 @@ const envSchema = z.object({
   AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
   AI_BASE_URL: z.url({ error: 'AI_BASE_URL must be a valid URL' }).default('https://api.openai.com/v1'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
+  AI_CONTEXT_REDACTION_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  AI_CONTEXT_REDACTION_MODE: z.enum(['standard', 'strict']).default('strict'),
+  AI_CONTEXT_REDACTION_SENSITIVE_KEYS: z
+    .string()
+    .default(
+      [
+        'firstName',
+        'lastName',
+        'middleName',
+        'fullName',
+        'name',
+        'email',
+        'phone',
+        'phoneNumber',
+        'address',
+        'dob',
+        'dateOfBirth',
+        'niNumber',
+        'nhsNumber',
+        'medical',
+        'diagnosis',
+        'passport',
+      ].join(','),
+    ),
 
   // Email — Resend (https://resend.com)
   // Optional in development (email.ts logs OTPs to console instead).
@@ -71,6 +98,62 @@ const envSchema = z.object({
   SECURITY_ALERT_WEBHOOK_SHARED_SECRET: z.string().min(16).optional(),
   SECURITY_ALERT_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   SECURITY_ALERT_WEBHOOK_MAX_DRIFT_SECONDS: z.coerce.number().int().positive().default(300),
+
+  // Safeguarding risk-alert scheduled backfill
+  SAFEGUARDING_RISK_BACKFILL_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  SAFEGUARDING_RISK_BACKFILL_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(30),
+  SAFEGUARDING_RISK_BACKFILL_LOOKBACK_HOURS: z.coerce.number().int().min(24).max(24 * 30).default(24 * 7),
+  SAFEGUARDING_RISK_BACKFILL_RUN_ON_STARTUP: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  SAFEGUARDING_RISK_BACKFILL_SEND_EMAIL_HOOKS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  SAFEGUARDING_CHRONOLOGY_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
+  SAFEGUARDING_PATTERNS_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
+  SAFEGUARDING_RISK_ALERT_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
+  SAFEGUARDING_CONFIDENTIALITY_DEFAULT_SCOPE: z.enum(['standard', 'restricted']).default('standard'),
+
+  // Therapeutic rollout feature flags + pilot controls
+  THERAPEUTIC_REG_PACKS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_CHRONOLOGY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_RISK_ALERTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_PATTERNS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_RI_DASHBOARD_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_REFLECTIVE_PROMPTS_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_PILOT_MODE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_PILOT_TENANT_IDS: z.string().default(''),
+  THERAPEUTIC_TELEMETRY_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  THERAPEUTIC_ROLLOUT_WAVE_LABEL: z.string().min(1).default('general'),
 
   // File uploads (direct-to-object-storage via presigned URLs)
   UPLOADS_ENABLED: z
@@ -214,6 +297,18 @@ function parseEnv(): Env {
 
   if (parsed.AI_ENABLED && !parsed.AI_API_KEY) {
     throw new Error('AI_API_KEY is required when AI_ENABLED=true.');
+  }
+
+  if (parsed.THERAPEUTIC_PILOT_MODE_ENABLED) {
+    const tenants = parsed.THERAPEUTIC_PILOT_TENANT_IDS
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (tenants.length === 0) {
+      throw new Error(
+        'THERAPEUTIC_PILOT_TENANT_IDS must include at least one tenant id when THERAPEUTIC_PILOT_MODE_ENABLED=true.',
+      );
+    }
   }
 
   return parsed;

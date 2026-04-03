@@ -224,7 +224,11 @@ function assertRefreshTokenState(
   now: Date,
 ) {
   if (stored.revokedAt !== null) {
-    throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
+    throw httpError(
+      401,
+      'REFRESH_TOKEN_REUSED',
+      'Refresh token has already been used. Please sign in again.',
+    );
   }
 
   if (stored.expiresAt <= now) {

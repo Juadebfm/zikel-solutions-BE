@@ -211,6 +211,53 @@ describe('auth session expiry contract routes', () => {
     expect(String(setCookie)).toContain('Expires=');
   });
 
+  it('clears refresh cookie when refresh fails with replay code', async () => {
+    refreshAccessToken.mockRejectedValueOnce({
+      statusCode: 401,
+      code: 'REFRESH_TOKEN_REUSED',
+      message: 'Refresh token has already been used. Please sign in again.',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      headers: { cookie: '__Host-zikel_rt=reused_refresh_token' },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: { code: 'REFRESH_TOKEN_REUSED' },
+    });
+    const setCookie = res.headers['set-cookie'];
+    expect(setCookie).toBeTruthy();
+    expect(String(setCookie)).toContain('zikel_rt=');
+    expect(String(setCookie)).toContain('Expires=');
+  });
+
+  it('does not clear refresh cookie when refresh fails with generic invalid code', async () => {
+    refreshAccessToken.mockRejectedValueOnce({
+      statusCode: 401,
+      code: 'REFRESH_TOKEN_INVALID',
+      message: 'Refresh token is invalid.',
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/refresh',
+      headers: { cookie: '__Host-zikel_rt=unknown_refresh_token' },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: { code: 'REFRESH_TOKEN_INVALID' },
+    });
+    expect(res.headers['set-cookie']).toBeUndefined();
+  });
+
   it('returns ISO expiry timestamps from session-expiry endpoint', async () => {
     getSessionExpiry.mockResolvedValueOnce({
       serverTime: '2026-04-01T12:00:00.000Z',
