@@ -13,6 +13,7 @@ import rateLimitPlugin from './plugins/rate-limit.js';
 import cookiePlugin from './plugins/cookie.js';
 import authPlugin from './plugins/auth.js';
 import rootRouter from './routes/index.js';
+import { startSafeguardingRiskBackfillScheduler } from './modules/safeguarding/risk-alerts.scheduler.js';
 
 function buildAuditSource(request: FastifyRequest) {
   const routePath = request.routeOptions?.url ?? request.url.split('?')[0];
@@ -105,6 +106,11 @@ export async function buildApp() {
 
   // Routes
   await fastify.register(rootRouter);
+
+  const stopSafeguardingRiskBackfillScheduler = startSafeguardingRiskBackfillScheduler();
+  fastify.addHook('onClose', async () => {
+    stopSafeguardingRiskBackfillScheduler();
+  });
 
   return fastify;
 }

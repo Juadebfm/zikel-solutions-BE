@@ -87,6 +87,16 @@ export const TAGS = [
     name: 'Webhooks',
     description: 'Tenant-configurable webhook endpoint management and delivery logs.',
   },
+  {
+    name: 'Reports',
+    description:
+      'Operational and regulatory evidence packs (Reg 44 / Reg 45) with export support.',
+  },
+  {
+    name: 'Safeguarding',
+    description:
+      'Safeguarding chronologies and intelligence endpoints with evidence-linked timelines.',
+  },
 ] as const;
 
 export type TagName = (typeof TAGS)[number]['name'];

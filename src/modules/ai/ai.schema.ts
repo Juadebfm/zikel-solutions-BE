@@ -25,6 +25,7 @@ const SummaryListItemContextSchema = z
 export const AI_PAGE_VALUES = [
   'summary',
   'tasks',
+  'daily_logs',
   'care_groups',
   'homes',
   'young_people',
@@ -56,6 +57,7 @@ export const AskAiBodySchema = z
   .object({
     query: z.string().min(3).max(1200),
     page: z.enum(AI_PAGE_VALUES).default('summary'),
+    displayMode: z.enum(['auto', 'standard', 'minimal']).default('auto'),
     context: z
       .object({
         stats: SummaryStatsContextSchema.optional(),
@@ -92,8 +94,13 @@ export const askAiBodyJson = {
     query: { type: 'string', minLength: 3, maxLength: 1200 },
     page: {
       type: 'string',
-      enum: ['summary', 'tasks', 'care_groups', 'homes', 'young_people', 'employees', 'vehicles', 'form_designer', 'users', 'audit'],
+      enum: ['summary', 'tasks', 'daily_logs', 'care_groups', 'homes', 'young_people', 'employees', 'vehicles', 'form_designer', 'users', 'audit'],
       default: 'summary',
+    },
+    displayMode: {
+      type: 'string',
+      enum: ['auto', 'standard', 'minimal'],
+      default: 'auto',
     },
     context: {
       type: 'object',

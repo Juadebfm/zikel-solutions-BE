@@ -316,6 +316,28 @@ function parseApprovers(payload: Prisma.JsonValue | null): string[] {
   return [];
 }
 
+function parseApproverIds(payload: Prisma.JsonValue | null): string[] {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return [];
+  const approverIds = payloadObj.approverIds;
+  if (!Array.isArray(approverIds)) return [];
+  return approverIds
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function extractPayloadAttachmentIds(payload: Prisma.JsonValue | null): string[] {
+  const payloadObj = asRecord(payload);
+  if (!payloadObj) return [];
+  const raw = payloadObj.attachmentFileIds;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function sanitizeTaskDescription(description: string | null | undefined): string | null {
   if (typeof description !== 'string') return null;
   const cleaned = description.replace(/^\[seed:[^\]]+\]\s*/i, '').trim();
@@ -628,6 +650,240 @@ async function getUserIdentityMap(userIds: string[]) {
   ]));
 }
 
+type TodoDetailSourceRow = {
+  id: string;
+  submissionPayload: Prisma.JsonValue | null;
+  references?: TaskReference[];
+  signatureFileId: string | null;
+  approvalStatus: TaskApprovalStatus;
+  approvedAt: Date | null;
+};
+
+type TodoAttachment = {
+  id: string;
+  name: string;
+  contentType: string | null;
+  sizeBytes: number;
+  purpose: string;
+  status: string;
+  uploadedAt: Date | null;
+};
+
+type TodoActivityLogEntry = {
+  id: string;
+  action: AuditAction;
+  by: UserIdentity | null;
+  at: Date;
+  note: string | null;
+  metadata: Record<string, unknown> | null;
+};
+
+type TodoCommentEntry = {
+  id: string;
+  by: UserIdentity | null;
+  text: string;
+  at: Date;
+};
+
+type TodoAuditTrailEntry = {
+  field: string;
+  from: null;
+  to: null;
+  by: string;
+  at: Date;
+};
+
+type TodoApprovalChainEntry = {
+  userId: string;
+  name: string;
+  status: 'approved' | 'rejected' | 'pending';
+  respondedAt: Date | null;
+};
+
+type TodoDetailMaps = {
+  attachmentsByTaskId: Map<string, TodoAttachment[]>;
+  activityByTaskId: Map<string, TodoActivityLogEntry[]>;
+  commentsByTaskId: Map<string, TodoCommentEntry[]>;
+  auditTrailByTaskId: Map<string, TodoAuditTrailEntry[]>;
+  approvalChainByTaskId: Map<string, TodoApprovalChainEntry[]>;
+};
+
+function emptyTodoDetailMaps(): TodoDetailMaps {
+  return {
+    attachmentsByTaskId: new Map<string, TodoAttachment[]>(),
+    activityByTaskId: new Map<string, TodoActivityLogEntry[]>(),
+    commentsByTaskId: new Map<string, TodoCommentEntry[]>(),
+    auditTrailByTaskId: new Map<string, TodoAuditTrailEntry[]>(),
+    approvalChainByTaskId: new Map<string, TodoApprovalChainEntry[]>(),
+  };
+}
+
+async function buildTodoDetailMaps(args: {
+  tenantId: string;
+  rows: TodoDetailSourceRow[];
+}): Promise<TodoDetailMaps> {
+  if (args.rows.length === 0) return emptyTodoDetailMaps();
+
+  const taskIds = args.rows.map((row) => row.id);
+  const attachmentIdsByTaskId = new Map<string, string[]>();
+  const allAttachmentIds = new Set<string>();
+  const approvalChainByTaskId = new Map<string, TodoApprovalChainEntry[]>();
+
+  args.rows.forEach((row) => {
+    const approverNames = parseApprovers(row.submissionPayload);
+    const approverIds = parseApproverIds(row.submissionPayload);
+    const approvalChainStatus: TodoApprovalChainEntry['status'] =
+      row.approvalStatus === TaskApprovalStatus.approved
+        ? 'approved'
+        : row.approvalStatus === TaskApprovalStatus.rejected
+          ? 'rejected'
+          : 'pending';
+    const approvalChain = approverNames.map((name, index) => ({
+      userId: approverIds[index] ?? `approver-name-${index + 1}`,
+      name,
+      status: approvalChainStatus,
+      respondedAt: row.approvedAt,
+    }));
+    approvalChainByTaskId.set(row.id, approvalChain);
+
+    const payloadAttachmentIds = extractPayloadAttachmentIds(row.submissionPayload);
+    const referenceAttachmentIds = (row.references ?? [])
+      .map((reference) => reference.fileId)
+      .filter((fileId): fileId is string => typeof fileId === 'string' && fileId.trim().length > 0);
+    const rowAttachmentIds = [
+      ...new Set(
+        [...payloadAttachmentIds, ...referenceAttachmentIds, row.signatureFileId]
+          .filter((fileId): fileId is string => typeof fileId === 'string' && fileId.trim().length > 0),
+      ),
+    ];
+    attachmentIdsByTaskId.set(row.id, rowAttachmentIds);
+    rowAttachmentIds.forEach((fileId) => allAttachmentIds.add(fileId));
+  });
+
+  const [uploadedFiles, auditLogs] = await Promise.all([
+    allAttachmentIds.size > 0
+      ? prisma.uploadedFile.findMany({
+          where: {
+            tenantId: args.tenantId,
+            deletedAt: null,
+            id: { in: [...allAttachmentIds] },
+          },
+          select: {
+            id: true,
+            originalName: true,
+            contentType: true,
+            sizeBytes: true,
+            purpose: true,
+            status: true,
+            uploadedAt: true,
+          },
+        })
+      : Promise.resolve([]),
+    prisma.auditLog.findMany({
+      where: {
+        tenantId: args.tenantId,
+        entityId: { in: taskIds },
+        entityType: { in: ['task', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+      select: {
+        id: true,
+        action: true,
+        userId: true,
+        entityId: true,
+        metadata: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  const fileMap = new Map(uploadedFiles.map((file) => [file.id, file]));
+  const attachmentsByTaskId = new Map<string, TodoAttachment[]>();
+  attachmentIdsByTaskId.forEach((fileIds, taskId) => {
+    const attachments = fileIds
+      .map((fileId) => fileMap.get(fileId))
+      .filter((file): file is NonNullable<typeof file> => Boolean(file))
+      .map((file) => ({
+        id: file.id,
+        name: file.originalName,
+        contentType: file.contentType,
+        sizeBytes: file.sizeBytes,
+        purpose: file.purpose,
+        status: file.status,
+        uploadedAt: file.uploadedAt,
+      }));
+    attachmentsByTaskId.set(taskId, attachments);
+  });
+
+  const auditUserIds = [
+    ...new Set(auditLogs.map((entry) => entry.userId).filter((userId): userId is string => Boolean(userId))),
+  ];
+  const auditUserMap = await getUserIdentityMap(auditUserIds);
+
+  const activityByTaskId = new Map<string, TodoActivityLogEntry[]>();
+  auditLogs.forEach((entry) => {
+    if (!entry.entityId) return;
+    const metadataRecord = asRecord(entry.metadata);
+    const activityItem: TodoActivityLogEntry = {
+      id: entry.id,
+      action: entry.action,
+      by: entry.userId ? (auditUserMap.get(entry.userId) ?? null) : null,
+      at: entry.createdAt,
+      note:
+        typeof metadataRecord?.comment === 'string'
+          ? metadataRecord.comment
+          : typeof metadataRecord?.reason === 'string'
+            ? metadataRecord.reason
+            : null,
+      metadata: metadataRecord,
+    };
+    const existing = activityByTaskId.get(entry.entityId) ?? [];
+    existing.push(activityItem);
+    activityByTaskId.set(entry.entityId, existing);
+  });
+
+  const commentsByTaskId = new Map<string, TodoCommentEntry[]>();
+  const auditTrailByTaskId = new Map<string, TodoAuditTrailEntry[]>();
+  taskIds.forEach((taskId) => {
+    const activity = activityByTaskId.get(taskId) ?? [];
+    commentsByTaskId.set(
+      taskId,
+      activity
+        .filter((item) => typeof item.note === 'string' && item.note.trim().length > 0)
+        .map((item) => ({
+          id: item.id,
+          by: item.by,
+          text: item.note as string,
+          at: item.at,
+        })),
+    );
+    auditTrailByTaskId.set(
+      taskId,
+      activity
+        .filter((item) => Array.isArray(item.metadata?.fields))
+        .flatMap((item) => {
+          const fields = Array.isArray(item.metadata?.fields) ? item.metadata.fields : [];
+          return fields.map((field) => ({
+            field: typeof field === 'string' ? field : 'unknown',
+            from: null,
+            to: null,
+            by: item.by?.name ?? 'System',
+            at: item.at,
+          }));
+        }),
+    );
+  });
+
+  return {
+    attachmentsByTaskId,
+    activityByTaskId,
+    commentsByTaskId,
+    auditTrailByTaskId,
+    approvalChainByTaskId,
+  };
+}
+
 type TaskToApproveRow = {
   id: string;
   createdAt: Date;
@@ -804,6 +1060,7 @@ function toTodoItem(
     references?: TaskReference[];
   },
   userIdentityMap: Map<string, UserIdentity>,
+  detailMaps?: TodoDetailMaps,
 ) {
   const vehicleLabel = task.vehicle
     ? [task.vehicle.make, task.vehicle.model, task.vehicle.registration].filter(Boolean).join(' ')
@@ -872,6 +1129,12 @@ function toTodoItem(
     },
     priority: task.priority,
     references,
+    attachments: detailMaps?.attachmentsByTaskId.get(task.id) ?? [],
+    approvalChain: detailMaps?.approvalChainByTaskId.get(task.id) ?? [],
+    activityLog: detailMaps?.activityByTaskId.get(task.id) ?? [],
+    comments: detailMaps?.commentsByTaskId.get(task.id) ?? [],
+    auditTrail: detailMaps?.auditTrailByTaskId.get(task.id) ?? [],
+    formData: task.submissionPayload,
   };
 }
 
@@ -1006,10 +1269,23 @@ export async function listTodos(userId: string, query: SummaryListQuery) {
   const userIds = [
     ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
   ];
-  const userIdentityMap = await getUserIdentityMap(userIds);
+  const [userIdentityMap, detailMaps] = await Promise.all([
+    getUserIdentityMap(userIds),
+    buildTodoDetailMaps({
+      tenantId: user.tenantId,
+      rows: rows.map((row) => ({
+        id: row.id,
+        submissionPayload: row.submissionPayload,
+        references: row.references ?? [],
+        signatureFileId: row.signatureFileId,
+        approvalStatus: row.approvalStatus,
+        approvedAt: row.approvedAt,
+      })),
+    }),
+  ]);
 
   return {
-    data: rows.map((row) => toTodoItem(row, userIdentityMap)),
+    data: rows.map((row) => toTodoItem(row, userIdentityMap, detailMaps)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
     labels: SHARED_TASK_LABELS,
   };
@@ -1074,10 +1350,23 @@ export async function listOverdueTodos(userId: string, query: SummaryListQuery) 
   const userIds = [
     ...new Set(rows.flatMap((row) => [row.createdById]).filter((id): id is string => Boolean(id))),
   ];
-  const userIdentityMap = await getUserIdentityMap(userIds);
+  const [userIdentityMap, detailMaps] = await Promise.all([
+    getUserIdentityMap(userIds),
+    buildTodoDetailMaps({
+      tenantId: user.tenantId,
+      rows: rows.map((row) => ({
+        id: row.id,
+        submissionPayload: row.submissionPayload,
+        references: row.references ?? [],
+        signatureFileId: row.signatureFileId,
+        approvalStatus: row.approvalStatus,
+        approvedAt: row.approvedAt,
+      })),
+    }),
+  ]);
 
   return {
-    data: rows.map((row) => toTodoItem(row, userIdentityMap)),
+    data: rows.map((row) => toTodoItem(row, userIdentityMap, detailMaps)),
     meta: buildPaginationMeta(total, query.page, query.pageSize),
     labels: SHARED_TASK_LABELS,
   };

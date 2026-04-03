@@ -656,7 +656,9 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           $ref: 'AuthResponse#',
         },
         401: {
-          description: 'Refresh token is invalid, expired, or already revoked.',
+          description:
+            'Refresh token is invalid or expired, or has been replayed. ' +
+            'Uses REFRESH_TOKEN_INVALID, REFRESH_TOKEN_REUSED, SESSION_IDLE_EXPIRED, SESSION_ABSOLUTE_EXPIRED.',
           $ref: 'ApiError#',
         },
         403: { description: 'Account is disabled.', $ref: 'ApiError#' },
@@ -697,7 +699,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         const err = error as { statusCode?: number; code?: string };
         if (
           err.statusCode === 401 &&
-          ['REFRESH_TOKEN_INVALID', 'SESSION_IDLE_EXPIRED', 'SESSION_ABSOLUTE_EXPIRED'].includes(
+          ['REFRESH_TOKEN_REUSED', 'SESSION_IDLE_EXPIRED', 'SESSION_ABSOLUTE_EXPIRED'].includes(
             err.code ?? '',
           )
         ) {
@@ -743,7 +745,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         },
         401: {
           description:
-            'Session expired or refresh token invalid. Uses SESSION_IDLE_EXPIRED, SESSION_ABSOLUTE_EXPIRED, REFRESH_TOKEN_INVALID.',
+            'Session expired, refresh token invalid, or refresh token replayed. ' +
+            'Uses SESSION_IDLE_EXPIRED, SESSION_ABSOLUTE_EXPIRED, REFRESH_TOKEN_INVALID, REFRESH_TOKEN_REUSED.',
           $ref: 'ApiError#',
         },
       },

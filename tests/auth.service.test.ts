@@ -492,6 +492,26 @@ describe('auth.service', () => {
     });
   });
 
+  it('returns REFRESH_TOKEN_REUSED when a rotated refresh token is presented again', async () => {
+    const user = makeUser({ emailVerified: true });
+    mockPrisma.refreshToken.findUnique.mockResolvedValueOnce({
+      id: 'rt_reused',
+      userId: user.id,
+      token: 'refresh-token',
+      revokedAt: new Date(Date.now() - 5_000),
+      expiresAt: new Date(Date.now() + 60_000),
+      idleExpiresAt: new Date(Date.now() + 60_000),
+      user,
+    });
+
+    await expect(
+      authService.refreshAccessToken('refresh-token'),
+    ).rejects.toMatchObject({
+      statusCode: 401,
+      code: 'REFRESH_TOKEN_REUSED',
+    });
+  });
+
   it('returns SESSION_ABSOLUTE_EXPIRED when refresh token absolute lifetime has elapsed', async () => {
     const user = makeUser({ emailVerified: true });
     mockPrisma.refreshToken.findUnique.mockResolvedValueOnce({

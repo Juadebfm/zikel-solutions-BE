@@ -240,6 +240,78 @@ export const todoItemJson = {
         },
       },
     },
+    attachments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'name', 'contentType', 'sizeBytes', 'purpose', 'status', 'uploadedAt'],
+        properties: {
+          id: { type: 'string' },
+          name: { type: 'string' },
+          contentType: { type: 'string', nullable: true },
+          sizeBytes: { type: 'integer' },
+          purpose: { type: 'string' },
+          status: { type: 'string' },
+          uploadedAt: { type: 'string', format: 'date-time', nullable: true },
+        },
+      },
+    },
+    approvalChain: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['userId', 'name', 'status', 'respondedAt'],
+        properties: {
+          userId: { type: 'string' },
+          name: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+          respondedAt: { type: 'string', format: 'date-time', nullable: true },
+        },
+      },
+    },
+    activityLog: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'action', 'by', 'at', 'note', 'metadata'],
+        properties: {
+          id: { type: 'string' },
+          action: { type: 'string' },
+          by: {},
+          at: { type: 'string', format: 'date-time' },
+          note: { type: 'string', nullable: true },
+          metadata: {},
+        },
+      },
+    },
+    comments: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['id', 'by', 'text', 'at'],
+        properties: {
+          id: { type: 'string' },
+          by: {},
+          text: { type: 'string' },
+          at: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+    auditTrail: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['field', 'from', 'to', 'by', 'at'],
+        properties: {
+          field: { type: 'string' },
+          from: { type: 'null' },
+          to: { type: 'null' },
+          by: { type: 'string' },
+          at: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
+    formData: {},
   },
 } as const;
 

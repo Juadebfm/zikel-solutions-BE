@@ -23,6 +23,8 @@ import integrationsRoutes from '../modules/integrations/integrations.routes.js';
 import helpCenterRoutes from '../modules/help-center/help-center.routes.js';
 import notificationsRoutes from '../modules/notifications/notifications.routes.js';
 import webhooksRoutes from '../modules/webhooks/webhooks.routes.js';
+import reportsRoutes from '../modules/reports/reports.routes.js';
+import safeguardingRoutes from '../modules/safeguarding/safeguarding.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
   // Infrastructure probes — no auth, no /api/v1 prefix
@@ -54,6 +56,8 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(helpCenterRoutes, { prefix: '/help-center' });
       await v1.register(notificationsRoutes, { prefix: '/notifications' });
       await v1.register(webhooksRoutes, { prefix: '/webhooks' });
+      await v1.register(reportsRoutes, { prefix: '/reports' });
+      await v1.register(safeguardingRoutes, { prefix: '/safeguarding' });
     },
     { prefix: '/api/v1' },
   );

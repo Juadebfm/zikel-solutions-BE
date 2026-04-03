@@ -362,3 +362,58 @@ export async function sendTenantInviteEmail(args: {
     html,
   );
 }
+
+// ─── Safeguarding risk alert notification ───────────────────────────────────
+
+export async function sendSafeguardingRiskAlertEmail(args: {
+  to: string;
+  firstName: string | null;
+  alert: {
+    id: string;
+    type: string;
+    severity: 'medium' | 'high' | 'critical';
+    title: string;
+    description: string;
+    targetType: 'tenant' | 'home' | 'young_person';
+    targetId: string;
+    reason: 'created' | 'reopened' | 'severity_raised';
+  };
+}) {
+  const firstName = escapeHtml(args.firstName?.trim() || 'Team');
+  const title = escapeHtml(args.alert.title);
+  const description = escapeHtml(args.alert.description);
+  const severity = escapeHtml(args.alert.severity.toUpperCase());
+  const reason = escapeHtml(args.alert.reason.replace(/_/g, ' '));
+  const targetType = escapeHtml(args.alert.targetType.replace(/_/g, ' '));
+  const targetId = escapeHtml(args.alert.targetId);
+  const alertType = escapeHtml(args.alert.type);
+
+  const html = buildEmailHtml(`
+    <h2 style="margin:0 0 16px;font-size:22px;color:#02060A;font-weight:700">
+      Safeguarding risk alert for review
+    </h2>
+    <p style="margin:0 0 16px;font-size:15px;color:#444444;line-height:1.6">
+      Hello ${firstName}, a safeguarding risk alert was ${reason}.
+    </p>
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 24px;border-radius:6px;overflow:hidden">
+      <tr>
+        <td style="background:#fff5f0;border-left:4px solid #F94D00;padding:16px 20px;border-radius:0 6px 6px 0">
+          <p style="margin:0 0 6px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Severity</p>
+          <p style="margin:0 0 14px;font-size:15px;color:#02060A;font-weight:700">${severity}</p>
+          <p style="margin:0 0 6px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Alert</p>
+          <p style="margin:0 0 14px;font-size:15px;color:#02060A;font-weight:600">${title}</p>
+          <p style="margin:0 0 6px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Type</p>
+          <p style="margin:0 0 14px;font-size:14px;color:#02060A">${alertType}</p>
+          <p style="margin:0 0 6px;font-size:11px;color:#888888;font-weight:700;text-transform:uppercase;letter-spacing:0.08em">Scope</p>
+          <p style="margin:0 0 14px;font-size:14px;color:#02060A">${targetType} · ${targetId}</p>
+          <p style="margin:0;font-size:14px;color:#444444;line-height:1.6">${description}</p>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0;font-size:14px;color:#444444;line-height:1.6">
+      Please review this alert in the safeguarding risk queue and document any escalation actions.
+    </p>
+  `);
+
+  await sendEmail(args.to, `Safeguarding risk alert: ${args.alert.severity.toUpperCase()}`, html);
+}

@@ -51,6 +51,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     },
     auditLog: {
       create: vi.fn(),
+      findMany: vi.fn(),
     },
     $queryRaw: vi.fn(),
     $disconnect: vi.fn(),
@@ -83,6 +84,7 @@ beforeEach(() => {
   mockPrisma.taskReviewEvent.findMany.mockResolvedValue([]);
   mockPrisma.taskReviewEvent.findFirst.mockResolvedValue(null);
   mockPrisma.uploadedFile.findMany.mockResolvedValue([]);
+  mockPrisma.auditLog.findMany.mockResolvedValue([]);
 });
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
