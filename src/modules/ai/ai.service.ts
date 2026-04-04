@@ -132,14 +132,6 @@ type CuriosityInsight = {
   exploreNext: CuriositySuggestion[];
 };
 
-type MinimalResponse = {
-  enabled: boolean;
-  headline: string;
-  focusNow: string[];
-  nextLook: string | null;
-  reassurance: string;
-};
-
 type PromptQaRubric = {
   version: 'pace-language-v1';
   passed: boolean;
@@ -907,35 +899,6 @@ function buildAnalysis(args: {
   };
 }
 
-function buildMinimalResponse(args: {
-  displayMode: 'standard' | 'minimal';
-  analysis: AssistantAnalysis;
-  suggestions: Array<{ label: string; action: string }>;
-}): MinimalResponse {
-  const top = args.analysis.topPriorities[0];
-  const headline = top
-    ? `Start with "${top.title}".`
-    : 'No urgent blockers are currently visible.';
-
-  const focusNow =
-    args.analysis.topPriorities.length > 0
-      ? args.analysis.topPriorities.slice(0, 2).map((priority) => priority.recommendedAction)
-      : ['Check today’s open queue and confirm priorities for this shift.'];
-
-  const nextLook =
-    args.analysis.curiosity.exploreNext[0]?.label ??
-    args.suggestions[0]?.label ??
-    null;
-
-  return {
-    enabled: args.displayMode === 'minimal',
-    headline,
-    focusNow,
-    nextLook,
-    reassurance:
-      'Use one step at a time. Keep notes factual, child-centred, and evidence-linked.',
-  };
-}
 
 function enforceAnswerSafety(args: {
   answer: string;
@@ -1374,12 +1337,6 @@ export async function askAi(userId: string, body: AskAiBody) {
     fallbackAnswer,
     analysis,
   });
-  const minimalResponse = buildMinimalResponse({
-    displayMode,
-    analysis,
-    suggestions,
-  });
-
   const generatedAt = new Date().toISOString();
 
   await prisma.auditLog.create({
@@ -1407,17 +1364,45 @@ export async function askAi(userId: string, body: AskAiBody) {
     },
   });
 
+  // ─── Build clean, chat-friendly response ─────────────────────────────────
+  // The FE should render: message → highlights → tip → actions. That's it.
+  const isCasual = CASUAL_PATTERN.test(body.query);
+
+  const highlights = isCasual
+    ? []
+    : analysis.topPriorities.slice(0, 4).map((p) => ({
+        title: p.title,
+        reason: p.reasons[0] ?? 'Needs attention',
+        urgency: p.urgencyLevel as 'low' | 'medium' | 'high' | 'critical',
+        action: p.recommendedAction,
+      }));
+
+  const tip = isCasual
+    ? null
+    : analysis.missingData[0] ??
+      analysis.curiosity.patternInsightSummaries[0] ??
+      null;
+
+  const actions = suggestions.slice(0, 3);
+
   return {
-    answer: safeAnswer,
-    suggestions,
+    // ─── Chat-friendly fields (FE should render these) ────────────────────
+    message: safeAnswer,
+    highlights,
+    tip,
+    actions,
     source,
-    model,
-    statsSource: ctx.statsSource,
     generatedAt,
-    minimalResponse,
-    languageSafety,
-    promptQa: languageSafety.rubric,
-    analysis,
+
+    // ─── Metadata (useful for FE debug/logging, not for rendering) ────────
+    meta: {
+      model,
+      page: body.page,
+      strengthProfile,
+      responseMode,
+      statsSource: ctx.statsSource,
+      languageSafetyPassed: languageSafety.rubric.passed,
+    },
   };
 }
 
