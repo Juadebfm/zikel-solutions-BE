@@ -81,6 +81,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.employee.findUnique.mockResolvedValue(null);
+  mockPrisma.auditLog.create.mockResolvedValue({ id: 'audit_1' });
   mockPrisma.$transaction.mockImplementation(async (arg: unknown) => {
     if (typeof arg === 'function') {
       return arg({
@@ -126,6 +127,17 @@ function mockTenantContext(
     id: userId,
     role,
     activeTenantId: 'tenant_1',
+    activeTenant: {
+      id: 'tenant_1',
+      isActive: true,
+    },
+    tenantMemberships: [
+      {
+        tenantId: 'tenant_1',
+        role: tenantRole,
+        status: 'active',
+      },
+    ],
   });
   mockPrisma.tenant.findUnique.mockResolvedValue({
     id: 'tenant_1',
@@ -440,9 +452,12 @@ describe('New module routes', () => {
     }));
   });
 
-  it('GET /api/v1/tasks rejects summaryScope=comments on task endpoint', async () => {
+  it('GET /api/v1/tasks applies summaryScope=comments filter', async () => {
     mockTenantContext();
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.auditLog.findMany.mockResolvedValueOnce([{ entityId: 'task_with_comment_1' }]);
+    mockPrisma.task.count.mockResolvedValueOnce(1);
+    mockPrisma.task.findMany.mockResolvedValueOnce([makeTaskRecord({ id: 'task_with_comment_1' })]);
 
     const res = await app.inject({
       method: 'GET',
@@ -450,11 +465,21 @@ describe('New module routes', () => {
       headers: authHeader(),
     });
 
-    expect(res.statusCode).toBe(422);
-    expect(res.json()).toMatchObject({
-      success: false,
-      error: { code: 'UNSUPPORTED_SUMMARY_SCOPE' },
-    });
+    expect(res.statusCode).toBe(200);
+    expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({
+            AND: expect.arrayContaining([
+              expect.any(Object),
+              expect.objectContaining({
+                id: expect.objectContaining({ in: ['task_with_comment_1'] }),
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    }));
   });
 
   it('GET /api/v1/tasks/:id returns task detail payload', async () => {
@@ -717,6 +742,11 @@ describe('New module routes', () => {
       id: 'super_1',
       role: 'super_admin',
       activeTenantId: 'tenant_1',
+      activeTenant: {
+        id: 'tenant_1',
+        isActive: true,
+      },
+      tenantMemberships: [],
     });
     mockPrisma.tenant.findUnique.mockResolvedValueOnce({
       id: 'tenant_2',
@@ -754,6 +784,11 @@ describe('New module routes', () => {
       id: 'super_1',
       role: 'super_admin',
       activeTenantId: 'tenant_2',
+      activeTenant: {
+        id: 'tenant_2',
+        isActive: true,
+      },
+      tenantMemberships: [],
     });
     mockPrisma.auditLog.findFirst
       .mockResolvedValueOnce({
