@@ -491,7 +491,7 @@ export const TaskSchema = {
     },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log'],
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log', 'reward'],
     },
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'urgent'] },
     dueDate: { type: 'string', format: 'date-time', nullable: true },
@@ -579,7 +579,7 @@ export const SummaryStatsSchema = {
     draft: { type: 'integer', description: 'Tasks in draft state', example: 4 },
     future: { type: 'integer', description: 'Tasks scheduled in the future', example: 12 },
     comments: { type: 'integer', description: 'Unread announcements for the current user', example: 7 },
-    rewards: { type: 'integer', description: 'Reward points derived from completed tasks', example: 120 },
+    rewards: { type: 'integer', description: 'Pending submitted rewards count', example: 11 },
   },
 } as const;
 

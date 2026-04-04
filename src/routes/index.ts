@@ -17,6 +17,7 @@ import taskRoutes from '../modules/tasks/tasks.routes.js';
 import formsRoutes from '../modules/forms/forms.routes.js';
 import uploadsRoutes from '../modules/uploads/uploads.routes.js';
 import dailyLogRoutes from '../modules/daily-logs/daily-logs.routes.js';
+import documentsRoutes from '../modules/documents/documents.routes.js';
 import roleRoutes from '../modules/roles/roles.routes.js';
 import auditRoutes from '../modules/audit/audit.routes.js';
 import integrationsRoutes from '../modules/integrations/integrations.routes.js';
@@ -25,6 +26,13 @@ import notificationsRoutes from '../modules/notifications/notifications.routes.j
 import webhooksRoutes from '../modules/webhooks/webhooks.routes.js';
 import reportsRoutes from '../modules/reports/reports.routes.js';
 import safeguardingRoutes from '../modules/safeguarding/safeguarding.routes.js';
+import exportsRoutes from '../modules/exports/exports.routes.js';
+import settingsRoutes from '../modules/settings/settings.routes.js';
+import calendarRoutes from '../modules/calendar/calendar.routes.js';
+import rotasRoutes from '../modules/rotas/rotas.routes.js';
+import regionsRoutes from '../modules/regions/regions.routes.js';
+import groupingsRoutes from '../modules/groupings/groupings.routes.js';
+import sensitiveDataRoutes from '../modules/sensitive-data/sensitive-data.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
   // Infrastructure probes — no auth, no /api/v1 prefix
@@ -50,6 +58,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(formsRoutes, { prefix: '/forms' });
       await v1.register(uploadsRoutes, { prefix: '/uploads' });
       await v1.register(dailyLogRoutes, { prefix: '/daily-logs' });
+      await v1.register(documentsRoutes, { prefix: '/documents' });
       await v1.register(roleRoutes, { prefix: '/roles' });
       await v1.register(auditRoutes, { prefix: '/audit' });
       await v1.register(integrationsRoutes, { prefix: '/integrations' });
@@ -58,6 +67,13 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(webhooksRoutes, { prefix: '/webhooks' });
       await v1.register(reportsRoutes, { prefix: '/reports' });
       await v1.register(safeguardingRoutes, { prefix: '/safeguarding' });
+      await v1.register(exportsRoutes, { prefix: '/exports' });
+      await v1.register(settingsRoutes, { prefix: '/settings' });
+      await v1.register(calendarRoutes, { prefix: '/calendar' });
+      await v1.register(rotasRoutes, { prefix: '/rotas' });
+      await v1.register(regionsRoutes, { prefix: '/regions' });
+      await v1.register(groupingsRoutes, { prefix: '/groupings' });
+      await v1.register(sensitiveDataRoutes, { prefix: '/sensitive-data' });
     },
     { prefix: '/api/v1' },
   );

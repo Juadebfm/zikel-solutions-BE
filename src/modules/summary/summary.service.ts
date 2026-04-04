@@ -36,7 +36,6 @@ const TODO_SORTABLE_FIELDS = new Set([
   'createdAt',
   'updatedAt',
 ]);
-const REWARD_POINTS_PER_COMPLETED_TASK = 10;
 const ACTIVE_WORKFLOW_STATUSES: TaskStatus[] = [TaskStatus.pending, TaskStatus.in_progress];
 const EXCLUDED_APPROVAL_BUCKET_STATUSES: TaskApprovalStatus[] = [
   TaskApprovalStatus.pending_approval,
@@ -63,6 +62,7 @@ const CATEGORY_LABELS: Record<TaskCategory, string> = {
   incident: 'Incident',
   other: 'Other',
   daily_log: 'Daily Log',
+  reward: 'Reward',
 };
 const SHARED_TASK_LABELS = {
   listTitle: 'Tasks',
@@ -1151,7 +1151,11 @@ export async function getSummaryStats(userId: string) {
     approvalStatus: { notIn: EXCLUDED_APPROVAL_BUCKET_STATUSES },
   };
 
-  const [overdue, dueToday, pendingApproval, rejected, draft, future, comments, completedTasks] =
+  const rewardsScope: Prisma.TaskWhereInput = canApprove(user)
+    ? { tenantId: user.tenantId, deletedAt: null }
+    : scope;
+
+  const [overdue, dueToday, pendingApproval, rejected, draft, future, comments, pendingRewards] =
     await Promise.all([
       prisma.task.count({
         where: withScope({
@@ -1203,7 +1207,17 @@ export async function getSummaryStats(userId: string) {
         },
       }),
       prisma.task.count({
-        where: withScope({ status: TaskStatus.completed }),
+        where: {
+          AND: [
+            rewardsScope,
+            {
+              deletedAt: null,
+              category: TaskCategory.reward,
+              submittedAt: { not: null },
+              approvalStatus: TaskApprovalStatus.not_required,
+            },
+          ],
+        },
       }),
     ]);
 
@@ -1215,7 +1229,7 @@ export async function getSummaryStats(userId: string) {
     draft,
     future,
     comments,
-    rewards: completedTasks * REWARD_POINTS_PER_COMPLETED_TASK,
+    rewards: pendingRewards,
   };
 }
 

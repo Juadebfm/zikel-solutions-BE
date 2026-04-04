@@ -139,6 +139,7 @@ enum TaskCategory {
   incident
   other
   daily_log
+  reward
 }
 
 enum TaskReferenceType {
@@ -171,6 +172,54 @@ enum UploadStatus {
   pending
   uploaded
   failed
+}
+
+enum DocumentVisibility {
+  private
+  tenant
+  home
+}
+
+enum ExportJobEntity {
+  homes
+  employees
+  young_people
+  vehicles
+  care_groups
+  tasks
+  daily_logs
+  audit
+}
+
+enum ExportJobFormat {
+  pdf
+  excel
+  csv
+}
+
+enum ExportJobStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+enum GroupingType {
+  operational
+  reporting
+  custom
+}
+
+enum GroupingEntityType {
+  home
+  employee
+  care_group
+}
+
+enum SensitiveDataConfidentialityScope {
+  restricted
+  confidential
+  highly_confidential
 }
 
 // ─── Help Center ─────────────────────────────────────────────────────────────
@@ -331,6 +380,7 @@ model User {
   announcementReads AnnouncementRead[]
   taskReviewEvents TaskReviewEvent[]
   uploadedFiles  UploadedFile[] @relation("UserUploadedFiles")
+  uploadedDocuments DocumentRecord[] @relation("DocumentUploadedBy")
   homesAsAdmin   Home[] @relation("HomeAdmin")
   homesAsPersonInCharge Home[] @relation("HomePersonInCharge")
   homesAsResponsibleIndividual Home[] @relation("HomeResponsibleIndividual")
@@ -342,6 +392,14 @@ model User {
   createdNotifications Notification[] @relation("UserCreatedNotifications")
   notificationRecipients NotificationRecipient[] @relation("UserNotificationRecipients")
   notificationPreferences NotificationPreference[] @relation("UserNotificationPreferences")
+  exportJobsCreated ExportJob[]
+  createdRotas Rota[] @relation("RotaCreatedBy")
+  updatedRotas Rota[] @relation("RotaUpdatedBy")
+  createdRotaTemplates RotaTemplate[] @relation("RotaTemplateCreatedBy")
+  createdGroupings Grouping[] @relation("GroupingCreatedBy")
+  createdSensitiveDataRecords SensitiveDataRecord[] @relation("SensitiveDataCreatedBy")
+  updatedSensitiveDataRecords SensitiveDataRecord[] @relation("SensitiveDataUpdatedBy")
+  sensitiveDataAccessLogs SensitiveDataAccessLog[]
   webhookEndpoints   WebhookEndpoint[] @relation("UserWebhookEndpoints")
   ownedSafeguardingRiskAlerts SafeguardingRiskAlert[] @relation("SafeguardingRiskAlertOwner")
   acknowledgedSafeguardingRiskAlerts SafeguardingRiskAlert[] @relation("SafeguardingRiskAlertAcknowledgedBy")
@@ -382,6 +440,17 @@ model Tenant {
   securityAlertDeliveries SecurityAlertDelivery[]
   taskReviewEvents TaskReviewEvent[]
   uploadedFiles UploadedFile[]
+  documents DocumentRecord[]
+  exportJobs ExportJob[]
+  settings TenantSettings?
+  rotas Rota[]
+  rotaTemplates RotaTemplate[]
+  regions Region[]
+  regionHomes RegionHome[]
+  groupings Grouping[]
+  groupingMembers GroupingMember[]
+  sensitiveDataRecords SensitiveDataRecord[]
+  sensitiveDataAccessLogs SensitiveDataAccessLog[]
   roles              Role[]
   supportTickets     SupportTicket[]
   notifications      Notification[]
@@ -550,6 +619,11 @@ model Home {
   tasks                    Task[]
   events                   HomeEvent[]
   shifts                   EmployeeShift[]
+  rotas                    Rota[]
+  documents                DocumentRecord[]
+  regionLinks              RegionHome[]
+  rotaTemplates            RotaTemplate[]
+  sensitiveDataRecords     SensitiveDataRecord[]
   safeguardingRiskAlerts   SafeguardingRiskAlert[]
 
   @@index([tenantId])
@@ -622,6 +696,10 @@ model HomeEvent {
   homeId      String
   title       String
   description String?
+  type        String    @default("other")
+  attendeeIds String[]  @default([])
+  recurrence  Json?
+  allDay      Boolean   @default(false)
   startsAt    DateTime
   endsAt      DateTime?
   createdAt   DateTime  @default(now())
@@ -631,6 +709,7 @@ model HomeEvent {
   home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, startsAt])
+  @@index([tenantId, type, startsAt])
   @@index([homeId, startsAt])
 }
 
@@ -701,6 +780,7 @@ model YoungPerson {
   admin                       User?         @relation("YoungPersonAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
   tasks                       Task[]
   safeguardingRiskAlerts      SafeguardingRiskAlert[]
+  sensitiveDataRecords        SensitiveDataRecord[]
 
   @@unique([tenantId, referenceNo])
   @@index([tenantId])
@@ -906,11 +986,242 @@ model UploadedFile {
   youngPersonAvatars YoungPerson[] @relation("YoungPersonAvatarFile")
   taskSignatures Task[]       @relation("TaskSignatureFile")
   taskReferences TaskReference[] @relation("TaskReferenceFile")
+  documents DocumentRecord[] @relation("DocumentFile")
 
   @@index([tenantId, purpose, status])
   @@index([tenantId, createdAt])
   @@index([uploadedById])
   @@index([deletedAt])
+}
+
+model DocumentRecord {
+  id           String             @id @default(cuid())
+  tenantId     String
+  fileId       String
+  homeId       String?
+  uploadedById String?
+  title        String
+  description  String?
+  category     String
+  visibility   DocumentVisibility @default(tenant)
+  tags         String[]           @default([])
+  deletedAt    DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  file         UploadedFile       @relation("DocumentFile", fields: [fileId], references: [id], onDelete: Cascade)
+  home         Home?              @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  uploadedBy   User?              @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, category])
+  @@index([tenantId, createdAt])
+  @@index([fileId])
+  @@index([homeId])
+  @@index([uploadedById])
+  @@index([deletedAt])
+}
+
+model ExportJob {
+  id           String         @id @default(cuid())
+  tenantId     String
+  createdById  String
+  entity       ExportJobEntity
+  filters      Json?
+  format       ExportJobFormat
+  status       ExportJobStatus @default(pending)
+  errorMessage String?
+  completedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy    User           @relation(fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, entity, createdAt])
+  @@index([createdById, createdAt])
+}
+
+model TenantSettings {
+  id                        String   @id @default(cuid())
+  tenantId                  String   @unique
+  timezone                  String   @default("Europe/London")
+  locale                    String   @default("en-GB")
+  dateFormat                String   @default("DD/MM/YYYY")
+  logoUrl                   String?
+  notificationDefaults      Json?
+  passwordPolicy            Json?
+  sessionTimeout            Int?
+  mfaRequired               Boolean  @default(false)
+  ipRestriction             Json?
+  dataRetentionDays         Int?
+  emailNotifications        Boolean  @default(true)
+  pushNotifications         Boolean  @default(true)
+  digestFrequency           String   @default("daily")
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Rota {
+  id          String   @id @default(cuid())
+  tenantId    String
+  homeId      String
+  weekStarting DateTime
+  shifts      Json
+  createdById String?
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home        Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  createdBy   User?    @relation("RotaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy   User?    @relation("RotaUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, homeId, weekStarting])
+  @@index([tenantId, weekStarting])
+  @@index([homeId, weekStarting])
+  @@index([createdById])
+  @@index([updatedById])
+}
+
+model RotaTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  homeId      String?
+  name        String
+  shifts      Json
+  createdById String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home        Home?    @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  createdBy   User?    @relation("RotaTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, homeId, createdAt])
+  @@index([createdById])
+}
+
+model Region {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  homeLinks   RegionHome[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, isActive, createdAt])
+}
+
+model RegionHome {
+  id         String   @id @default(cuid())
+  tenantId   String
+  regionId   String
+  homeId     String
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  region     Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  home       Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+
+  @@unique([regionId, homeId])
+  @@index([tenantId, homeId])
+  @@index([tenantId, regionId])
+}
+
+model Grouping {
+  id          String            @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  type        GroupingType      @default(custom)
+  entityType  GroupingEntityType
+  isActive    Boolean           @default(true)
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy   User?             @relation("GroupingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members     GroupingMember[]
+
+  @@unique([tenantId, name, entityType])
+  @@index([tenantId, type, isActive, createdAt])
+  @@index([createdById])
+}
+
+model GroupingMember {
+  id         String    @id @default(cuid())
+  tenantId   String
+  groupingId String
+  entityId   String
+  createdAt  DateTime  @default(now())
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  grouping   Grouping  @relation(fields: [groupingId], references: [id], onDelete: Cascade)
+
+  @@unique([groupingId, entityId])
+  @@index([tenantId, entityId])
+}
+
+model SensitiveDataRecord {
+  id                   String                             @id @default(cuid())
+  tenantId             String
+  title                String
+  category             String
+  content              String
+  youngPersonId        String?
+  homeId               String?
+  confidentialityScope SensitiveDataConfidentialityScope @default(confidential)
+  retentionDate        DateTime?
+  attachmentFileIds    String[]                           @default([])
+  createdById          String
+  updatedById          String?
+  deletedAt            DateTime?
+  createdAt            DateTime                           @default(now())
+  updatedAt            DateTime                           @updatedAt
+
+  tenant               Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  youngPerson          YoungPerson?                       @relation(fields: [youngPersonId], references: [id], onDelete: SetNull)
+  home                 Home?                              @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  createdBy            User                               @relation("SensitiveDataCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedBy            User?                              @relation("SensitiveDataUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  accessLogs           SensitiveDataAccessLog[]
+
+  @@index([tenantId, category, createdAt])
+  @@index([tenantId, confidentialityScope, createdAt])
+  @@index([youngPersonId])
+  @@index([homeId])
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+model SensitiveDataAccessLog {
+  id         String              @id @default(cuid())
+  tenantId   String
+  recordId   String
+  userId     String
+  action     String              @default("view")
+  createdAt  DateTime            @default(now())
+
+  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  record     SensitiveDataRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, recordId, createdAt])
+  @@index([userId, createdAt])
 }
 
 // ─── Announcements ────────────────────────────────────────────────────────────
