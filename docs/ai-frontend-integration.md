@@ -1,11 +1,10 @@
 # AI Assistant — Frontend Integration Guide
 
+> **Last updated:** 2026-04-04 — matches the deployed BE response shape.
+
 ## Overview
 
-The AI assistant is a **page-aware chatbot** that lives in a modal/drawer. It knows which page the user is on and tailors its responses accordingly. The BE handles all the intelligence — scoring priorities, detecting risks, building suggestions. The FE just needs to:
-
-1. Send the right context for the current page
-2. Render the clean response
+The AI assistant is a page-aware chatbot that lives in a modal/drawer. It knows which page the user is on and tailors responses accordingly. The BE handles all intelligence (priority scoring, risk detection, language safety). The FE sends context and renders 4 fields.
 
 ---
 
@@ -14,62 +13,88 @@ The AI assistant is a **page-aware chatbot** that lives in a modal/drawer. It kn
 ```
 POST /api/v1/ai/ask
 Authorization: Bearer <access_token>
+Content-Type: application/json
 ```
 
-Rate limit: **20 requests per minute** per user.
+Rate limit: 20 requests/minute per user.
 
 ---
 
-## Request Shape
+## Request
 
 ```typescript
-type AskAiRequest = {
-  query: string;           // The user's message (3–1200 chars)
-  page: AiPage;            // Which page the AI modal is open on
-  displayMode?: 'auto' | 'standard' | 'minimal';  // Optional, defaults to 'auto'
-  context?: {              // Page-specific context (see below)
-    stats?: SummaryStats;
-    todos?: SummaryItem[];
-    tasksToApprove?: SummaryItem[];
-    items?: PageItem[];
+{
+  query: string;                    // User's message (3–1200 chars)
+  page: AiPage;                    // Which page the modal is open on
+  displayMode?: 'auto' | 'standard' | 'minimal';  // Default: 'auto'
+  context?: {
+    // Summary page only
+    stats?: {
+      overdue?: number;
+      dueToday?: number;
+      pendingApproval?: number;
+      rejected?: number;
+      draft?: number;
+      future?: number;
+      comments?: number;
+      rewards?: number;
+    };
+    todos?: SummaryItem[];          // Max 10
+    tasksToApprove?: SummaryItem[]; // Max 10
+
+    // All other pages
+    items?: PageItem[];             // Max 25 — the visible rows on screen
     filters?: Record<string, string>;
-    meta?: PaginationMeta;
+    meta?: {
+      total?: number;
+      page?: number;
+      pageSize?: number;
+      totalPages?: number;
+    };
   };
+}
+
+type SummaryItem = {
+  title: string;                    // 1–200 chars
+  status?: string;
+  priority?: string;
+  dueDate?: string | null;
 };
-```
 
-### Supported Pages
+type PageItem = {
+  id?: string;
+  title: string;                    // 1–300 chars
+  status?: string;
+  priority?: string;
+  category?: string;
+  type?: string;
+  dueDate?: string | null;
+  assignee?: string;
+  home?: string;
+  extra?: Record<string, string>;   // Arbitrary key-value metadata
+};
 
-```typescript
 type AiPage =
-  | 'summary'        // Dashboard / My Summary
-  | 'tasks'          // Task Explorer
-  | 'daily_logs'     // Daily Logs
-  | 'care_groups'    // Care Groups
-  | 'homes'          // Homes
-  | 'young_people'   // Young People
-  | 'employees'      // Employees
-  | 'vehicles'       // Vehicles
-  | 'form_designer'  // Form Designer
-  | 'users'          // Users / Team
-  | 'audit';         // Audit Log
+  | 'summary' | 'tasks' | 'daily_logs' | 'care_groups'
+  | 'homes' | 'young_people' | 'employees' | 'vehicles'
+  | 'form_designer' | 'users' | 'audit';
 ```
 
 ---
 
-## Response Shape
+## Response
 
 ```typescript
-type AskAiResponse = {
+{
   success: true;
   data: {
-    message: string;        // AI chat message — render as a chat bubble
-    highlights: Highlight[]; // Priority cards (empty for casual messages)
-    tip: string | null;      // Single insight/warning (null = don't show)
-    actions: Action[];       // Quick-action buttons
+    message: string;              // Chat text — always render this
+    highlights: Highlight[];      // Priority cards — empty for casual messages
+    tip: string | null;           // Single insight — null means don't show
+    actions: Action[];            // Quick-action buttons
     source: 'model' | 'fallback';
-    generatedAt: string;     // ISO datetime
-    meta: {                  // Debug only — DO NOT render
+    generatedAt: string;          // ISO datetime
+    meta: {                       // DO NOT RENDER — debug/logging only
       model: string | null;
       page: string;
       strengthProfile: 'owner' | 'admin' | 'staff';
@@ -78,18 +103,18 @@ type AskAiResponse = {
       languageSafetyPassed: boolean;
     };
   };
-};
+}
 
 type Highlight = {
-  title: string;            // e.g. "Restraint Log Review — Physical Intervention"
-  reason: string;           // e.g. "Overdue, high priority"
+  title: string;                  // "Restraint Log Review — Physical Intervention"
+  reason: string;                 // "Overdue, high priority"
   urgency: 'low' | 'medium' | 'high' | 'critical';
-  action: string;           // e.g. "Triage immediately and assign clear ownership now."
+  action: string;                 // "Triage immediately and assign clear ownership now."
 };
 
 type Action = {
-  label: string;            // Button text, e.g. "Review overdue tasks"
-  action: string;           // Action key, e.g. "open_summary_todos_overdue"
+  label: string;                  // "Review overdue tasks"
+  action: string;                 // "open_summary_todos_overdue"
 };
 ```
 
@@ -98,146 +123,133 @@ type Action = {
 ## How to Render
 
 ```
-┌──────────────────────────────────────────────┐
-│  🤖 AI Assistant                          ✕  │
-│                                              │
-│  ┌──────────────────────────────────────┐    │
-│  │ USER: "What should I focus on?"      │    │
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  ┌──────────────────────────────────────┐    │
-│  │ AI: "Focus on the Restraint Log      │    │
-│  │ Review first — it's overdue and..."  │    │  ← data.message
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  ┌─ HIGHLIGHTS ─────────────────────────┐    │
-│  │ ⚠ Restraint Log Review    CRITICAL   │    │  ← data.highlights[]
-│  │   Overdue, high priority             │    │
-│  │   → Triage immediately              │    │
-│  ├──────────────────────────────────────┤    │
-│  │ ⚠ Vehicle Safety Inspect. CRITICAL   │    │
-│  │   Marked high priority               │    │
-│  │   → Triage immediately              │    │
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  ┌─ TIP ────────────────────────────────┐    │
-│  │ 💡 Some items have no assignee —     │    │  ← data.tip (hide if null)
-│  │    consider assigning this shift.    │    │
-│  └──────────────────────────────────────┘    │
-│                                              │
-│  [Review overdue] [Open approvals] [Due today] ← data.actions[]
-│                                              │
-│  ┌──────────────────────────────────────┐    │
-│  │ Ask a question...                    │    │
-│  └──────────────────────────────────────┘    │
-└──────────────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  Ask AI                              ✕  │
+│                                         │
+│         ┌─────────────────────┐         │
+│         │ USER: "hello"       │         │
+│         └─────────────────────┘         │
+│  ┌─────────────────────────────┐        │
+│  │ AI: "Hello! You have 2     │        │
+│  │ overdue tasks — let me     │        │  ← message
+│  │ know if you'd like help."  │        │
+│  └─────────────────────────────┘        │
+│                                         │
+│         ┌─────────────────────┐         │
+│         │ USER: "what should  │         │
+│         │ I focus on today?"  │         │
+│         └─────────────────────┘         │
+│  ┌─────────────────────────────┐        │
+│  │ AI: "Focus on the          │        │
+│  │ Restraint Log Review..."   │        │  ← message
+│  ├─────────────────────────────┤        │
+│  │ ⚠ Restraint Log Review     │ CRIT   │
+│  │   Overdue, high priority   │        │  ← highlights[]
+│  │   → Triage immediately     │        │
+│  ├─────────────────────────────┤        │
+│  │ ⚠ Vehicle Safety Inspect.  │ CRIT   │
+│  │   Marked high priority     │        │  ← highlights[]
+│  │   → Triage immediately     │        │
+│  ├─────────────────────────────┤        │
+│  │ 💡 Some items have no      │        │
+│  │    assignee.               │        │  ← tip
+│  ├─────────────────────────────┤        │
+│  │ [Review overdue] [Approvals]│       │  ← actions[]
+│  └─────────────────────────────┘        │
+│                                         │
+│  ┌─────────────────────────────────┐    │
+│  │ Ask a question...               │    │
+│  └─────────────────────────────────┘    │
+│  [New Chat]  [Close]  [Ask AI]          │
+└─────────────────────────────────────────┘
 ```
 
-### Rendering Rules
+### What to render
 
-| Field | Render as | When to show |
-|-------|-----------|--------------|
-| `message` | Chat bubble | Always |
-| `highlights` | Priority cards with urgency badge | When array is non-empty |
-| `tip` | Info/warning banner | When not `null` |
-| `actions` | Buttons at bottom of response | When array is non-empty |
-| `meta` | **Never render** | Only for console.log/debugging |
+| Field | Render as | Show when |
+|-------|-----------|-----------|
+| `message` | Chat bubble | **Always** |
+| `highlights` | Cards with urgency badge + recommended action | Array is non-empty |
+| `tip` | Info banner (light yellow/blue) | Not `null` |
+| `actions` | Buttons below the response | Array is non-empty |
+| `meta` | **Never** | Debug only (console.log if needed) |
 
-### Urgency Badge Colors
+### Urgency badge colors
 
-| `urgency` | Color | Meaning |
-|-----------|-------|---------|
+| Value | Color | Meaning |
+|-------|-------|---------|
 | `critical` | Red | Overdue + high priority — act now |
 | `high` | Orange | Due soon or rejected — act this shift |
 | `medium` | Yellow | Needs attention today |
-| `low` | Grey | Can wait, schedule for later |
+| `low` | Grey | Can wait |
 
 ---
 
-## Page-by-Page Context Guide
+## Page Context — What to Send
 
-### Summary Page (`page: 'summary'`)
+### How it works
 
-**What to send:** The stats cards + to-do list + pending approvals visible on screen.
-
-```typescript
-const response = await fetch('/api/v1/ai/ask', {
-  method: 'POST',
-  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    query: userMessage,
-    page: 'summary',
-    context: {
-      // Stats from the dashboard cards (optional — BE will fetch if not sent)
-      stats: {
-        overdue: 2,
-        dueToday: 5,
-        pendingApproval: 15,
-        rejected: 3,
-        draft: 1,
-        future: 20,
-        comments: 0,
-        rewards: 0,
-      },
-      // First 10 items from the To-Do List
-      todos: [
-        { title: 'South Home Daily Task 8', status: 'pending', priority: 'medium', dueDate: '2026-04-03' },
-        { title: 'Night Fire Drill Report', status: 'pending', priority: 'high', dueDate: '2026-04-05' },
-      ],
-      // First 10 items from Pending Sign-Off
-      tasksToApprove: [
-        { title: 'Restraint Log Review — Physical Intervention', status: 'pending_approval', priority: 'high', dueDate: '2026-04-04' },
-      ],
-    },
-  }),
-});
-```
-
-**What the BE does:** Fetches a full platform snapshot (homes count, employees, open tasks, etc.) and combines it with your stats/todos. The AI gets a complete picture even if you only send partial data.
-
-**If you send no context:** The BE fetches stats from the server. It works, but is slower.
+- **Summary page:** BE fetches data from DB. FE can optionally send `stats`, `todos`, `tasksToApprove` from the dashboard to skip the server fetch (faster).
+- **All other pages:** FE **must** send `items` (the visible rows on screen). Without it, the AI gives generic answers.
 
 ---
 
-### Tasks Page (`page: 'tasks'`)
-
-**What to send:** The currently visible task rows + active filters.
+### Summary (`page: 'summary'`)
 
 ```typescript
 {
-  query: "Which tasks need attention first?",
-  page: "tasks",
+  query: "What should I focus on today?",
+  page: "summary",
   context: {
-    items: taskRows.map(task => ({
-      id: task.id,
-      title: task.title,
-      status: task.status,          // "pending", "in_progress", "completed"
-      priority: task.priority,      // "low", "medium", "high", "urgent"
-      category: task.category,      // "task_log", "incident", "daily_log", etc.
-      dueDate: task.dueDate,        // ISO string or null
-      assignee: task.assigneeName,  // Display name or null
-      home: task.homeName,          // Home name or null
-    })).slice(0, 25),
-    filters: {
-      status: "pending",
-      priority: "high",
-      homeId: "abc123",
+    stats: {
+      overdue: 2,
+      dueToday: 5,
+      pendingApproval: 15,
+      rejected: 3,
+      draft: 1,
+      future: 20,
+      comments: 0,
+      rewards: 0,
     },
-    meta: {
-      total: pagination.total,
-      page: pagination.page,
-      pageSize: pagination.pageSize,
-      totalPages: pagination.totalPages,
-    },
+    todos: [
+      { title: "South Home Daily Task 8", status: "pending", priority: "medium", dueDate: "2026-04-03" },
+      { title: "Night Fire Drill Report", status: "pending", priority: "high", dueDate: "2026-04-05" },
+    ],
+    tasksToApprove: [
+      { title: "Restraint Log Review", status: "pending_approval", priority: "high", dueDate: "2026-04-04" },
+    ],
   },
 }
 ```
 
 ---
 
-### Daily Logs Page (`page: 'daily_logs'`)
+### Tasks (`page: 'tasks'`)
 
-Same as tasks — daily logs are tasks with `category: 'daily_log'`.
+```typescript
+{
+  query: "Which tasks need attention first?",
+  page: "tasks",
+  context: {
+    items: visibleTasks.map(t => ({
+      id: t.id,
+      title: t.title,
+      status: t.status,
+      priority: t.priority,
+      category: t.category,
+      dueDate: t.dueDate,
+      assignee: t.assigneeName ?? undefined,
+      home: t.homeName ?? undefined,
+    })),
+    filters: { status: "pending", priority: "high" },
+    meta: { total: 42, page: 1, pageSize: 20, totalPages: 3 },
+  },
+}
+```
+
+---
+
+### Daily Logs (`page: 'daily_logs'`)
 
 ```typescript
 {
@@ -247,13 +259,13 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
     items: logs.map(log => ({
       id: log.id,
       title: log.title,
-      status: log.approvalStatus,    // "pending_approval", "approved", "rejected"
-      category: log.logCategory,     // "General", "Incident", "Medication", etc.
+      status: log.approvalStatus,
+      category: log.logCategory,
       dueDate: log.createdAt,
-      assignee: log.submittedByName,
-      home: log.homeName,
-    })).slice(0, 25),
-    filters: currentFilters,
+      assignee: log.submittedByName ?? undefined,
+      home: log.homeName ?? undefined,
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -261,25 +273,24 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Homes Page (`page: 'homes'`)
+### Homes (`page: 'homes'`)
 
 ```typescript
 {
   query: "Which homes are near capacity?",
   page: "homes",
   context: {
-    items: homes.map(home => ({
-      id: home.id,
-      title: home.name,
-      status: home.status,           // "current", "inactive"
+    items: homes.map(h => ({
+      id: h.id,
+      title: h.name,
+      status: h.status,
       extra: {
-        capacity: String(home.capacity),
-        region: home.region ?? '',
-        careGroup: home.careGroupName ?? '',
-        youngPeopleCount: String(home.youngPeopleCount ?? 0),
+        capacity: String(h.capacity),
+        region: h.region ?? '',
+        careGroup: h.careGroupName ?? '',
       },
-    })).slice(0, 25),
-    filters: currentFilters,
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -287,25 +298,24 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Young People Page (`page: 'young_people'`)
+### Young People (`page: 'young_people'`)
 
 ```typescript
 {
-  query: "Any placement reviews due soon?",
+  query: "Any placement reviews due?",
   page: "young_people",
   context: {
     items: youngPeople.map(yp => ({
       id: yp.id,
       title: `${yp.firstName} ${yp.lastName}`,
-      status: yp.status,             // "current", "discharged"
-      home: yp.homeName,
+      status: yp.status,
+      home: yp.homeName ?? undefined,
       extra: {
-        referenceNo: yp.referenceNo,
+        referenceNo: yp.referenceNo ?? '',
         keyWorker: yp.keyWorkerName ?? '',
-        admissionDate: yp.admissionDate ?? '',
       },
-    })).slice(0, 25),
-    filters: currentFilters,
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -313,26 +323,25 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Employees Page (`page: 'employees'`)
+### Employees (`page: 'employees'`)
 
 ```typescript
 {
-  query: "Who has expiring DBS checks?",
+  query: "Who has expiring DBS?",
   page: "employees",
   context: {
-    items: employees.map(emp => ({
-      id: emp.id,
-      title: `${emp.user.firstName} ${emp.user.lastName}`,
-      status: emp.status,             // "current", "inactive"
-      home: emp.homeName,
+    items: employees.map(e => ({
+      id: e.id,
+      title: `${e.user.firstName} ${e.user.lastName}`,
+      status: e.status,
+      home: e.homeName ?? undefined,
       extra: {
-        role: emp.roleName ?? '',
-        jobTitle: emp.jobTitle ?? '',
-        contractType: emp.contractType ?? '',
-        dbsDate: emp.dbsDate ?? '',
+        role: e.roleName ?? '',
+        jobTitle: e.jobTitle ?? '',
+        dbsDate: e.dbsDate ?? '',
       },
-    })).slice(0, 25),
-    filters: currentFilters,
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -340,7 +349,7 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Vehicles Page (`page: 'vehicles'`)
+### Vehicles (`page: 'vehicles'`)
 
 ```typescript
 {
@@ -351,15 +360,14 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
       id: v.id,
       title: `${v.make} ${v.model} — ${v.registration}`,
       status: v.status,
-      home: v.homeName,
+      home: v.homeName ?? undefined,
       extra: {
         motDue: v.motDue ?? '',
         nextServiceDue: v.nextServiceDue ?? '',
         insuranceDate: v.insuranceDate ?? '',
-        fuelType: v.fuelType ?? '',
       },
-    })).slice(0, 25),
-    filters: currentFilters,
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -367,7 +375,7 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Care Groups Page (`page: 'care_groups'`)
+### Care Groups (`page: 'care_groups'`)
 
 ```typescript
 {
@@ -378,18 +386,15 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
       id: g.id,
       title: g.name,
       status: g.isActive ? 'active' : 'inactive',
-      extra: {
-        homesCount: String(g.homesCount ?? 0),
-        description: g.description ?? '',
-      },
-    })).slice(0, 25),
+      extra: { description: g.description ?? '' },
+    })),
   },
 }
 ```
 
 ---
 
-### Form Designer Page (`page: 'form_designer'`)
+### Form Designer (`page: 'form_designer'`)
 
 ```typescript
 {
@@ -400,38 +405,48 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
       id: t.id,
       title: t.name,
       status: t.isActive ? 'active' : 'inactive',
-      category: t.group ?? '',
-      extra: {
-        key: t.key,
-        description: t.description ?? '',
-      },
-    })).slice(0, 25),
-    filters: currentFilters,
+      category: t.group ?? undefined,
+      extra: { key: t.key, description: t.description ?? '' },
+    })),
   },
 }
 ```
 
 ---
 
-### Audit Page (`page: 'audit'`)
+### Users (`page: 'users'`)
+
+```typescript
+{
+  query: "Who hasn't logged in recently?",
+  page: "users",
+  context: {
+    items: users.map(u => ({
+      id: u.id,
+      title: `${u.firstName} ${u.lastName}`,
+      status: u.isActive ? 'active' : 'inactive',
+      extra: { email: u.email, role: u.role, lastLoginAt: u.lastLoginAt ?? '' },
+    })),
+  },
+}
+```
+
+---
+
+### Audit (`page: 'audit'`)
 
 ```typescript
 {
   query: "Any suspicious login activity?",
   page: "audit",
   context: {
-    items: auditLogs.map(log => ({
-      id: log.id,
-      title: `${log.action} — ${log.entityType ?? 'system'}`,
-      type: log.action,               // "login", "record_updated", etc.
-      extra: {
-        userId: log.userId ?? '',
-        entityId: log.entityId ?? '',
-        ipAddress: log.ipAddress ?? '',
-        timestamp: log.createdAt,
-      },
-    })).slice(0, 25),
-    filters: currentFilters,
+    items: logs.map(l => ({
+      id: l.id,
+      title: `${l.action} — ${l.entityType ?? 'system'}`,
+      type: l.action,
+      extra: { userId: l.userId ?? '', ipAddress: l.ipAddress ?? '', timestamp: l.createdAt },
+    })),
+    filters: activeFilters,
     meta: paginationMeta,
   },
 }
@@ -439,82 +454,50 @@ Same as tasks — daily logs are tasks with `category: 'daily_log'`.
 
 ---
 
-### Users Page (`page: 'users'`)
+## Action Keys
 
-```typescript
-{
-  query: "Which users haven't logged in recently?",
-  page: "users",
-  context: {
-    items: users.map(u => ({
-      id: u.id,
-      title: `${u.firstName} ${u.lastName}`,
-      status: u.isActive ? 'active' : 'inactive',
-      extra: {
-        email: u.email,
-        role: u.role,
-        lastLoginAt: u.lastLoginAt ?? '',
-      },
-    })).slice(0, 25),
-    filters: currentFilters,
-  },
-}
-```
+The `actions[].action` and highlight `action` strings are identifiers the FE maps to navigation or filter operations:
 
----
-
-## Action Key Reference
-
-The FE maps `action` strings from the response to navigation or filter actions:
-
-### Summary Page Actions
-| Action Key | FE Handler |
-|-----------|------------|
-| `open_summary_todos_overdue` | Navigate to tasks page, filter: overdue |
+### Summary
+| Action | FE handler |
+|--------|------------|
+| `open_summary_todos_overdue` | Navigate to tasks, filter overdue |
 | `open_summary_pending_approvals` | Navigate to pending approvals |
-| `open_summary_todos_due_today` | Navigate to tasks page, filter: due today |
-| `open_summary_todos_all` | Navigate to tasks page |
+| `open_summary_todos_due_today` | Navigate to tasks, filter due today |
+| `open_summary_todos_all` | Navigate to tasks (no filter) |
 
-### Tasks Page Actions
-| Action Key | FE Handler |
-|-----------|------------|
+### Tasks
+| Action | FE handler |
+|--------|------------|
 | `filter_tasks_overdue` | Apply overdue filter |
 | `filter_tasks_pending_approval` | Apply pending approval filter |
 | `create_task` | Open new task form |
 
-### Daily Logs Actions
-| Action Key | FE Handler |
-|-----------|------------|
-| `filter_daily_logs_submitted` | Filter by submitted status |
-| `filter_daily_logs_rejected` | Filter by rejected status |
+### Daily Logs
+| Action | FE handler |
+|--------|------------|
+| `filter_daily_logs_submitted` | Filter by submitted |
+| `filter_daily_logs_rejected` | Filter by rejected |
 | `create_daily_log` | Open new daily log form |
 
-### Entity Pages (Homes, Employees, Young People, Vehicles)
-| Action Key | FE Handler |
-|-----------|------------|
-| `view_all_[entity]` | Clear filters, show all |
+### Entity Pages
+| Action | FE handler |
+|--------|------------|
+| `view_all_[entity]` | Clear filters |
 | `create_[entity]` | Open create form |
-| `filter_vehicles_mot_due` | Filter vehicles by MOT due |
-| `filter_vehicles_service_due` | Filter vehicles by service due |
+| `filter_vehicles_mot_due` | Filter by MOT due |
+| `filter_vehicles_service_due` | Filter by service due |
 
-### Other Pages
-| Action Key | FE Handler |
-|-----------|------------|
-| `view_all_forms` / `create_form` | Form designer navigation |
-| `view_all_users` / `invite_user` | User management navigation |
-| `view_recent_audit` / `filter_audit_action` | Audit page navigation |
-
-### Dynamic Actions (from highlights)
-| Pattern | FE Handler |
-|---------|------------|
-| `explore_[page]_overdue_cluster` | Filter current page to overdue items |
-| `explore_[page]_unassigned_items` | Filter to items without assignees |
-| `explore_[page]_[theme]_trend` | Filter by the named theme (e.g. medication) |
-| `explore_[page]_top_priority_evidence` | Navigate to the top priority item detail |
+### Other
+| Action | FE handler |
+|--------|------------|
+| `view_all_forms` / `create_form` | Form designer actions |
+| `view_all_users` / `invite_user` | User management actions |
+| `view_recent_audit` / `filter_audit_action` | Audit page actions |
 
 ---
 
-## Minimal FE Implementation
+## React Implementation
 
 ```typescript
 // hooks/useAskAi.ts
@@ -523,31 +506,30 @@ import { useState } from 'react';
 type AiMessage = {
   role: 'user' | 'assistant';
   content: string;
-  highlights?: Highlight[];
+  highlights?: Array<{ title: string; reason: string; urgency: string; action: string }>;
   tip?: string | null;
-  actions?: Action[];
+  actions?: Array<{ label: string; action: string }>;
 };
 
 export function useAskAi() {
   const [messages, setMessages] = useState<AiMessage[]>([]);
   const [loading, setLoading] = useState(false);
 
-  async function ask(query: string, page: AiPage, context?: AiContext) {
+  async function ask(query: string, page: string, context?: Record<string, unknown>) {
     setMessages(prev => [...prev, { role: 'user', content: query }]);
     setLoading(true);
 
     try {
       const res = await api.post('/api/v1/ai/ask', { query, page, context });
-      const data = res.data.data;
-
+      const d = res.data.data;
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: data.message,
-        highlights: data.highlights,
-        tip: data.tip,
-        actions: data.actions,
+        content: d.message,
+        highlights: d.highlights,
+        tip: d.tip,
+        actions: d.actions,
       }]);
-    } catch (err) {
+    } catch {
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: 'Sorry, something went wrong. Please try again.',
@@ -557,82 +539,80 @@ export function useAskAi() {
     }
   }
 
-  function reset() {
-    setMessages([]);
-  }
-
-  return { messages, loading, ask, reset };
+  return { messages, loading, ask, reset: () => setMessages([]) };
 }
 ```
 
 ```tsx
 // components/AskAiModal.tsx
-function AskAiModal({ page, getPageContext, onAction }) {
+function AskAiModal({ page, getContext, onAction, onClose }) {
   const { messages, loading, ask, reset } = useAskAi();
   const [input, setInput] = useState('');
 
-  const handleSend = () => {
-    if (!input.trim()) return;
-    const context = getPageContext(); // Each page provides its own context builder
-    ask(input.trim(), page, context);
+  const send = () => {
+    if (!input.trim() || loading) return;
+    ask(input.trim(), page, getContext());
     setInput('');
   };
 
   return (
-    <Modal>
+    <Modal onClose={onClose}>
+      <h2>Ask AI</h2>
+
       <div className="messages">
         {messages.map((msg, i) => (
-          <div key={i} className={`message ${msg.role}`}>
-            {/* Chat bubble */}
+          <div key={i} className={msg.role}>
             <p>{msg.content}</p>
 
-            {/* Highlight cards */}
             {msg.highlights?.length > 0 && (
               <div className="highlights">
                 {msg.highlights.map((h, j) => (
-                  <HighlightCard key={j} {...h} />
+                  <div key={j} className={`highlight ${h.urgency}`}>
+                    <strong>{h.title}</strong>
+                    <span className="badge">{h.urgency}</span>
+                    <p className="reason">{h.reason}</p>
+                    <p className="action">{h.action}</p>
+                  </div>
                 ))}
               </div>
             )}
 
-            {/* Tip banner */}
-            {msg.tip && <TipBanner text={msg.tip} />}
+            {msg.tip && <div className="tip">{msg.tip}</div>}
 
-            {/* Action buttons */}
             {msg.actions?.length > 0 && (
               <div className="actions">
                 {msg.actions.map((a, j) => (
-                  <button key={j} onClick={() => onAction(a.action)}>
-                    {a.label}
-                  </button>
+                  <button key={j} onClick={() => onAction(a.action)}>{a.label}</button>
                 ))}
               </div>
             )}
           </div>
         ))}
+        {loading && <div className="loading">Thinking...</div>}
       </div>
 
       <input
         value={input}
         onChange={e => setInput(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()}
+        onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
         placeholder="Ask a question..."
         maxLength={1200}
       />
-      <div className="footer">
+      <footer>
         <button onClick={reset}>New Chat</button>
-        <button onClick={handleSend} disabled={loading}>Ask AI</button>
-      </div>
+        <button onClick={onClose}>Close</button>
+        <button onClick={send} disabled={loading}>Ask AI</button>
+      </footer>
     </Modal>
   );
 }
 ```
 
 ```tsx
-// Usage on any page — just pass the page name and context builder
+// Usage on any page
 <AskAiModal
   page="tasks"
-  getPageContext={() => ({
+  getContext={() => ({
     items: visibleTasks.map(t => ({
       id: t.id,
       title: t.title,
@@ -646,19 +626,20 @@ function AskAiModal({ page, getPageContext, onAction }) {
     filters: activeFilters,
     meta: pagination,
   })}
-  onAction={handleAiAction}
+  onAction={handleAction}
+  onClose={() => setShowAi(false)}
 />
 ```
 
 ---
 
-## Key Rules
+## Rules
 
-1. **Always send `page`** — it determines which system prompt the AI uses
-2. **Send `context.items` for non-summary pages** — without it the AI has no data and gives generic answers
-3. **Max 25 items** in `context.items` — the BE truncates beyond this
-4. **Max 10 items** in `todos` and `tasksToApprove`
-5. **`context.stats` is optional on summary** — the BE will fetch from DB if you don't send it (but sending it is faster)
-6. **Don't render `meta`** — it's for debugging only
-7. **Map `action` strings to FE navigation** — the BE doesn't know your routes
-8. **The `highlights` array is empty for casual messages** like "hello" — just show the message bubble
+1. **Always send `page`** — determines the AI system prompt
+2. **Send `context.items` for non-summary pages** — without it the AI has nothing to analyze
+3. **Max 25 items, max 10 todos/approvals** — BE truncates beyond this
+4. **`context.stats` is optional on summary** — BE fetches from DB if missing (but sending is faster)
+5. **Don't render `meta`** — it's for debugging only
+6. **Map `action` strings to FE navigation** — the BE doesn't know your routes
+7. **`highlights` is empty for casual messages** ("hello", "thanks") — just show the message bubble
+8. **`tip` is `null` when there's nothing to flag** — hide the tip banner entirely
