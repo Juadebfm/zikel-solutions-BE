@@ -110,7 +110,16 @@ export async function buildApp() {
   await fastify.register(rootRouter);
 
   const stopSafeguardingRiskBackfillScheduler = startSafeguardingRiskBackfillScheduler();
+
+  // Keep Neon database connection warm — prevents serverless cold starts (~1-3s).
+  // Pings every 4 minutes (Neon suspends after ~5 min idle).
+  const DB_KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000;
+  const dbKeepAliveTimer = setInterval(() => {
+    void prisma.$queryRawUnsafe('SELECT 1').catch(() => {});
+  }, DB_KEEPALIVE_INTERVAL_MS);
+
   fastify.addHook('onClose', async () => {
+    clearInterval(dbKeepAliveTimer);
     stopSafeguardingRiskBackfillScheduler();
   });
 
