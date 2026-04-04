@@ -449,6 +449,7 @@ const BASE_RULES = [
   'Ground recommendations in visible context evidence only.',
   'If data is limited, say what is missing and provide safe next steps.',
   'Keep tone calm, supportive, and accountability-focused.',
+  'IMPORTANT: If the user sends a casual or conversational message (e.g. "hello", "hi", "thanks", "good morning"), respond naturally and briefly — greet them back warmly, and optionally mention 1 quick highlight from their context if relevant. Do NOT dump a full operational briefing for greetings or small talk.',
 ].join(' ');
 
 const BLAMING_LANGUAGE_RULES: Array<{ label: string; pattern: RegExp; replacement: string }> = [
@@ -1140,6 +1141,8 @@ function makeSuggestions(page: AiPage, ctx: ResolvedContext) {
 
 // ─── Page-specific fallback answers ──────────────────────────────────────────
 
+const CASUAL_PATTERN = /^\s*(h(ello|i|ey|owdy)|good\s*(morning|afternoon|evening)|thanks?(\s+you)?|yo|sup|what'?s?\s*up|cheers|welcome)\s*[.!?]*\s*$/i;
+
 function buildFallbackAnswer(args: {
   query: string;
   page: AiPage;
@@ -1147,6 +1150,16 @@ function buildFallbackAnswer(args: {
   analysis: AssistantAnalysis;
 }): string {
   const { query, page, ctx, analysis } = args;
+
+  // Don't dump a full briefing for greetings.
+  if (CASUAL_PATTERN.test(query)) {
+    const overdue = (ctx.stats as SummaryStatsContext | null)?.overdue ?? 0;
+    const highlight = overdue > 0
+      ? ` You have ${overdue} overdue task${overdue === 1 ? '' : 's'} — let me know if you'd like help prioritising.`
+      : ' Everything looks on track. How can I help you today?';
+    return `Hello!${highlight}`;
+  }
+
   if (analysis.topPriorities.length > 0) {
     const focus = analysis.topPriorities
       .slice(0, analysis.strengthProfile === 'staff' ? 1 : 2)
