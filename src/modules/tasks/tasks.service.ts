@@ -67,6 +67,11 @@ const APPROVAL_STATUS_LABELS: Record<TaskApprovalStatus, string> = {
   rejected: 'Rejected',
   processing: 'Processing',
 };
+const SUMMARY_ACTIVE_WORKFLOW_STATUSES: TaskStatus[] = [TaskStatus.pending, TaskStatus.in_progress];
+const SUMMARY_EXCLUDED_APPROVAL_BUCKET_STATUSES: TaskApprovalStatus[] = [
+  TaskApprovalStatus.pending_approval,
+  TaskApprovalStatus.rejected,
+];
 
 const TASK_CATEGORY_LABELS: Record<TaskCategory, string> = {
   task_log: 'Task Log',
@@ -191,6 +196,98 @@ function isPrivilegedActor(actor: TaskActorContext) {
 function ownsTask(actor: TaskActorContext, task: Pick<Task, 'createdById' | 'assigneeId'>) {
   if (task.createdById === actor.userId) return true;
   return Boolean(actor.employeeId && task.assigneeId === actor.employeeId);
+}
+
+function buildSummaryPersonalTaskScope(actor: TaskActorContext): Prisma.TaskWhereInput {
+  if (actor.employeeId) {
+    return {
+      AND: [
+        { tenantId: actor.tenantId, deletedAt: null },
+        { OR: [{ assigneeId: actor.employeeId }, { createdById: actor.userId }] },
+      ],
+    };
+  }
+
+  return {
+    tenantId: actor.tenantId,
+    createdById: actor.userId,
+    deletedAt: null,
+  };
+}
+
+function buildSummaryScopeTaskFilter(
+  actor: TaskActorContext,
+  summaryScope: NonNullable<ListTasksQuery['summaryScope']>,
+): Prisma.TaskWhereInput {
+  const { start, end } = getTodayBounds();
+  const personalScope = buildSummaryPersonalTaskScope(actor);
+  const withPersonal = (extra: Prisma.TaskWhereInput): Prisma.TaskWhereInput => ({
+    AND: [personalScope, extra],
+  });
+  const normalWorkflowApprovalScope: Prisma.TaskWhereInput = {
+    approvalStatus: { notIn: SUMMARY_EXCLUDED_APPROVAL_BUCKET_STATUSES },
+  };
+
+  switch (summaryScope) {
+    case 'overdue':
+      return withPersonal({
+        ...normalWorkflowApprovalScope,
+        status: { in: SUMMARY_ACTIVE_WORKFLOW_STATUSES },
+        dueDate: { lt: start },
+      });
+    case 'due_today':
+      return withPersonal({
+        ...normalWorkflowApprovalScope,
+        status: { in: SUMMARY_ACTIVE_WORKFLOW_STATUSES },
+        dueDate: { gte: start, lte: end },
+      });
+    case 'pending_approval':
+      return isPrivilegedActor(actor)
+        ? {
+            tenantId: actor.tenantId,
+            deletedAt: null,
+            approvalStatus: TaskApprovalStatus.pending_approval,
+          }
+        : withPersonal({ approvalStatus: TaskApprovalStatus.pending_approval });
+    case 'rejected':
+      return withPersonal({ approvalStatus: TaskApprovalStatus.rejected });
+    case 'draft':
+      return withPersonal({
+        ...normalWorkflowApprovalScope,
+        status: TaskStatus.pending,
+        dueDate: null,
+      });
+    case 'future':
+      return withPersonal({
+        ...normalWorkflowApprovalScope,
+        status: { in: SUMMARY_ACTIVE_WORKFLOW_STATUSES },
+        dueDate: { gt: end },
+      });
+    case 'rewards': {
+      const rewardsScope: Prisma.TaskWhereInput = isPrivilegedActor(actor)
+        ? { tenantId: actor.tenantId, deletedAt: null }
+        : personalScope;
+      return {
+        AND: [
+          rewardsScope,
+          {
+            deletedAt: null,
+            category: TaskCategory.reward,
+            submittedAt: { not: null },
+            approvalStatus: TaskApprovalStatus.not_required,
+          },
+        ],
+      };
+    }
+    case 'comments':
+      throw httpError(
+        422,
+        'UNSUPPORTED_SUMMARY_SCOPE',
+        'summaryScope=comments is not task-backed. Use announcements endpoint for unread comments.',
+      );
+    default:
+      return { tenantId: actor.tenantId, deletedAt: null };
+  }
 }
 
 type TaskWithReferences = Task & { references?: TaskReference[] };
@@ -957,56 +1054,53 @@ async function ensureTaskRelationsInTenant(
     youngPersonId?: string | null | undefined;
   },
 ) {
-  if (body.assigneeId !== undefined && body.assigneeId !== null) {
-    const employee = await prisma.employee.findFirst({
-      where: {
-        id: body.assigneeId,
-        tenantId,
-        isActive: true,
-      },
-      select: { id: true },
-    });
-    if (!employee) {
-      throw httpError(422, 'ASSIGNEE_NOT_FOUND', 'Assignee does not exist in active tenant.');
-    }
+  // Run all existence checks in parallel instead of sequentially.
+  const [employee, youngPerson, home, vehicle] = await Promise.all([
+    body.assigneeId != null
+      ? prisma.employee.findFirst({
+          where: { id: body.assigneeId, tenantId, isActive: true },
+          select: { id: true },
+        })
+      : null,
+    body.youngPersonId != null
+      ? prisma.youngPerson.findFirst({
+          where: { id: body.youngPersonId, tenantId },
+          select: { id: true },
+        })
+      : null,
+    body.homeId != null
+      ? prisma.home.findFirst({
+          where: { id: body.homeId, tenantId },
+          select: { id: true },
+        })
+      : null,
+    body.vehicleId != null
+      ? prisma.vehicle.findFirst({
+          where: { id: body.vehicleId, tenantId },
+          select: { id: true, homeId: true },
+        })
+      : null,
+  ]);
+
+  if (body.assigneeId != null && !employee) {
+    throw httpError(422, 'ASSIGNEE_NOT_FOUND', 'Assignee does not exist in active tenant.');
+  }
+  if (body.youngPersonId != null && !youngPerson) {
+    throw httpError(422, 'YOUNG_PERSON_NOT_FOUND', 'Young person does not exist in active tenant.');
+  }
+  if (body.homeId != null && !home) {
+    throw httpError(422, 'HOME_NOT_FOUND', 'Home does not exist in active tenant.');
+  }
+  if (body.vehicleId != null && !vehicle) {
+    throw httpError(422, 'VEHICLE_NOT_FOUND', 'Vehicle does not exist in active tenant.');
   }
 
-  if (body.youngPersonId !== undefined && body.youngPersonId !== null) {
-    const youngPerson = await prisma.youngPerson.findFirst({
-      where: { id: body.youngPersonId, tenantId },
-      select: { id: true },
-    });
-    if (!youngPerson) {
-      throw httpError(422, 'YOUNG_PERSON_NOT_FOUND', 'Young person does not exist in active tenant.');
-    }
-  }
-
-  if (body.homeId !== undefined && body.homeId !== null) {
-    const home = await prisma.home.findFirst({
-      where: { id: body.homeId, tenantId },
-      select: { id: true },
-    });
-    if (!home) {
-      throw httpError(422, 'HOME_NOT_FOUND', 'Home does not exist in active tenant.');
-    }
-  }
-
-  if (body.vehicleId !== undefined && body.vehicleId !== null) {
-    const vehicle = await prisma.vehicle.findFirst({
-      where: { id: body.vehicleId, tenantId },
-      select: { id: true, homeId: true },
-    });
-    if (!vehicle) {
-      throw httpError(422, 'VEHICLE_NOT_FOUND', 'Vehicle does not exist in active tenant.');
-    }
-
-    if (body.homeId && vehicle.homeId && vehicle.homeId !== body.homeId) {
-      throw httpError(
-        422,
-        'VEHICLE_HOME_MISMATCH',
-        'Vehicle is linked to a different home in active tenant.',
-      );
-    }
+  if (vehicle && body.homeId && vehicle.homeId && vehicle.homeId !== body.homeId) {
+    throw httpError(
+      422,
+      'VEHICLE_HOME_MISMATCH',
+      'Vehicle is linked to a different home in active tenant.',
+    );
   }
 }
 
@@ -1185,7 +1279,9 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const approvalStatuses = approvalStatusFilter.values as TaskApprovalStatus[];
   const typeFilters = typeFilter.values;
 
-  if (query.scope === 'my_tasks' || query.mine) {
+  if (query.summaryScope) {
+    filters.push(buildSummaryScopeTaskFilter(actor, query.summaryScope));
+  } else if (query.scope === 'my_tasks' || query.mine) {
     filters.push({ createdById: actor.userId });
   } else if (query.scope === 'assigned_to_me') {
     if (!actor.employeeId) {
@@ -1326,7 +1422,7 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const userIdentityMap = await getUserIdentityMap([...createdByIds, ...approverIds]);
   const data = rows.map((row) => toTaskExplorerItem(row, userIdentityMap));
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
     entityType: 'task',
@@ -1349,6 +1445,7 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
       youngPersonId: query.youngPersonId ?? null,
       mine: query.mine ?? null,
       scope: query.scope,
+      summaryScope: query.summaryScope ?? null,
       period: query.period,
     },
   });
@@ -1498,7 +1595,7 @@ export async function getTask(actorUserId: string, taskId: string) {
     respondedAt: task.approvedAt,
   }));
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
     entityType: 'task',
@@ -2117,26 +2214,28 @@ export async function batchArchiveTasks(actorUserId: string, body: BatchArchiveB
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
   const privileged = isPrivilegedActor(actor);
 
-  let processed = 0;
   const failed: Array<{ id: string; reason: string }> = [];
   const deletedAt = new Date();
+  const validIds: string[] = [];
 
   for (const taskId of body.taskIds) {
     const task = taskMap.get(taskId);
     if (!task) {
       failed.push({ id: taskId, reason: 'Task not found.' });
-      continue;
-    }
-    if (!privileged && !ownsTask(actor, task)) {
+    } else if (!privileged && !ownsTask(actor, task)) {
       failed.push({ id: taskId, reason: 'Permission denied.' });
-      continue;
+    } else {
+      validIds.push(taskId);
     }
-    try {
-      await prisma.task.update({ where: { id: taskId }, data: { deletedAt } });
-      processed += 1;
-    } catch {
-      failed.push({ id: taskId, reason: 'Failed to archive task.' });
-    }
+  }
+
+  let processed = 0;
+  if (validIds.length > 0) {
+    const result = await prisma.task.updateMany({
+      where: { id: { in: validIds } },
+      data: { deletedAt },
+    });
+    processed = result.count;
   }
 
   if (processed > 0) {
@@ -2222,28 +2321,27 @@ export async function batchPostponeTasks(actorUserId: string, body: BatchPostpon
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
   const privileged = isPrivilegedActor(actor);
 
-  let processed = 0;
   const failed: Array<{ id: string; reason: string }> = [];
+  const validIds: string[] = [];
 
   for (const taskId of body.taskIds) {
     const task = taskMap.get(taskId);
     if (!task) {
       failed.push({ id: taskId, reason: 'Task not found.' });
-      continue;
-    }
-    if (!privileged && !ownsTask(actor, task)) {
+    } else if (!privileged && !ownsTask(actor, task)) {
       failed.push({ id: taskId, reason: 'Permission denied.' });
-      continue;
+    } else {
+      validIds.push(taskId);
     }
-    try {
-      await prisma.task.update({
-        where: { id: taskId },
-        data: { dueDate: body.dueDate, updatedById: actor.userId },
-      });
-      processed += 1;
-    } catch {
-      failed.push({ id: taskId, reason: 'Failed to postpone task.' });
-    }
+  }
+
+  let processed = 0;
+  if (validIds.length > 0) {
+    const result = await prisma.task.updateMany({
+      where: { id: { in: validIds } },
+      data: { dueDate: body.dueDate, updatedById: actor.userId },
+    });
+    processed = result.count;
   }
 
   if (processed > 0) {
@@ -2286,28 +2384,27 @@ export async function batchReassignTasks(actorUserId: string, body: BatchReassig
   const taskMap = new Map(tasks.map((t) => [t.id, t]));
   const privileged = isPrivilegedActor(actor);
 
-  let processed = 0;
   const failed: Array<{ id: string; reason: string }> = [];
+  const validIds: string[] = [];
 
   for (const taskId of body.taskIds) {
     const task = taskMap.get(taskId);
     if (!task) {
       failed.push({ id: taskId, reason: 'Task not found.' });
-      continue;
-    }
-    if (!privileged && !ownsTask(actor, task)) {
+    } else if (!privileged && !ownsTask(actor, task)) {
       failed.push({ id: taskId, reason: 'Permission denied.' });
-      continue;
+    } else {
+      validIds.push(taskId);
     }
-    try {
-      await prisma.task.update({
-        where: { id: taskId },
-        data: { assigneeId: body.assigneeId, updatedById: actor.userId },
-      });
-      processed += 1;
-    } catch {
-      failed.push({ id: taskId, reason: 'Failed to reassign task.' });
-    }
+  }
+
+  let processed = 0;
+  if (validIds.length > 0) {
+    const result = await prisma.task.updateMany({
+      where: { id: { in: validIds } },
+      data: { assigneeId: body.assigneeId, updatedById: actor.userId },
+    });
+    processed = result.count;
   }
 
   if (processed > 0) {

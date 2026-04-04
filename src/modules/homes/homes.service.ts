@@ -114,7 +114,7 @@ export async function listHomes(actorId: string, query: ListHomesQuery) {
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'home',
@@ -154,7 +154,7 @@ export async function getHome(actorId: string, id: string) {
     throw httpError(404, 'HOME_NOT_FOUND', 'Home not found.');
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'home',

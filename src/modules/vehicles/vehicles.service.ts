@@ -118,7 +118,7 @@ export async function listVehicles(actorUserId: string, query: ListVehiclesQuery
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: tenant.tenantId,
     entityType: 'vehicle',
@@ -151,7 +151,7 @@ export async function getVehicle(actorUserId: string, vehicleId: string) {
     throw httpError(404, 'VEHICLE_NOT_FOUND', 'Vehicle not found.');
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: tenant.tenantId,
     entityType: 'vehicle',

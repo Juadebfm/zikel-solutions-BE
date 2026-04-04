@@ -117,7 +117,7 @@ export async function listYoungPeople(actorId: string, query: ListYoungPeopleQue
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'young_person',
@@ -157,7 +157,7 @@ export async function getYoungPerson(actorId: string, id: string) {
     throw httpError(404, 'YOUNG_PERSON_NOT_FOUND', 'Young person not found.');
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'young_person',

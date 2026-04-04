@@ -19,16 +19,27 @@ function createPrismaClient() {
   });
   const adapter = new PrismaPg(pool);
 
+  const isDev = process.env.NODE_ENV === 'development';
+
   const baseClient = new PrismaClient({
     adapter,
     log: [
       { emit: 'event', level: 'error' },
       { emit: 'event', level: 'warn' },
+      // Enable query logging in dev to surface slow queries.
+      ...(isDev ? [{ emit: 'event' as const, level: 'query' as const }] : []),
     ],
   });
 
   baseClient.$on('error', (e) => logger.error({ msg: 'Prisma error', ...e }));
   baseClient.$on('warn', (e) => logger.warn({ msg: 'Prisma warning', ...e }));
+  if (isDev) {
+    baseClient.$on('query', (e) => {
+      if (e.duration > 100) {
+        logger.warn({ msg: 'Slow query', duration: `${e.duration}ms`, query: e.query });
+      }
+    });
+  }
 
   const client = baseClient.$extends({
     query: {

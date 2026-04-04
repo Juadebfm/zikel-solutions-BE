@@ -7,6 +7,7 @@ import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { setRequestAuditContext } from './lib/request-context.js';
 import swaggerPlugin from './plugins/swagger.js';
+import compressPlugin from './plugins/compress.js';
 import corsPlugin from './plugins/cors.js';
 import helmetPlugin from './plugins/helmet.js';
 import rateLimitPlugin from './plugins/rate-limit.js';
@@ -70,6 +71,7 @@ export async function buildApp() {
 
   // Plugins (order matters — swagger must come first to capture all route schemas)
   await fastify.register(swaggerPlugin);
+  await fastify.register(compressPlugin);
   await fastify.register(helmetPlugin);
   await fastify.register(corsPlugin);
   await fastify.register(rateLimitPlugin);

@@ -414,7 +414,7 @@ export async function listTenantMemberships(
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId,
     entityType: 'tenant_membership',
@@ -827,7 +827,7 @@ export async function listTenantInvites(
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId,
     entityType: 'tenant_invite',
