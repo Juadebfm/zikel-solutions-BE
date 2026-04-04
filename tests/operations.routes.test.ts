@@ -414,6 +414,49 @@ describe('New module routes', () => {
     }));
   });
 
+  it('GET /api/v1/tasks applies summaryScope=pending_approval filter', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?summaryScope=pending_approval',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({
+            tenantId: 'tenant_1',
+            deletedAt: null,
+            approvalStatus: 'pending_approval',
+          }),
+        ]),
+      }),
+    }));
+  });
+
+  it('GET /api/v1/tasks rejects summaryScope=comments on task endpoint', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?summaryScope=comments',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({
+      success: false,
+      error: { code: 'UNSUPPORTED_SUMMARY_SCOPE' },
+    });
+  });
+
   it('GET /api/v1/tasks/:id returns task detail payload', async () => {
     mockTenantContext();
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });

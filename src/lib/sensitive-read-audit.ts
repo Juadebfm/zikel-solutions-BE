@@ -44,11 +44,11 @@ function summarizeQuery(query?: Record<string, unknown>): Prisma.JsonObject | nu
 
 /**
  * Best-effort audit trail for sensitive read/access events.
- * Read access should not fail user requests if audit persistence is unavailable.
+ * Fire-and-forget — audit writes must never block or slow down user responses.
  */
-export async function logSensitiveReadAccess(args: SensitiveReadAuditArgs) {
-  try {
-    await prisma.auditLog.create({
+export function logSensitiveReadAccess(args: SensitiveReadAuditArgs) {
+  void prisma.auditLog
+    .create({
       data: {
         tenantId: args.tenantId,
         userId: args.actorUserId,
@@ -62,15 +62,15 @@ export async function logSensitiveReadAccess(args: SensitiveReadAuditArgs) {
           query: summarizeQuery(args.query),
         },
       },
+    })
+    .catch((error) => {
+      logger.warn({
+        msg: 'Sensitive-read audit write failed.',
+        source: args.source,
+        entityType: args.entityType,
+        actorUserId: args.actorUserId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     });
-  } catch (error) {
-    logger.warn({
-      msg: 'Sensitive-read audit write failed.',
-      source: args.source,
-      entityType: args.entityType,
-      actorUserId: args.actorUserId,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
 }
 

@@ -122,7 +122,7 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'employee',
@@ -163,7 +163,7 @@ export async function getEmployee(actorId: string, id: string) {
     throw httpError(404, 'EMPLOYEE_NOT_FOUND', 'Employee not found.');
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId: actorId,
     tenantId: tenant.tenantId,
     entityType: 'employee',

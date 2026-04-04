@@ -162,6 +162,9 @@ export const ListTasksQuerySchema = z.object({
   vehicleId: z.string().min(1).optional(),
   youngPersonId: z.string().min(1).optional(),
   scope: z.enum(['my_tasks', 'assigned_to_me', 'approvals', 'all']).default('all'),
+  summaryScope: z
+    .enum(['overdue', 'due_today', 'pending_approval', 'rejected', 'draft', 'future', 'comments', 'rewards'])
+    .optional(),
   period: z
     .enum(['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'future', 'all'])
     .default('all'),
@@ -273,6 +276,10 @@ export const listTasksQueryJson = {
     vehicleId: { type: 'string' },
     youngPersonId: { type: 'string' },
     scope: { type: 'string', enum: ['my_tasks', 'assigned_to_me', 'approvals', 'all'], default: 'all' },
+    summaryScope: {
+      type: 'string',
+      enum: ['overdue', 'due_today', 'pending_approval', 'rejected', 'draft', 'future', 'comments', 'rewards'],
+    },
     period: {
       type: 'string',
       enum: ['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'future', 'all'],

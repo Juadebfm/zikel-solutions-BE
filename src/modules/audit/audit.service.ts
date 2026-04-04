@@ -154,7 +154,7 @@ export async function listAuditLogs(actorUserId: string, query: ListAuditLogsQue
     }),
   ]);
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
     entityType: 'audit_log',
@@ -201,7 +201,7 @@ export async function getAuditLog(actorUserId: string, auditLogId: string, reque
     throw httpError(404, 'AUDIT_LOG_NOT_FOUND', 'Audit log entry not found.');
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
     entityType: 'audit_log',
@@ -449,7 +449,7 @@ export async function listSecurityAlerts(actorUserId: string, lookbackHours: num
     });
   }
 
-  await logSensitiveReadAccess({
+  logSensitiveReadAccess({
     actorUserId,
     tenantId: actor.tenantId,
     entityType: 'security_alert',
