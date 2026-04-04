@@ -5,6 +5,8 @@ import { logger } from './logger.js';
 import { queueAndDispatchSecurityAlert } from './security-alert-pipeline.js';
 import { getRequestAuditContext } from './request-context.js';
 import { enrichAuditLogCreateData } from './audit-metadata.js';
+import { tenantScopeExtension } from './tenant-scope.js';
+import { invalidateFormTemplatesCache } from './cache.js';
 
 function createPrismaClient() {
   // Runtime uses the pooled DATABASE_URL (PgBouncer on Neon).
@@ -41,8 +43,20 @@ function createPrismaClient() {
     });
   }
 
-  const client = baseClient.$extends({
+  const client = baseClient.$extends(tenantScopeExtension).$extends({
     query: {
+      formTemplate: {
+        async create({ args, query }) {
+          const result = await query(args);
+          invalidateFormTemplatesCache();
+          return result;
+        },
+        async update({ args, query }) {
+          const result = await query(args);
+          invalidateFormTemplatesCache();
+          return result;
+        },
+      },
       auditLog: {
         async create({ args, query }) {
           const requestContext = getRequestAuditContext();

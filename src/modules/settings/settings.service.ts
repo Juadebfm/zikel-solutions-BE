@@ -1,6 +1,7 @@
 import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { invalidateSettingsCache } from '../../lib/cache.js';
 import type {
   UpdateOrganisationSettingsBody,
   UpdateSettingsNotificationsBody,
@@ -123,6 +124,7 @@ export async function updateOrganisationSettings(actorUserId: string, body: Upda
     },
   });
 
+  invalidateSettingsCache(tenantContext.tenantId);
   return mapOrganisationSettings(tenant, settings);
 }
 
@@ -162,5 +164,6 @@ export async function updateSettingsNotifications(actorUserId: string, body: Upd
     },
   });
 
+  invalidateSettingsCache(tenantContext.tenantId);
   return mapNotificationSettings(settings);
 }
