@@ -2,6 +2,7 @@ import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { invalidateRolesCache } from '../../lib/cache.js';
 import type { CreateRoleBody, ListRolesQuery, UpdateRoleBody } from './roles.schema.js';
 
 const ROLE_INCLUDE = {
@@ -103,6 +104,7 @@ export async function createRole(actorId: string, body: CreateRoleBody) {
       },
     });
 
+    invalidateRolesCache(tenant.tenantId);
     return mapRole(role);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -148,6 +150,7 @@ export async function updateRole(actorId: string, id: string, body: UpdateRoleBo
       },
     });
 
+    invalidateRolesCache(tenant.tenantId);
     return mapRole(role);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -185,5 +188,6 @@ export async function deactivateRole(actorId: string, id: string) {
     },
   });
 
+  invalidateRolesCache(tenant.tenantId);
   return { message: 'Role deactivated.' };
 }
