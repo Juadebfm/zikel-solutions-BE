@@ -274,14 +274,36 @@ function toDisplayName(firstName?: string | null, lastName?: string | null) {
   return `${firstName ?? ''} ${lastName ?? ''}`.trim();
 }
 
-function parseDelimitedValues(raw: string | undefined, valid: Set<string>) {
-  if (!raw) return [];
-  return raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter((item): item is string => Boolean(item))
-    .filter((item, index, list) => list.indexOf(item) === index)
-    .filter((item) => valid.has(item));
+function normalizeFilterToken(raw: string) {
+  return raw.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function parseDelimitedValues(
+  raw: string | undefined,
+  valid: Set<string>,
+  aliases: Record<string, string> = {},
+) {
+  if (!raw) return { values: [] as string[], invalid: [] as string[] };
+
+  const values: string[] = [];
+  const invalid: string[] = [];
+
+  for (const item of raw.split(',')) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+
+    const normalized = normalizeFilterToken(trimmed);
+    const resolved = aliases[normalized] ?? normalized;
+
+    if (!valid.has(resolved)) {
+      if (!invalid.includes(trimmed)) invalid.push(trimmed);
+      continue;
+    }
+
+    if (!values.includes(resolved)) values.push(resolved);
+  }
+
+  return { values, invalid };
 }
 
 function normalizeTaskCategoryInput(raw: CreateTaskBody['category'] | UpdateTaskBody['category']) {
@@ -343,6 +365,8 @@ function periodToRange(period: ListTasksQuery['period']) {
       const to = new Date(Date.UTC(now.getUTCFullYear(), 11, 31, 23, 59, 59, 999));
       return { from, to };
     }
+    case 'future':
+      return { from: now, to: null };
     case 'all':
     default:
       return { from: null, to: null };
@@ -1119,10 +1143,47 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const actor = await resolveActorContext(actorUserId);
   const filters: Prisma.TaskWhereInput[] = [{ tenantId: actor.tenantId }];
   const privileged = isPrivilegedActor(actor);
-  const lifecycleStatuses = parseDelimitedValues(query.status, EXPLORER_STATUS_VALUES);
-  const explorerCategories = parseDelimitedValues(query.category, EXPLORER_CATEGORY_VALUES);
-  const approvalStatuses = parseDelimitedValues(query.approvalStatus, EXPLORER_APPROVAL_STATUS_VALUES) as TaskApprovalStatus[];
-  const typeFilters = parseDelimitedValues(query.type, EXPLORER_TYPE_VALUES);
+  const lifecycleStatusFilter = parseDelimitedValues(query.status, EXPLORER_STATUS_VALUES);
+  const categoryFilter = parseDelimitedValues(query.category, EXPLORER_CATEGORY_VALUES);
+  const approvalStatusFilter = parseDelimitedValues(query.approvalStatus, EXPLORER_APPROVAL_STATUS_VALUES, {
+    sent_for_approval: TaskApprovalStatus.pending_approval,
+    awaiting_approval: TaskApprovalStatus.pending_approval,
+  });
+  const typeFilter = parseDelimitedValues(query.type, EXPLORER_TYPE_VALUES);
+
+  if (lifecycleStatusFilter.invalid.length > 0) {
+    throw httpError(
+      422,
+      'INVALID_STATUS_FILTER',
+      `Invalid status filter value(s): ${lifecycleStatusFilter.invalid.join(', ')}.`,
+    );
+  }
+  if (categoryFilter.invalid.length > 0) {
+    throw httpError(
+      422,
+      'INVALID_CATEGORY_FILTER',
+      `Invalid category filter value(s): ${categoryFilter.invalid.join(', ')}.`,
+    );
+  }
+  if (approvalStatusFilter.invalid.length > 0) {
+    throw httpError(
+      422,
+      'INVALID_APPROVAL_STATUS_FILTER',
+      `Invalid approvalStatus filter value(s): ${approvalStatusFilter.invalid.join(', ')}.`,
+    );
+  }
+  if (typeFilter.invalid.length > 0) {
+    throw httpError(
+      422,
+      'INVALID_TYPE_FILTER',
+      `Invalid type filter value(s): ${typeFilter.invalid.join(', ')}.`,
+    );
+  }
+
+  const lifecycleStatuses = lifecycleStatusFilter.values;
+  const explorerCategories = categoryFilter.values;
+  const approvalStatuses = approvalStatusFilter.values as TaskApprovalStatus[];
+  const typeFilters = typeFilter.values;
 
   if (query.scope === 'my_tasks' || query.mine) {
     filters.push({ createdById: actor.userId });

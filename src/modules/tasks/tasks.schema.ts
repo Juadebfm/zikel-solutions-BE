@@ -163,7 +163,7 @@ export const ListTasksQuerySchema = z.object({
   youngPersonId: z.string().min(1).optional(),
   scope: z.enum(['my_tasks', 'assigned_to_me', 'approvals', 'all']).default('all'),
   period: z
-    .enum(['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'all'])
+    .enum(['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'future', 'all'])
     .default('all'),
   dateFrom: QueryDateSchema,
   dateTo: QueryDateSchema,
@@ -275,7 +275,7 @@ export const listTasksQueryJson = {
     scope: { type: 'string', enum: ['my_tasks', 'assigned_to_me', 'approvals', 'all'], default: 'all' },
     period: {
       type: 'string',
-      enum: ['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'all'],
+      enum: ['today', 'yesterday', 'last_7_days', 'this_week', 'this_month', 'this_year', 'last_month', 'future', 'all'],
       default: 'all',
     },
     dateFrom: { type: 'string', format: 'date-time' },

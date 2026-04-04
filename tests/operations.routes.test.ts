@@ -343,6 +343,77 @@ describe('New module routes', () => {
     });
   });
 
+  it('GET /api/v1/tasks applies approvalStatus filter', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?scope=all&approvalStatus=approved',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: [],
+      meta: { total: 0, page: 1, pageSize: 20, totalPages: 1 },
+    });
+    expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({ approvalStatus: { in: ['approved'] } }),
+        ]),
+      }),
+    }));
+  });
+
+  it('GET /api/v1/tasks accepts approvalStatus sent_for_approval alias', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?scope=all&approvalStatus=sent_for_approval',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({ approvalStatus: { in: ['pending_approval'] } }),
+        ]),
+      }),
+    }));
+  });
+
+  it('GET /api/v1/tasks accepts period=future and applies dueDate lower-bound filter', async () => {
+    mockTenantContext();
+    mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
+    mockPrisma.task.count.mockResolvedValueOnce(0);
+    mockPrisma.task.findMany.mockResolvedValueOnce([]);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/v1/tasks?scope=all&period=future',
+      headers: authHeader(),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([
+          expect.objectContaining({ dueDate: expect.objectContaining({ gte: expect.any(Date) }) }),
+        ]),
+      }),
+    }));
+  });
+
   it('GET /api/v1/tasks/:id returns task detail payload', async () => {
     mockTenantContext();
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1' });
