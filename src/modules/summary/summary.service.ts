@@ -191,6 +191,23 @@ function buildPersonalTaskScope(user: UserContext): Prisma.TaskWhereInput {
   };
 }
 
+async function listCommentedTaskIdsForTenant(tenantId: string): Promise<string[]> {
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      tenantId,
+      entityType: 'task_action',
+      entityId: { not: null },
+      metadata: { path: ['action'], equals: 'comment' },
+    },
+    select: { entityId: true },
+    distinct: ['entityId'],
+  });
+
+  return rows
+    .map((row) => row.entityId)
+    .filter((entityId): entityId is string => typeof entityId === 'string' && entityId.length > 0);
+}
+
 function buildTaskOrderBy(query: SummaryListQuery): Prisma.TaskOrderByWithRelationInput[] {
   if (query.sortBy && TODO_SORTABLE_FIELDS.has(query.sortBy)) {
     return [{ [query.sortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
@@ -783,7 +800,7 @@ async function buildTodoDetailMaps(args: {
       where: {
         tenantId: args.tenantId,
         entityId: { in: taskIds },
-        entityType: { in: ['task', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
+        entityType: { in: ['task', 'task_action', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
       },
       orderBy: { createdAt: 'desc' },
       take: 1000,
@@ -1142,7 +1159,6 @@ export async function getSummaryStats(userId: string) {
   const user = await getUserContext(userId);
   const scope = buildPersonalTaskScope(user);
   const { start, end } = getTodayBounds();
-  const now = new Date();
 
   const withScope = (extra: Prisma.TaskWhereInput): Prisma.TaskWhereInput => ({
     AND: [scope, extra],
@@ -1154,6 +1170,14 @@ export async function getSummaryStats(userId: string) {
   const rewardsScope: Prisma.TaskWhereInput = canApprove(user)
     ? { tenantId: user.tenantId, deletedAt: null }
     : scope;
+
+  const commentsPromise = (async () => {
+    const commentedTaskIds = await listCommentedTaskIdsForTenant(user.tenantId);
+    if (commentedTaskIds.length === 0) return 0;
+    return prisma.task.count({
+      where: withScope({ id: { in: commentedTaskIds } }),
+    });
+  })();
 
   const [overdue, dueToday, pendingApproval, rejected, draft, future, comments, pendingRewards] =
     await Promise.all([
@@ -1197,15 +1221,7 @@ export async function getSummaryStats(userId: string) {
           dueDate: { gt: end },
         }),
       }),
-      prisma.announcement.count({
-        where: {
-          tenantId: user.tenantId,
-          deletedAt: null,
-          publishedAt: { lte: now },
-          OR: [{ expiresAt: null }, { expiresAt: { gte: now } }],
-          reads: { none: { userId: user.id } },
-        },
-      }),
+      commentsPromise,
       prisma.task.count({
         where: {
           AND: [

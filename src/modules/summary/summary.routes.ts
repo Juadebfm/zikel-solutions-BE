@@ -31,7 +31,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
       summary: 'My summary stats',
       description:
         'Returns KPI counts for the authenticated user: overdue, due today, pending approval, ' +
-        'rejected, draft, future tasks, unread announcements, and pending submitted reward tasks.',
+        'rejected, draft, future tasks, tasks with comments, and pending submitted reward tasks.',
       response: {
         200: {
           type: 'object',

@@ -215,9 +215,27 @@ function buildSummaryPersonalTaskScope(actor: TaskActorContext): Prisma.TaskWher
   };
 }
 
+async function listCommentedTaskIdsForTenant(tenantId: string): Promise<string[]> {
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      tenantId,
+      entityType: 'task_action',
+      entityId: { not: null },
+      metadata: { path: ['action'], equals: 'comment' },
+    },
+    select: { entityId: true },
+    distinct: ['entityId'],
+  });
+
+  return rows
+    .map((row) => row.entityId)
+    .filter((entityId): entityId is string => typeof entityId === 'string' && entityId.length > 0);
+}
+
 function buildSummaryScopeTaskFilter(
   actor: TaskActorContext,
   summaryScope: NonNullable<ListTasksQuery['summaryScope']>,
+  commentedTaskIds: string[] = [],
 ): Prisma.TaskWhereInput {
   const { start, end } = getTodayBounds();
   const personalScope = buildSummaryPersonalTaskScope(actor);
@@ -280,10 +298,10 @@ function buildSummaryScopeTaskFilter(
       };
     }
     case 'comments':
-      throw httpError(
-        422,
-        'UNSUPPORTED_SUMMARY_SCOPE',
-        'summaryScope=comments is not task-backed. Use announcements endpoint for unread comments.',
+      return withPersonal(
+        commentedTaskIds.length > 0
+          ? { id: { in: commentedTaskIds } }
+          : { id: '__none__' },
       );
     default:
       return { tenantId: actor.tenantId, deletedAt: null };
@@ -1278,9 +1296,12 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   const explorerCategories = categoryFilter.values;
   const approvalStatuses = approvalStatusFilter.values as TaskApprovalStatus[];
   const typeFilters = typeFilter.values;
+  const commentedTaskIds = query.summaryScope === 'comments'
+    ? await listCommentedTaskIdsForTenant(actor.tenantId)
+    : [];
 
   if (query.summaryScope) {
-    filters.push(buildSummaryScopeTaskFilter(actor, query.summaryScope));
+    filters.push(buildSummaryScopeTaskFilter(actor, query.summaryScope, commentedTaskIds));
   } else if (query.scope === 'my_tasks' || query.mine) {
     filters.push({ createdById: actor.userId });
   } else if (query.scope === 'assigned_to_me') {
@@ -1534,7 +1555,7 @@ export async function getTask(actorUserId: string, taskId: string) {
     where: {
       tenantId: actor.tenantId,
       entityId: task.id,
-      entityType: { in: ['task', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
+      entityType: { in: ['task', 'task_action', 'task_approval', 'task_approval_review', 'task_approval_batch'] },
     },
     orderBy: { createdAt: 'desc' },
     take: 100,
