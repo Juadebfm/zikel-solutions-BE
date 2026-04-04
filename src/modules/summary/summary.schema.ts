@@ -174,7 +174,7 @@ export const todoItemJson = {
     domain: { type: 'string', example: 'Compliance' },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log'],
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log', 'reward'],
     },
     categoryLabel: { type: 'string', example: 'Task Log' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
@@ -345,7 +345,7 @@ export const tasksToApproveItemJson = {
     domain: { type: 'string', example: 'Staffing' },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log'],
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log', 'reward'],
     },
     categoryLabel: { type: 'string', example: 'Document' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },
@@ -531,7 +531,7 @@ export const taskToApproveDetailJson = {
     formGroup: { type: 'string', nullable: true },
     category: {
       type: 'string',
-      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log'],
+      enum: ['task_log', 'document', 'system_link', 'checklist', 'incident', 'other', 'daily_log', 'reward'],
     },
     categoryLabel: { type: 'string' },
     status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] },

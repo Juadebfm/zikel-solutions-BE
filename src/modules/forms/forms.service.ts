@@ -180,6 +180,7 @@ function inferTaskCategory(template: { key: string; group: string; name: string 
   if (haystack.includes('reg 44') || haystack.includes('reg44')) return 'reg44' as const;
   if (haystack.includes('compliance')) return 'compliance' as const;
   if (haystack.includes('report')) return 'report' as const;
+  if (haystack.includes('reward')) return 'reward' as const;
   return 'general' as const;
 }
 

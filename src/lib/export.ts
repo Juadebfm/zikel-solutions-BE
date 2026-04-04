@@ -12,7 +12,7 @@ export type ExportOptions = {
   subtitle?: string;
   columns: ExportColumn[];
   rows: Record<string, unknown>[];
-  format: 'pdf' | 'excel';
+  format: 'pdf' | 'excel' | 'csv';
 };
 
 function formatCellValue(value: unknown): string {
@@ -250,6 +250,25 @@ export async function generateExcel(options: ExportOptions): Promise<Buffer> {
   return Buffer.from(buffer);
 }
 
+// ─── CSV Generation ──────────────────────────────────────────────────────────
+
+function escapeCsvValue(value: unknown): string {
+  const raw = formatCellValue(value);
+  if (raw.includes('"') || raw.includes(',') || raw.includes('\n')) {
+    return `"${raw.replace(/"/g, '""')}"`;
+  }
+  return raw;
+}
+
+export async function generateCsv(options: ExportOptions): Promise<Buffer> {
+  const headers = options.columns.map((column) => escapeCsvValue(column.header)).join(',');
+  const rows = options.rows.map((row) => (
+    options.columns.map((column) => escapeCsvValue(row[column.key])).join(',')
+  ));
+  const csv = [headers, ...rows].join('\n');
+  return Buffer.from(csv, 'utf-8');
+}
+
 // ─── Unified Export ──────────────────────────────────────────────────────────
 
 export async function generateExport(options: ExportOptions): Promise<{
@@ -266,6 +285,15 @@ export async function generateExport(options: ExportOptions): Promise<{
       buffer,
       contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       filename: `${safeTitle}-${dateSuffix}.xlsx`,
+    };
+  }
+
+  if (options.format === 'csv') {
+    const buffer = await generateCsv(options);
+    return {
+      buffer,
+      contentType: 'text/csv; charset=utf-8',
+      filename: `${safeTitle}-${dateSuffix}.csv`,
     };
   }
 
