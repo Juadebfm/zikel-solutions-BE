@@ -559,16 +559,29 @@ model OtpCode {
 // ─── Care Groups & Homes ──────────────────────────────────────────────────────
 
 model CareGroup {
-  id          String   @id @default(cuid())
-  tenantId    String
-  name        String
-  description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  tenantId       String
+  name           String
+  description    String?
+  type           String?
+  managerName    String?
+  contactName    String?
+  phoneNumber    String?
+  email          String?
+  fax            String?
+  website        String?
+  addressLine1   String?
+  addressLine2   String?
+  city           String?
+  county         String?
+  postcode       String?
+  country        String?
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  homes       Home[]
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  homes          Home[]
 
   @@unique([tenantId, name])
   @@index([tenantId])

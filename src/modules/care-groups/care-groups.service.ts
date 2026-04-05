@@ -8,18 +8,31 @@ import type {
   UpdateCareGroupBody,
 } from './care-groups.schema.js';
 
-function mapCareGroup(group: {
-  id: string;
-  name: string;
-  description: string | null;
-  isActive: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}) {
+const CARE_GROUP_INCLUDE = {
+  _count: { select: { homes: true } },
+} as const;
+
+function mapCareGroup(
+  group: Prisma.CareGroupGetPayload<{ include: typeof CARE_GROUP_INCLUDE }>,
+) {
   return {
     id: group.id,
     name: group.name,
     description: group.description,
+    type: group.type,
+    managerName: group.managerName,
+    contactName: group.contactName,
+    phoneNumber: group.phoneNumber,
+    email: group.email,
+    fax: group.fax,
+    website: group.website,
+    addressLine1: group.addressLine1,
+    addressLine2: group.addressLine2,
+    city: group.city,
+    county: group.county,
+    postcode: group.postcode,
+    country: group.country,
+    homesCount: group._count.homes,
     isActive: group.isActive,
     createdAt: group.createdAt,
     updatedAt: group.updatedAt,
@@ -36,6 +49,8 @@ export async function listCareGroups(actorId: string, query: ListCareGroupsQuery
           OR: [
             { name: { contains: query.search, mode: 'insensitive' } },
             { description: { contains: query.search, mode: 'insensitive' } },
+            { managerName: { contains: query.search, mode: 'insensitive' } },
+            { city: { contains: query.search, mode: 'insensitive' } },
           ],
         }
       : {}),
@@ -46,6 +61,7 @@ export async function listCareGroups(actorId: string, query: ListCareGroupsQuery
     prisma.careGroup.count({ where }),
     prisma.careGroup.findMany({
       where,
+      include: CARE_GROUP_INCLUDE,
       orderBy: { name: 'asc' },
       skip,
       take: query.pageSize,
@@ -67,6 +83,7 @@ export async function getCareGroup(actorId: string, id: string) {
   const tenant = await requireTenantContext(actorId);
   const group = await prisma.careGroup.findFirst({
     where: { id, tenantId: tenant.tenantId },
+    include: CARE_GROUP_INCLUDE,
   });
   if (!group) {
     throw httpError(404, 'CARE_GROUP_NOT_FOUND', 'Care group not found.');
@@ -74,8 +91,18 @@ export async function getCareGroup(actorId: string, id: string) {
   return mapCareGroup(group);
 }
 
+const CONTACT_FIELDS = [
+  'type', 'managerName', 'contactName', 'phoneNumber', 'email', 'fax',
+  'website', 'addressLine1', 'addressLine2', 'city', 'county', 'postcode', 'country',
+] as const;
+
 export async function createCareGroup(actorId: string, body: CreateCareGroupBody) {
   const tenant = await requireTenantContext(actorId);
+
+  const contactData: Record<string, string | null> = {};
+  for (const field of CONTACT_FIELDS) {
+    if (body[field] !== undefined) contactData[field] = body[field] ?? null;
+  }
 
   try {
     const group = await prisma.careGroup.create({
@@ -83,7 +110,9 @@ export async function createCareGroup(actorId: string, body: CreateCareGroupBody
         tenantId: tenant.tenantId,
         name: body.name,
         description: body.description ?? null,
+        ...contactData,
       },
+      include: CARE_GROUP_INCLUDE,
     });
 
     await prisma.auditLog.create({
@@ -123,10 +152,17 @@ export async function updateCareGroup(actorId: string, id: string, body: UpdateC
   if (body.description !== undefined) updateData.description = body.description;
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
+  for (const field of CONTACT_FIELDS) {
+    if ((body as Record<string, unknown>)[field] !== undefined) {
+      (updateData as Record<string, unknown>)[field] = (body as Record<string, unknown>)[field] ?? null;
+    }
+  }
+
   try {
     const updated = await prisma.careGroup.update({
       where: { id },
       data: updateData,
+      include: CARE_GROUP_INCLUDE,
     });
 
     await prisma.auditLog.create({
