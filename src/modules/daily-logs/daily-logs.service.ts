@@ -24,18 +24,36 @@ export async function createDailyLog(actorUserId: string, body: CreateDailyLogBo
 
   const noteDate = new Date(body.noteDate);
 
+  // Map relatesTo to the appropriate task field or reference.
+  const relatesToType = body.relatesTo?.type;
+  const relatesToId = body.relatesTo?.id;
+
+  // Build a reference for entity types not directly on the Task model.
+  const references =
+    relatesToType === 'employee' || relatesToType === 'home_event'
+      ? [
+          {
+            type: 'entity' as const,
+            entityType: relatesToType === 'employee' ? ('employee' as const) : ('home' as const),
+            entityId: relatesToId!,
+            label: relatesToType === 'employee' ? 'Related employee' : 'Related event',
+          },
+        ]
+      : undefined;
+
   return tasksService.createTask(actorUserId, {
     title,
     description: body.note,
     category: 'daily_log',
     homeId: body.homeId,
-    youngPersonId: body.relatesTo?.type === 'young_person' ? body.relatesTo.id : undefined,
-    vehicleId: body.relatesTo?.type === 'vehicle' ? body.relatesTo.id : undefined,
+    youngPersonId: relatesToType === 'young_person' ? relatesToId : undefined,
+    vehicleId: relatesToType === 'vehicle' ? relatesToId : undefined,
     dueDate: null,
     dueAt: null,
     formTemplateKey: body.triggerTaskFormKey,
     priority: 'medium',
     submittedAt: noteDate,
+    references,
     submissionPayload: {
       dailyLogCategory: body.category,
       noteDate: body.noteDate,
@@ -89,9 +107,16 @@ export async function updateDailyLog(actorUserId: string, id: string, body: Upda
     if (body.relatesTo === null) {
       update.youngPersonId = null;
       update.vehicleId = null;
+    } else if (body.relatesTo.type === 'young_person') {
+      update.youngPersonId = body.relatesTo.id;
+      update.vehicleId = null;
+    } else if (body.relatesTo.type === 'vehicle') {
+      update.vehicleId = body.relatesTo.id;
+      update.youngPersonId = null;
     } else {
-      update.youngPersonId = body.relatesTo.type === 'young_person' ? body.relatesTo.id : null;
-      update.vehicleId = body.relatesTo.type === 'vehicle' ? body.relatesTo.id : null;
+      // employee / home_event — stored in submissionPayload, not as FK
+      update.youngPersonId = null;
+      update.vehicleId = null;
     }
   }
 

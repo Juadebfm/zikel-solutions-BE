@@ -2,13 +2,15 @@ import { z } from 'zod';
 
 // ─── Zod Schemas ─────────────────────────────────────────────────────────────
 
+const RELATES_TO_TYPES = ['young_person', 'vehicle', 'employee', 'home_event'] as const;
+
 export const CreateDailyLogBodySchema = z
   .object({
     homeId: z.string().min(1),
     relatesTo: z
       .union([
         z.object({
-          type: z.enum(['young_person', 'vehicle']),
+          type: z.enum(RELATES_TO_TYPES),
           id: z.string().min(1),
         }).strict(),
         z.null(),
@@ -30,7 +32,7 @@ export const UpdateDailyLogBodySchema = z
     homeId: z.string().min(1).optional(),
     relatesTo: z
       .object({
-        type: z.enum(['young_person', 'vehicle']),
+        type: z.enum(RELATES_TO_TYPES),
         id: z.string().min(1),
       })
       .strict()
@@ -74,7 +76,7 @@ export const createDailyLogBodyJson = {
           required: ['type', 'id'],
           additionalProperties: false,
           properties: {
-            type: { type: 'string', enum: ['young_person', 'vehicle'] },
+            type: { type: 'string', enum: ['young_person', 'vehicle', 'employee', 'home_event'] },
             id: { type: 'string', minLength: 1 },
           },
         },
@@ -100,7 +102,7 @@ export const updateDailyLogBodyJson = {
       required: ['type', 'id'],
       additionalProperties: false,
       properties: {
-        type: { type: 'string', enum: ['young_person', 'vehicle'] },
+        type: { type: 'string', enum: ['young_person', 'vehicle', 'employee', 'home_event'] },
         id: { type: 'string', minLength: 1 },
       },
     },
