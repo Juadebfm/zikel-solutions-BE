@@ -17,11 +17,11 @@ function buildPaginationMeta(total: number, page: number, pageSize: number) {
   };
 }
 
-function mapCalendarEvent(
-  row: Prisma.HomeEventGetPayload<{
-    include: { home: { select: { id: true; name: true } } };
-  }>,
-) {
+type CalendarEventRow = Prisma.HomeEventGetPayload<{
+  include: { home: { select: { id: true; name: true; careGroupId: true; careGroup: { select: { id: true; name: true } } } } };
+}>;
+
+function mapCalendarEvent(row: CalendarEventRow) {
   return {
     id: row.id,
     title: row.title,
@@ -31,6 +31,8 @@ function mapCalendarEvent(
     endAt: row.endsAt,
     homeId: row.homeId,
     homeName: row.home.name,
+    careGroupId: row.home.careGroupId,
+    careGroupName: row.home.careGroup?.name ?? null,
     attendeeIds: row.attendeeIds,
     recurrence: row.recurrence,
     allDay: row.allDay,
@@ -64,6 +66,7 @@ export async function listCalendarEvents(actorUserId: string, query: ListCalenda
   };
 
   if (query.homeId) where.homeId = query.homeId;
+  if (query.careGroupId) where.home = { careGroupId: query.careGroupId };
   if (query.type) where.type = query.type;
   if (query.dateFrom || query.dateTo) {
     where.startsAt = {};
@@ -78,7 +81,7 @@ export async function listCalendarEvents(actorUserId: string, query: ListCalenda
       skip,
       take: query.pageSize,
       orderBy: { startsAt: 'asc' },
-      include: { home: { select: { id: true, name: true } } },
+      include: { home: { select: { id: true, name: true, careGroupId: true, careGroup: { select: { id: true, name: true } } } } },
     }),
   ]);
 
@@ -93,7 +96,7 @@ export async function getCalendarEvent(actorUserId: string, id: string) {
 
   const row = await prisma.homeEvent.findFirst({
     where: { id, tenantId: tenant.tenantId },
-    include: { home: { select: { id: true, name: true } } },
+    include: { home: { select: { id: true, name: true, careGroupId: true, careGroup: { select: { id: true, name: true } } } } },
   });
 
   if (!row) {
@@ -121,7 +124,7 @@ export async function createCalendarEvent(actorUserId: string, body: CreateCalen
       recurrence: (body.recurrence ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
       allDay: body.allDay,
     },
-    include: { home: { select: { id: true, name: true } } },
+    include: { home: { select: { id: true, name: true, careGroupId: true, careGroup: { select: { id: true, name: true } } } } },
   });
 
   await prisma.auditLog.create({
@@ -176,7 +179,7 @@ export async function updateCalendarEvent(actorUserId: string, id: string, body:
   const updated = await prisma.homeEvent.update({
     where: { id },
     data: updateData,
-    include: { home: { select: { id: true, name: true } } },
+    include: { home: { select: { id: true, name: true, careGroupId: true, careGroup: { select: { id: true, name: true } } } } },
   });
 
   await prisma.auditLog.create({

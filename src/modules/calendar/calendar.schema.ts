@@ -12,6 +12,7 @@ const EventTypeSchema = z.enum(['shift', 'appointment', 'meeting', 'deadline', '
 
 export const ListCalendarEventsQuerySchema = z.object({
   homeId: z.string().min(1).optional(),
+  careGroupId: z.string().min(1).optional(),
   dateFrom: QueryDateSchema,
   dateTo: QueryDateSchema,
   type: EventTypeSchema.optional(),
@@ -57,6 +58,7 @@ export const listCalendarEventsQueryJson = {
   additionalProperties: false,
   properties: {
     homeId: { type: 'string' },
+    careGroupId: { type: 'string' },
     dateFrom: { type: 'string', format: 'date-time' },
     dateTo: { type: 'string', format: 'date-time' },
     type: { type: 'string', enum: ['shift', 'appointment', 'meeting', 'deadline', 'other'] },
