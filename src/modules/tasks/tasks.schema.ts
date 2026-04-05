@@ -578,6 +578,7 @@ export const BatchPostponeBodySchema = z.object({
 export const BatchReassignBodySchema = z.object({
   taskIds: z.array(z.string().min(1)).min(1).max(100),
   assigneeId: z.string().min(1),
+  dueDate: z.coerce.date().nullable().optional(),
   reason: z.string().max(2000).optional(),
 });
 
@@ -633,6 +634,7 @@ export const batchReassignBodyJson = {
       items: { type: 'string', minLength: 1 },
     },
     assigneeId: { type: 'string', minLength: 1 },
+    dueDate: { type: ['string', 'null'], format: 'date-time' },
     reason: { type: 'string', maxLength: 2000 },
   },
 } as const;
