@@ -71,7 +71,7 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         401: { $ref: 'ApiError#' },

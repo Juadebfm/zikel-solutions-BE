@@ -126,7 +126,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         404: { $ref: 'ApiError#' },
@@ -157,7 +157,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         403: { $ref: 'ApiError#' },
@@ -199,7 +199,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         403: { $ref: 'ApiError#' },
