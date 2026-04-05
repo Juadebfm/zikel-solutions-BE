@@ -2450,7 +2450,11 @@ export async function batchReassignTasks(actorUserId: string, body: BatchReassig
   if (validIds.length > 0) {
     const result = await prisma.task.updateMany({
       where: { id: { in: validIds } },
-      data: { assigneeId: body.assigneeId, updatedById: actor.userId },
+      data: {
+        assigneeId: body.assigneeId,
+        updatedById: actor.userId,
+        ...(body.dueDate !== undefined ? { dueDate: body.dueDate } : {}),
+      },
     });
     processed = result.count;
   }
