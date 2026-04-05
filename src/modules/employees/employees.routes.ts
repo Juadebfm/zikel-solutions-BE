@@ -31,7 +31,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data', 'meta'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'array', items: { type: 'object' } },
+            data: { type: 'array', items: { type: 'object', additionalProperties: true } },
             meta: { $ref: 'PaginationMeta#' },
           },
         },
@@ -116,7 +116,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         404: { $ref: 'ApiError#' },
@@ -147,7 +147,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         403: { $ref: 'ApiError#' },
@@ -190,7 +190,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
           required: ['success', 'data'],
           properties: {
             success: { type: 'boolean', enum: [true] },
-            data: { type: 'object' },
+            data: { type: 'object', additionalProperties: true },
           },
         },
         403: { $ref: 'ApiError#' },
