@@ -132,7 +132,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin'],
+        globalRoles: ['super_admin', 'admin'],
         tenantRoles: ['tenant_admin'],
       }),
     ],
@@ -173,7 +173,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin'],
+        globalRoles: ['super_admin', 'admin'],
         tenantRoles: ['tenant_admin'],
       }),
     ],
@@ -217,7 +217,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin'],
+        globalRoles: ['super_admin', 'admin'],
         tenantRoles: ['tenant_admin'],
       }),
     ],
