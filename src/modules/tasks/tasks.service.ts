@@ -1122,14 +1122,21 @@ async function ensureTaskRelationsInTenant(
   }
 }
 
+type EntityLinks = {
+  homeId?: string | undefined;
+  vehicleId?: string | undefined;
+  youngPersonId?: string | undefined;
+  autoReferences?: Array<{ type: 'entity'; entityType: 'care_group' | 'employee'; entityId: string; label: string }>;
+};
+
 function resolveEntityLinksFromInput(args: {
   relatedEntityId?: string | null | undefined;
   type?: string | null | undefined;
   homeId?: string | null | undefined;
   vehicleId?: string | null | undefined;
   youngPersonId?: string | null | undefined;
-}) {
-  const next = {
+}): EntityLinks {
+  const next: EntityLinks = {
     homeId: args.homeId ?? undefined,
     vehicleId: args.vehicleId ?? undefined,
     youngPersonId: args.youngPersonId ?? undefined,
@@ -1139,6 +1146,19 @@ function resolveEntityLinksFromInput(args: {
   if (args.type === 'home' && !next.homeId) next.homeId = args.relatedEntityId;
   if (args.type === 'vehicle' && !next.vehicleId) next.vehicleId = args.relatedEntityId;
   if (args.type === 'young_person' && !next.youngPersonId) next.youngPersonId = args.relatedEntityId;
+
+  // Entity types without a direct FK on Task — stored as references.
+  if (args.type === 'care_group' || args.type === 'employee') {
+    next.autoReferences = [
+      {
+        type: 'entity' as const,
+        entityType: args.type as 'care_group' | 'employee',
+        entityId: args.relatedEntityId,
+        label: args.type === 'care_group' ? 'Related care group' : 'Related employee',
+      },
+    ];
+  }
+
   return next;
 }
 
@@ -1357,6 +1377,7 @@ export async function listTasks(actorUserId: string, query: ListTasksQuery) {
   if (query.homeId) filters.push({ homeId: query.homeId });
   if (query.vehicleId) filters.push({ vehicleId: query.vehicleId });
   if (query.youngPersonId) filters.push({ youngPersonId: query.youngPersonId });
+  if (query.careGroupId) filters.push({ home: { careGroupId: query.careGroupId } });
   if (query.formGroup) filters.push({ formGroup: query.formGroup });
   if (query.entityId) {
     filters.push({
@@ -1688,7 +1709,13 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
   if (entityLinks.vehicleId !== undefined) createRelationInputs.vehicleId = entityLinks.vehicleId;
   if (entityLinks.youngPersonId !== undefined) createRelationInputs.youngPersonId = entityLinks.youngPersonId;
   await ensureTaskRelationsInTenant(actor.tenantId, createRelationInputs);
-  await assertEntityReferencesInTenant(actor.tenantId, body.references);
+
+  // Merge auto-generated references (from type: 'care_group', 'employee') with explicit ones.
+  const allReferences = [
+    ...(body.references ?? []),
+    ...(entityLinks.autoReferences ?? []),
+  ];
+  await assertEntityReferencesInTenant(actor.tenantId, allReferences.length > 0 ? allReferences : undefined);
 
   const mergedPayload = mergeApproverIdsIntoPayload(body.submissionPayload, body.approverIds);
   const submissionPayload = buildSubmissionPayload({
@@ -1731,10 +1758,10 @@ export async function createTask(actorUserId: string, body: CreateTaskBody) {
       signatureFileId: body.signatureFileId ?? null,
       createdById: privileged && body.createdById ? body.createdById : actor.userId,
       completedAt: body.status === TaskStatus.completed ? new Date() : null,
-      ...(body.references?.length
+      ...(allReferences.length > 0
         ? {
             references: {
-              create: toReferenceCreateData(actor.tenantId, body.references),
+              create: toReferenceCreateData(actor.tenantId, allReferences),
             },
           }
         : {}),

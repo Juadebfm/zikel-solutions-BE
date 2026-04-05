@@ -161,6 +161,7 @@ export const ListTasksQuerySchema = z.object({
   homeId: z.string().min(1).optional(),
   vehicleId: z.string().min(1).optional(),
   youngPersonId: z.string().min(1).optional(),
+  careGroupId: z.string().min(1).optional(),
   scope: z.enum(['my_tasks', 'assigned_to_me', 'approvals', 'all']).default('all'),
   summaryScope: z
     .enum(['overdue', 'due_today', 'pending_approval', 'rejected', 'draft', 'future', 'comments', 'rewards'])
@@ -275,6 +276,7 @@ export const listTasksQueryJson = {
     homeId: { type: 'string' },
     vehicleId: { type: 'string' },
     youngPersonId: { type: 'string' },
+    careGroupId: { type: 'string' },
     scope: { type: 'string', enum: ['my_tasks', 'assigned_to_me', 'approvals', 'all'], default: 'all' },
     summaryScope: {
       type: 'string',
