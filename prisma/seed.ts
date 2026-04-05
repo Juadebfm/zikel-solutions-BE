@@ -768,6 +768,99 @@ async function main() {
         },
       });
 
+  // ─── Additional Care Groups ──────────────────────────────────────────────
+
+  const southernCareGroup = await prisma.careGroup.upsert({
+    where: { tenantId_name: { tenantId: tenant.id, name: 'Southern Region' } },
+    update: { description: 'Covers residential homes across the south of England' },
+    create: {
+      tenantId: tenant.id,
+      name: 'Southern Region',
+      description: 'Covers residential homes across the south of England',
+    },
+  });
+
+  const existingLakesideHome = await prisma.home.findFirst({
+    where: { tenantId: tenant.id, name: 'Lakeside Home' },
+  });
+  if (!existingLakesideHome) {
+    await prisma.home.create({
+      data: {
+        tenantId: tenant.id,
+        careGroupId: southernCareGroup.id,
+        name: 'Lakeside Home',
+        address: '5 Lakeside Drive, Bristol, BS1 3DE',
+        postCode: 'BS1 3DE',
+        capacity: 6,
+        category: 'Residential',
+        region: 'South West',
+        status: 'current',
+        isSecure: false,
+        shortTermStays: false,
+        minAgeGroup: 10,
+        maxAgeGroup: 17,
+      },
+    });
+  }
+
+  const existingNorthbridgeHome = await prisma.home.findFirst({
+    where: { tenantId: tenant.id, name: 'Northbridge Home' },
+  });
+  if (!existingNorthbridgeHome) {
+    await prisma.home.create({
+      data: {
+        tenantId: tenant.id,
+        careGroupId: southernCareGroup.id,
+        name: 'Northbridge Home',
+        address: '14 Bridge Street, Southampton, SO14 2BN',
+        postCode: 'SO14 2BN',
+        capacity: 5,
+        category: 'Residential',
+        region: 'South East',
+        status: 'current',
+        isSecure: false,
+        shortTermStays: true,
+        minAgeGroup: 8,
+        maxAgeGroup: 16,
+      },
+    });
+  }
+
+  const midlandsCareGroup = await prisma.careGroup.upsert({
+    where: { tenantId_name: { tenantId: tenant.id, name: 'Midlands Region' } },
+    update: { description: 'Covers residential and secure homes across the Midlands' },
+    create: {
+      tenantId: tenant.id,
+      name: 'Midlands Region',
+      description: 'Covers residential and secure homes across the Midlands',
+    },
+  });
+
+  const existingWillowHome = await prisma.home.findFirst({
+    where: { tenantId: tenant.id, name: 'Willow Court' },
+  });
+  if (!existingWillowHome) {
+    await prisma.home.create({
+      data: {
+        tenantId: tenant.id,
+        careGroupId: midlandsCareGroup.id,
+        name: 'Willow Court',
+        address: '22 Willow Road, Birmingham, B15 1TH',
+        postCode: 'B15 1TH',
+        capacity: 4,
+        category: 'Secure',
+        region: 'West Midlands',
+        status: 'current',
+        isSecure: true,
+        shortTermStays: false,
+        minAgeGroup: 12,
+        maxAgeGroup: 17,
+      },
+    });
+  }
+
+  // ─── Employees ────────────────────────────────────────────────────────────
+
   const managerEmployee = await prisma.employee.upsert({
     where: {
       tenantId_userId: {
