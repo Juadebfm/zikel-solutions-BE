@@ -200,6 +200,7 @@ export async function createVehicle(actorUserId: string, body: CreateVehicleBody
         contactPhone: body.contactPhone ?? null,
         ...(body.avatarFileId ? { avatarFileId: body.avatarFileId } : {}),
         avatarUrl: body.avatarUrl ?? null,
+        mileage: body.mileage ?? null,
         details: (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput,
         isActive: body.isActive ?? true,
         nextServiceDue: body.nextServiceDue ?? null,
@@ -277,6 +278,7 @@ export async function updateVehicle(actorUserId: string, vehicleId: string, body
   if (body.endDate !== undefined) updateData.endDate = body.endDate;
   if (body.adminUserId !== undefined) updateData.adminUserId = body.adminUserId;
   if (body.contactPhone !== undefined) updateData.contactPhone = body.contactPhone;
+  if (body.mileage !== undefined) updateData.mileage = body.mileage;
   if (body.details !== undefined) {
     updateData.details = (body.details ?? null) as Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput;
   }

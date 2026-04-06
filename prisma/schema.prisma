@@ -831,6 +831,7 @@ model Vehicle {
   contactPhone     String?
   avatarFileId     String?
   avatarUrl        String?
+  mileage          Int?
   details          Json?
   isActive         Boolean   @default(true)
   nextServiceDue   DateTime?
