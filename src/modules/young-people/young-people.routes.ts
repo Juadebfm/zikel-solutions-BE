@@ -134,7 +134,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],
@@ -176,7 +176,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],
@@ -220,7 +220,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],

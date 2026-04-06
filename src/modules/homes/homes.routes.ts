@@ -143,7 +143,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post('/', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],
@@ -184,7 +184,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],
@@ -227,7 +227,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.delete('/:id', {
     preHandler: [
       requireScopedRole({
-        globalRoles: ['admin', 'manager'],
+        globalRoles: ['super_admin', 'admin', 'manager'],
         tenantRoles: ['tenant_admin', 'sub_admin'],
       }),
     ],
@@ -408,7 +408,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/:id/events', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Create event at a home', params: { $ref: 'CuidParam#' }, response: { 201: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' }, 422: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
@@ -420,7 +420,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id/events/:eventId', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Update event', response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
@@ -432,7 +432,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id/events/:eventId', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Delete event', response: { 200: { type: 'object', properties: { success: { type: 'boolean' } } }, 404: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
@@ -456,7 +456,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/:id/shifts', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Create shift at a home', params: { $ref: 'CuidParam#' }, response: { 201: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' }, 422: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
@@ -468,7 +468,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id/shifts/:shiftId', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Update shift', response: { 200: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', additionalProperties: true } } }, 404: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
@@ -480,7 +480,7 @@ const homeRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id/shifts/:shiftId', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
+    preHandler: [requireScopedRole({ globalRoles: ['super_admin', 'admin', 'manager'], tenantRoles: ['tenant_admin', 'sub_admin'] })],
     schema: { tags: ['Homes'], summary: 'Delete shift', response: { 200: { type: 'object', properties: { success: { type: 'boolean' } } }, 404: { $ref: 'ApiError#' } } },
     handler: async (request, reply) => {
       const actorId = (request.user as JwtPayload).sub;
