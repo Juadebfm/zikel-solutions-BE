@@ -235,6 +235,15 @@ export const TenantMembershipSchema = {
     role: { $ref: 'TenantRole#' },
     status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
     invitedById: { type: 'string', nullable: true },
+    user: {
+      type: ['object', 'null'],
+      required: ['email', 'firstName', 'lastName'],
+      properties: {
+        email: { type: 'string', format: 'email' },
+        firstName: { type: 'string' },
+        lastName: { type: 'string' },
+      },
+    },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
