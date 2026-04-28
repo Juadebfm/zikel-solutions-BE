@@ -136,7 +136,7 @@ async function start() {
     process.exit(1);
   }
 
-  // Graceful shutdown — Fly.io sends SIGTERM before stopping a machine.
+  // Graceful shutdown — managed platforms send SIGTERM before stopping an instance.
   // app.close() drains in-flight requests and fires all onClose hooks.
   const shutdown = async (signal: string) => {
     logger.info(`Received ${signal}. Shutting down...`);

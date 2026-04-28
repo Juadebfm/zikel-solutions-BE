@@ -5,7 +5,7 @@
 export const TAGS = [
   {
     name: 'Health',
-    description: 'Liveness and readiness probes used by Fly.io health checks.',
+    description: 'Liveness and readiness probes used by platform health checks.',
   },
   {
     name: 'Auth',

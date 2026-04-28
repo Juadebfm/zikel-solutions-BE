@@ -3,7 +3,7 @@ set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
   echo "Usage: $0 <BASE_URL> [ACCESS_TOKEN]"
-  echo "Example: $0 https://zikel-solutions-be-kpotja.fly.dev <jwt>"
+  echo "Example: $0 https://your-backend.onrender.com <jwt>"
   exit 1
 fi
 

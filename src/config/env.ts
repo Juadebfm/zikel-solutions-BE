@@ -44,7 +44,7 @@ const envSchema = z.object({
 
   // Public backend URL used for email-safe hosted assets (e.g. logo SVG).
   PUBLIC_BASE_URL: z.url({ error: 'PUBLIC_BASE_URL must be a valid URL' })
-    .default('https://zikel-solutions-be-kpotja.fly.dev'),
+    .default('http://localhost:3000'),
 
   // AI (provider-backed with fallback)
   AI_ENABLED: z
@@ -85,7 +85,7 @@ const envSchema = z.object({
 
   // Email — Resend (https://resend.com)
   // Optional in development (email.ts logs OTPs to console instead).
-  // Required in production: set via `fly secrets set`.
+  // Required in production: set via your hosting platform's secret manager.
   RESEND_API_KEY: z.string().min(1).optional(),
   RESEND_FROM_EMAIL: z.email({ error: 'RESEND_FROM_EMAIL must be a valid email address' }).optional(),
 

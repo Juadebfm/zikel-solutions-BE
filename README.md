@@ -19,7 +19,7 @@ Production backend for a **multi-tenant care home management platform** built wi
 | API Docs | OpenAPI 3.0.3 / Swagger UI |
 | Testing | Vitest |
 | CI/CD | GitHub Actions |
-| Hosting | Fly.io (Amsterdam) |
+| Hosting | Render |
 | Container | Docker (node:20-alpine) |
 
 ---
@@ -333,13 +333,24 @@ docker run -p 3000:3000 --env-file .env zikel-solutions-be
 
 Multi-stage build: Alpine base, non-root user, production dependencies only, built-in healthcheck.
 
-### Fly.io
+### Render
 
 ```bash
-fly deploy
+# Provision from Blueprint
+# (Render Dashboard → New + → Blueprint → select this repo)
 ```
 
-Configured for Amsterdam region, shared CPU (1 vCPU, 1GB RAM), auto-scaling with min 1 machine, forced HTTPS.
+The repository includes [`render.yaml`](render.yaml) with:
+- Node runtime web service
+- `healthCheckPath: /ready`
+- `preDeployCommand: npm run db:migrate:deploy` for Prisma migrations
+- secure env var setup via `sync: false` / generated secrets
+
+After creating the Blueprint service, set secrets in Render for at least:
+- `DATABASE_URL` (runtime pooled Postgres URL)
+- `DIRECT_URL` (direct Postgres URL for migrations)
+- `CORS_ORIGINS`
+- `PUBLIC_BASE_URL` (your Render/custom HTTPS API domain)
 
 ---
 

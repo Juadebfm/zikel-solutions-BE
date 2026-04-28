@@ -2,7 +2,7 @@
  * Lightweight in-memory cache for hot data that rarely changes.
  *
  * Uses lru-cache with TTL-based eviction. Suitable for a single-instance
- * deployment (Fly.io with 1 machine). If you scale to multiple instances,
+ * deployment. If you scale to multiple instances,
  * replace with Redis or add a pub/sub invalidation layer.
  */
 import { LRUCache } from 'lru-cache';

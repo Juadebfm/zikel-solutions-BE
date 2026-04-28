@@ -10,7 +10,7 @@ const healthRoutes: FastifyPluginAsync = async (fastify) => {
     schema: {
       tags: ['Health'],
       summary: 'Liveness probe',
-      description: 'Returns 200 immediately. Used by Fly.io to confirm the process is alive.',
+      description: 'Returns 200 immediately. Used by the hosting platform to confirm the process is alive.',
       security: [],
       response: {
         200: {
