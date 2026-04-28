@@ -111,15 +111,18 @@ export async function buildApp() {
 
   const stopSafeguardingRiskBackfillScheduler = startSafeguardingRiskBackfillScheduler();
 
-  // Keep Neon database connection warm — prevents serverless cold starts (~1-3s).
-  // Pings every 4 minutes (Neon suspends after ~5 min idle).
-  const DB_KEEPALIVE_INTERVAL_MS = 4 * 60 * 1000;
-  const dbKeepAliveTimer = setInterval(() => {
-    void prisma.$queryRawUnsafe('SELECT 1').catch(() => {});
-  }, DB_KEEPALIVE_INTERVAL_MS);
+  let clearDbKeepAliveTimer = () => {};
+  if (env.DB_KEEPALIVE_ENABLED) {
+    // Optional DB keepalive to reduce cold-start latency on serverless Postgres.
+    // Disabled by default because it can increase monthly compute usage on free tiers.
+    const dbKeepAliveTimer = setInterval(() => {
+      void prisma.$queryRawUnsafe('SELECT 1').catch(() => {});
+    }, env.DB_KEEPALIVE_INTERVAL_MS);
+    clearDbKeepAliveTimer = () => clearInterval(dbKeepAliveTimer);
+  }
 
   fastify.addHook('onClose', async () => {
-    clearInterval(dbKeepAliveTimer);
+    clearDbKeepAliveTimer();
     stopSafeguardingRiskBackfillScheduler();
   });
 

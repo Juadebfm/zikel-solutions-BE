@@ -4,6 +4,11 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   HOST: z.string().default('0.0.0.0'),
+  DB_KEEPALIVE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+  DB_KEEPALIVE_INTERVAL_MS: z.coerce.number().int().positive().default(4 * 60 * 1000),
 
   // Database
   DATABASE_URL: z.url({ error: 'DATABASE_URL must be a valid URL' }),

@@ -342,7 +342,7 @@ Multi-stage build: Alpine base, non-root user, production dependencies only, bui
 
 The repository includes [`render.yaml`](render.yaml) with:
 - Node runtime web service
-- `healthCheckPath: /ready`
+- `healthCheckPath: /health`
 - `preDeployCommand: npm run db:migrate:deploy` for Prisma migrations
 - secure env var setup via `sync: false` / generated secrets
 
