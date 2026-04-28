@@ -7,7 +7,7 @@ services:
     buildCommand: npm ci && npm run build
     preDeployCommand: npm run db:migrate:deploy
     startCommand: npm start
-    healthCheckPath: /ready
+    healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
       - key: NODE_ENV
