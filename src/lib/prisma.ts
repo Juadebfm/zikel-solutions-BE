@@ -14,7 +14,7 @@ function createPrismaClient() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     // Cap connections per instance so we never exhaust Neon's pool.
-    // Fly.io machines are single-threaded Node; 10 concurrent DB connections is ample.
+    // Node runtime here is effectively single-process; 10 concurrent DB connections is ample.
     max: 10,
     idleTimeoutMillis: 30_000,   // release idle connections after 30 s
     connectionTimeoutMillis: 5_000, // fail fast rather than queue indefinitely

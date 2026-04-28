@@ -1,7 +1,7 @@
 {
   "name": "zikel-solutions",
   "version": "0.1.0",
-  "description": "Zikel Solutions — production backend (Fastify + Prisma + Neon + Fly.io)",
+  "description": "Zikel Solutions — production backend (Fastify + Prisma + Neon)",
   "type": "module",
   "main": "dist/server.js",
   "engines": {

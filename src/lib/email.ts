@@ -10,7 +10,7 @@ function getResend(): Resend {
   if (!_resend) {
     if (!env.RESEND_API_KEY) {
       throw new Error(
-        'RESEND_API_KEY is not set. Add it to your environment or fly secrets before deploying.',
+        'RESEND_API_KEY is not set. Add it to your environment variables before deploying.',
       );
     }
     _resend = new Resend(env.RESEND_API_KEY);
@@ -121,7 +121,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
   const fromEmail = env.RESEND_FROM_EMAIL;
   if (!fromEmail) {
     throw new Error(
-      'RESEND_FROM_EMAIL is not set. Add it to your environment or fly secrets before deploying.',
+      'RESEND_FROM_EMAIL is not set. Add it to your environment variables before deploying.',
     );
   }
 
