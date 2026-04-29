@@ -57,7 +57,7 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true'),
   AI_API_KEY: z.string().min(1).optional(),
-  AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
+  AI_MODEL: z.string().min(1).default('gpt-5.4-mini'),
   AI_BASE_URL: z.url({ error: 'AI_BASE_URL must be a valid URL' }).default('https://api.openai.com/v1'),
   AI_TIMEOUT_MS: z.coerce.number().int().positive().default(12000),
   AI_CONTEXT_REDACTION_ENABLED: z
