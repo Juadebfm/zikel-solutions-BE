@@ -18,7 +18,7 @@ import { requireTenantContext, type TenantContext } from '../../lib/tenant-conte
 import { getSummaryStats } from '../summary/summary.service.js';
 import type { AskAiBody, SetAiAccessBody, AiPage } from './ai.schema.js';
 
-const DEFAULT_AI_MODEL = 'gpt-4o-mini';
+const DEFAULT_AI_MODEL = 'gpt-5.4-mini';
 const DEFAULT_AI_TIMEOUT_MS = 12_000;
 const CONTEXT_ITEM_LIMIT = 5;
 const PAGE_ITEMS_LIMIT = 20;

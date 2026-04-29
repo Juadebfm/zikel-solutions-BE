@@ -32,7 +32,7 @@ import type {
 } from './safeguarding.schema.js';
 
 const DEFAULT_LOOKBACK_DAYS = 90;
-const DEFAULT_AI_MODEL = 'gpt-4o-mini';
+const DEFAULT_AI_MODEL = 'gpt-5.4-mini';
 const DEFAULT_AI_TIMEOUT_MS = 12_000;
 const CHRONOLOGY_NARRATIVE_QA_VERSION = 'chronology-empathy-v1';
 
