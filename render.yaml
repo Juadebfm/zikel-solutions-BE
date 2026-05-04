@@ -26,6 +26,8 @@ services:
         sync: false
       - key: PUBLIC_BASE_URL
         sync: false
+      - key: AUTH_HINT_COOKIE_DOMAIN
+        sync: false
       - key: SECURITY_ALERT_PIPELINE_ENABLED
         value: "false"
       - key: RESEND_API_KEY

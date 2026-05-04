@@ -61,6 +61,9 @@ const REFRESH_COOKIE_SECURE = env.NODE_ENV === 'staging' || env.NODE_ENV === 'pr
 const REFRESH_COOKIE_DOMAIN = env.AUTH_REFRESH_COOKIE_DOMAIN;
 const REFRESH_COOKIE_PATH = env.AUTH_REFRESH_COOKIE_PATH;
 const REFRESH_COOKIE_SAME_SITE = env.AUTH_REFRESH_COOKIE_SAME_SITE;
+const HINT_COOKIE_NAME = env.AUTH_HINT_COOKIE_NAME;
+const HINT_COOKIE_DOMAIN = env.AUTH_HINT_COOKIE_DOMAIN;
+const HINT_COOKIE_SECURE = REFRESH_COOKIE_SECURE;
 
 function buildTimedAuthResponse(args: {
   user: Record<string, unknown>;
@@ -121,12 +124,35 @@ function setRefreshTokenCookie(
     ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
     expires: expiresAt,
   });
+  setAuthHintCookie(reply, expiresAt);
 }
 
 function clearRefreshTokenCookie(reply: import('fastify').FastifyReply) {
   reply.clearCookie(REFRESH_COOKIE_NAME, {
     path: REFRESH_COOKIE_PATH,
     ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
+  });
+  clearAuthHintCookie(reply);
+}
+
+// Non-HttpOnly presence flag, scoped to the parent domain (e.g. .zikelsolutions.com),
+// so the marketing site can swap "Login" for an avatar without calling the API.
+// Carries no session data — its absence/presence is the only signal.
+function setAuthHintCookie(reply: import('fastify').FastifyReply, expiresAt: Date) {
+  reply.setCookie(HINT_COOKIE_NAME, '1', {
+    httpOnly: false,
+    secure: HINT_COOKIE_SECURE,
+    sameSite: 'lax',
+    path: '/',
+    ...(HINT_COOKIE_DOMAIN ? { domain: HINT_COOKIE_DOMAIN } : {}),
+    expires: expiresAt,
+  });
+}
+
+function clearAuthHintCookie(reply: import('fastify').FastifyReply) {
+  reply.clearCookie(HINT_COOKIE_NAME, {
+    path: '/',
+    ...(HINT_COOKIE_DOMAIN ? { domain: HINT_COOKIE_DOMAIN } : {}),
   });
 }
 
