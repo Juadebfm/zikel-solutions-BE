@@ -24,6 +24,8 @@ const envSchema = z.object({
   AUTH_REFRESH_COOKIE_SAME_SITE: z.enum(['strict', 'lax', 'none']).default('lax'),
   AUTH_REFRESH_COOKIE_PATH: z.string().min(1).default('/'),
   AUTH_REFRESH_COOKIE_DOMAIN: z.string().min(1).optional(),
+  AUTH_HINT_COOKIE_NAME: z.string().min(1).default('zk_authed'),
+  AUTH_HINT_COOKIE_DOMAIN: z.string().min(1).optional(),
   AUTH_LEGACY_REFRESH_TOKEN_IN_BODY: z
     .enum(['true', 'false'])
     .default('true')
