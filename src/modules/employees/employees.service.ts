@@ -87,6 +87,16 @@ async function ensureHomeExists(homeId: string, tenantId: string) {
   }
 }
 
+async function ensureRoleExists(roleId: string, tenantId: string) {
+  const role = await prisma.role.findFirst({
+    where: { id: roleId, tenantId },
+    select: { id: true },
+  });
+  if (!role) {
+    throw httpError(404, 'ROLE_NOT_FOUND', 'Role not found.');
+  }
+}
+
 // ─── List ────────────────────────────────────────────────────────────────────
 
 export async function listEmployees(actorId: string, query: ListEmployeesQuery) {
@@ -182,6 +192,7 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
   const tenant = await requireTenantContext(actorId);
   await ensureUserHasTenantAccess(body.userId, tenant.tenantId);
   if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
+  if (body.roleId) await ensureRoleExists(body.roleId, tenant.tenantId);
 
   try {
     const employee = await prisma.employee.create({
@@ -254,6 +265,9 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
   if (body.homeId !== undefined && body.homeId !== null) {
     await ensureHomeExists(body.homeId, tenant.tenantId);
   }
+  if (body.roleId !== undefined && body.roleId !== null) {
+    await ensureRoleExists(body.roleId, tenant.tenantId);
+  }
 
   const updateData: Prisma.EmployeeUpdateInput = {};
   if (body.homeId !== undefined) {
@@ -299,6 +313,7 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
 export async function createEmployeeWithUser(actorId: string, body: CreateEmployeeWithUserBody) {
   const tenant = await requireTenantContext(actorId);
   if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
+  if (body.roleId) await ensureRoleExists(body.roleId, tenant.tenantId);
 
   const passwordHash = await hashPassword(body.password);
 
