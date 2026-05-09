@@ -183,7 +183,9 @@ export async function sendOtpEmail(
   `);
 
   if (process.env.NODE_ENV !== 'production') {
-    logger.info({ msg: 'OTP email (dev — not sent via Resend)', email, subject });
+    // Dev only: print the OTP code in plain text so smoke tests can paste it
+    // straight from the server log. Production never reaches this branch.
+    logger.info({ msg: 'OTP email (dev — not sent via Resend)', email, subject, code });
     return;
   }
 

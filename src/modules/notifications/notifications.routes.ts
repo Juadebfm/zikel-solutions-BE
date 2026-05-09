@@ -1,13 +1,10 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireRole } from '../../middleware/rbac.js';
 import * as notificationsService from './notifications.service.js';
 import {
-  BroadcastNotificationBodySchema,
   ListNotificationsQuerySchema,
   UpdatePreferencesBodySchema,
-  broadcastNotificationBodyJson,
   listNotificationsQueryJson,
   updatePreferencesBodyJson,
 } from './notifications.schema.js';
@@ -196,41 +193,8 @@ const notificationsRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  fastify.post('/broadcast', {
-    preHandler: [requireRole('super_admin')],
-    schema: {
-      tags: ['Notifications'],
-      summary: 'Broadcast platform notification',
-      body: broadcastNotificationBodyJson,
-      response: {
-        201: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['recipientCount'],
-              properties: { recipientCount: { type: 'integer' } },
-            },
-          },
-        },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = BroadcastNotificationBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
-      const userId = (request.user as JwtPayload).sub;
-      const data = await notificationsService.broadcastPlatformNotification(userId, parse.data);
-      return reply.status(201).send({ success: true, data });
-    },
-  });
+  // Phase 6 (2026-05-08): platform broadcast moved to /admin/notifications/broadcast
+  // (platform_admin role only). The previous tenant-side stub was removed.
 };
 
 export default notificationsRoutes;

@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
-    user: {
+    tenantUser: {
       findUnique: vi.fn(),
       update: vi.fn(),
     },
@@ -13,52 +13,32 @@ const { mockPrisma } = vi.hoisted(() => ({
     tenantMembership: {
       findUnique: vi.fn(),
     },
-    careGroup: {
-      findFirst: vi.fn(),
-    },
-    home: {
-      findFirst: vi.fn(),
-    },
-    employee: {
-      findFirst: vi.fn(),
-    },
-    youngPerson: {
-      findFirst: vi.fn(),
-    },
-    vehicle: {
-      findFirst: vi.fn(),
-    },
-    announcement: {
-      findFirst: vi.fn(),
-    },
-    announcementRead: {
-      upsert: vi.fn(),
-    },
-    task: {
-      findFirst: vi.fn(),
-      update: vi.fn(),
-    },
-    widget: {
-      findUnique: vi.fn(),
-      delete: vi.fn(),
-    },
+    careGroup: { findFirst: vi.fn() },
+    home: { findFirst: vi.fn() },
+    employee: { findFirst: vi.fn() },
+    youngPerson: { findFirst: vi.fn() },
+    vehicle: { findFirst: vi.fn() },
+    announcement: { findFirst: vi.fn() },
+    announcementRead: { upsert: vi.fn() },
+    task: { findFirst: vi.fn(), update: vi.fn() },
+    widget: { findUnique: vi.fn(), delete: vi.fn() },
     auditLog: {
       create: vi.fn(),
       findFirst: vi.fn(),
       count: vi.fn(),
       findMany: vi.fn(),
     },
-    refreshToken: {
-      updateMany: vi.fn(),
+    platformAuditLog: {
+      create: vi.fn(async () => ({})),
     },
+    refreshToken: { updateMany: vi.fn() },
     $queryRaw: vi.fn(),
-    $disconnect: vi.fn(),
+    $disconnect: vi.fn(async () => undefined),
+    $on: vi.fn(),
   },
 }));
 
-vi.mock('../src/lib/prisma.js', () => ({
-  prisma: mockPrisma,
-}));
+vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
@@ -76,13 +56,31 @@ afterAll(async () => {
   await app.close();
 });
 
+const ALL_PERMS = [
+  'employees:read', 'employees:write',
+  'homes:read', 'homes:write',
+  'care_groups:read', 'care_groups:write',
+  'young_people:read', 'young_people:write',
+  'tasks:read', 'tasks:write', 'tasks:approve',
+  'safeguarding:read', 'safeguarding:write',
+  'reports:read', 'reports:export',
+  'audit:read',
+  'settings:read', 'settings:write',
+  'members:read', 'members:write',
+  'roles:read', 'roles:write',
+  'ai:use', 'ai:admin',
+  'announcements:read', 'announcements:write',
+  'vehicles:read', 'vehicles:write',
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.auditLog.create.mockResolvedValue({ id: 'audit_1' });
 });
 
 function authHeader(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
+  role: 'staff' | 'manager' | 'admin' = 'manager',
   mfaVerified?: boolean,
 ) {
   const tenantRole = role === 'staff' ? 'staff' : 'sub_admin';
@@ -92,30 +90,49 @@ function authHeader(
     role,
     tenantId: 'tenant_1',
     tenantRole,
-    mfaVerified: mfaVerified ?? (role === 'super_admin' || tenantRole === 'tenant_admin'),
+    mfaVerified: mfaVerified ?? true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
 
 function mockTenantContext(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
+  userRole: 'staff' | 'manager' | 'admin' = 'manager',
+  roleName: 'Owner' | 'Admin' | 'Care Worker' = 'Admin',
+  permissions: string[] = ALL_PERMS,
 ) {
-  mockPrisma.user.findUnique.mockResolvedValue({
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({
     id: userId,
-    role,
+    role: userRole,
     activeTenantId: 'tenant_1',
+    activeTenant: { id: 'tenant_1', isActive: true },
+    tenantMemberships: [
+      {
+        tenantId: 'tenant_1',
+        status: 'active',
+        role: { name: roleName, permissions },
+      },
+    ],
   });
-  mockPrisma.tenant.findUnique.mockResolvedValue({
-    id: 'tenant_1',
-    isActive: true,
-  });
+  mockPrisma.tenant.findUnique.mockResolvedValue({ id: 'tenant_1', isActive: true });
   mockPrisma.tenantMembership.findUnique.mockResolvedValue({
-    role: 'sub_admin',
+    role: { name: roleName, permissions },
     status: 'active',
   });
 }
 
+/**
+ * The Prisma `tenantScopeExtension` auto-injects `where: { tenantId }` from
+ * the request's tenant context, so every test below relies on the simple
+ * truth: when the cross-tenant row does not satisfy the auto-injected
+ * tenantId, prisma returns null and the route hands back a 404.
+ *
+ * In these mocks we simulate that by returning null from the prisma stub
+ * (the extension itself is not exercised because prisma is fully mocked,
+ * but the route's downstream "if (!row) throw NOT_FOUND" path is what we
+ * are guarding here).
+ */
 describe('Tenant isolation (cross-tenant access denial)', () => {
   it('denies reading a care group from another tenant', async () => {
     mockTenantContext();
@@ -277,14 +294,29 @@ describe('Tenant isolation (cross-tenant access denial)', () => {
     });
   });
 
-  it('denies tenant admin toggling AI access for a user outside tenant', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'admin_1', role: 'admin' })
-      .mockResolvedValueOnce({ id: 'admin_1', role: 'admin', activeTenantId: 'tenant_1' });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique
-      .mockResolvedValueOnce({ role: 'sub_admin', status: 'active' })
-      .mockResolvedValueOnce(null);
+  it('denies admin toggling AI access for a user outside tenant', async () => {
+    // Hook chain in order:
+    //   1. requirePermission(AI_ADMIN) → requireTenantContext → tenantUser.findUnique (full shape)
+    //   2. handler setUserAiAccess → tenantUser.findUnique (actor short shape)
+    //   3. handler setUserAiAccess → tenantMembership.findUnique (target)
+    // Step (3) returning null is the cross-tenant guard.
+    mockPrisma.tenantUser.findUnique
+      .mockResolvedValueOnce({
+        id: 'admin_1',
+        role: 'admin',
+        activeTenantId: 'tenant_1',
+        activeTenant: { id: 'tenant_1', isActive: true },
+        tenantMemberships: [
+          {
+            tenantId: 'tenant_1',
+            status: 'active',
+            role: { name: 'Owner', permissions: ALL_PERMS },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ id: 'admin_1', role: 'admin' });
+    // Target user has no membership in tenant_1 → cross-tenant access denied.
+    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce(null);
 
     const res = await app.inject({
       method: 'PATCH',
@@ -298,27 +330,50 @@ describe('Tenant isolation (cross-tenant access denial)', () => {
       success: false,
       error: { code: 'USER_NOT_FOUND' },
     });
-    expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    expect(mockPrisma.tenantUser.update).not.toHaveBeenCalled();
   });
 
-  it('requires break-glass before super-admin can read another tenant audit scope', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
-      id: 'super_1',
-      role: 'super_admin',
-      activeTenantId: 'tenant_1',
+  // The legacy super_admin "break-glass cross-tenant audit read" path is
+  // replaced by /admin/audit/tenants/:id under the platform audience. The
+  // new gate is: any MFA-verified platform user can read; the read itself is
+  // recorded in PlatformAuditLog so we keep a chain of custody for who looked
+  // at what tenant's audit history. Lock that invariant in:
+  it('platform user reading a tenant audit log records a PlatformAuditLog entry', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 'tenant_2',
+      name: 'Other Care',
+      slug: 'other-care',
+      isActive: true,
+    });
+    mockPrisma.auditLog.count.mockResolvedValue(0);
+    mockPrisma.auditLog.findMany.mockResolvedValue([]);
+
+    const platformToken = app.jwt.sign({
+      sub: 'p_admin',
+      email: 'admin@zikelsolutions.com',
+      role: 'platform_admin',
+      sid: 'ps_1',
+      mfaVerified: true,
+      aud: 'platform',
     });
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/audit?tenantId=tenant_2',
-      headers: authHeader('super_1', 'super_admin'),
+      url: '/admin/audit/tenants/tenant_2',
+      headers: { authorization: `Bearer ${platformToken}` },
     });
 
-    expect(res.statusCode).toBe(403);
-    expect(res.json()).toMatchObject({
-      success: false,
-      error: { code: 'BREAK_GLASS_REQUIRED' },
-    });
-    expect(mockPrisma.auditLog.count).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    // Wait one microtask tick so the fire-and-forget audit write resolves.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockPrisma.platformAuditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          platformUserId: 'p_admin',
+          targetTenantId: 'tenant_2',
+          entityType: 'tenant_audit_log',
+        }),
+      }),
+    );
   });
 });

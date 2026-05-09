@@ -87,7 +87,7 @@ export async function getTenantAdminUserIds(tenantId: string): Promise<string[]>
     where: {
       tenantId,
       status: 'active',
-      role: { in: ['tenant_admin', 'sub_admin'] },
+      role: { name: { in: ['Owner', 'Admin'] } },
     },
     select: { userId: true },
   });

@@ -7,7 +7,8 @@ import {
   readTherapeuticRouteConfig,
 } from '../../lib/therapeutic-rollout.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import * as reportsService from './reports.service.js';
 import {
   EvidencePackQuerySchema,
@@ -35,10 +36,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
-  const reportsAccess = requireScopedRole({
-    globalRoles: ['super_admin', 'admin', 'manager'],
-    tenantRoles: ['tenant_admin', 'sub_admin'],
-  });
+  const reportsAccess = requirePermission(P.REPORTS_READ);
 
   fastify.get('/reg44-pack', {
     preHandler: [reportsAccess],

@@ -38,7 +38,7 @@ export const AddTenantMemberBodySchema = z
     userId: z.string().min(1).optional(),
     email: z.email().optional(),
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).default('active'),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked']).default('active'),
   })
   .strict()
   .refine((v) => Boolean(v.userId || v.email), {
@@ -53,7 +53,7 @@ export const AddTenantMemberBodySchema = z
 export const UpdateTenantMemberBodySchema = z
   .object({
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']).optional(),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).optional(),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked']).optional(),
   })
   .strict()
   .refine((v) => Object.values(v).some((value) => value !== undefined), {
@@ -73,7 +73,7 @@ export const ListTenantMembershipsQuerySchema = z
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     role: z.enum(['tenant_admin', 'sub_admin', 'staff']).optional(),
-    status: z.enum(['invited', 'active', 'suspended', 'revoked', 'pending_approval']).optional(),
+    status: z.enum(['invited', 'active', 'suspended', 'revoked']).optional(),
     search: z.string().trim().min(1).max(120).optional(),
   })
   .strict();
@@ -194,7 +194,7 @@ export const addTenantMemberBodyJson = {
     userId: { type: 'string', minLength: 1 },
     email: { type: 'string', format: 'email' },
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'], default: 'active' },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'], default: 'active' },
   },
   oneOf: [
     { required: ['userId'] },
@@ -207,7 +207,7 @@ export const updateTenantMemberBodyJson = {
   additionalProperties: false,
   properties: {
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
   },
   minProperties: 1,
 } as const;
@@ -230,7 +230,7 @@ export const listTenantMembershipsQueryJson = {
     page: { type: 'integer', minimum: 1, default: 1 },
     pageSize: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
     role: { type: 'string', enum: ['tenant_admin', 'sub_admin', 'staff'] },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
     search: { type: 'string', minLength: 1, maxLength: 120 },
   },
 } as const;

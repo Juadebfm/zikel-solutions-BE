@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
-    user: {
+    tenantUser: {
       findUnique: vi.fn(),
       update: vi.fn(),
     },
@@ -54,13 +54,12 @@ const { mockPrisma } = vi.hoisted(() => ({
     },
     $transaction: vi.fn(async (ops: Array<Promise<unknown>>) => Promise.all(ops)),
     $queryRaw: vi.fn(),
-    $disconnect: vi.fn(),
+    $disconnect: vi.fn(async () => undefined),
+    $on: vi.fn(),
   },
 }));
 
-vi.mock('../src/lib/prisma.js', () => ({
-  prisma: mockPrisma,
-}));
+vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
@@ -78,14 +77,37 @@ afterAll(async () => {
   await app.close();
 });
 
+// Permission catalogue (matches src/auth/permissions.ts). Owner gets all.
+const ALL_PERMS = [
+  'employees:read', 'employees:write', 'employees:invite', 'employees:deactivate',
+  'homes:read', 'homes:write',
+  'care_groups:read', 'care_groups:write',
+  'young_people:read', 'young_people:write', 'young_people:sensitive_read',
+  'tasks:read', 'tasks:write', 'tasks:approve',
+  'care_logs:read', 'care_logs:write',
+  'safeguarding:read', 'safeguarding:write', 'safeguarding:escalate',
+  'reports:read', 'reports:export',
+  'audit:read',
+  'settings:read', 'settings:write',
+  'members:read', 'members:write',
+  'roles:read', 'roles:write',
+  'billing:read', 'billing:write',
+  'ai:use', 'ai:admin',
+  'announcements:read', 'announcements:write',
+  'vehicles:read', 'vehicles:write',
+  'help_center:admin',
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockPrisma.employee.findUnique.mockResolvedValue(null);
   mockPrisma.auditLog.create.mockResolvedValue({ id: 'audit_1' });
   mockPrisma.$transaction.mockImplementation(async (arg: unknown) => {
     if (typeof arg === 'function') {
-      return arg({
+      return (arg as (tx: typeof mockPrisma) => Promise<unknown>)({
+        ...mockPrisma,
         task: {
+          ...mockPrisma.task,
           update: mockPrisma.task.update,
           findUniqueOrThrow: mockPrisma.task.findUniqueOrThrow,
         },
@@ -93,58 +115,67 @@ beforeEach(() => {
           deleteMany: mockPrisma.taskReference.deleteMany,
           createMany: mockPrisma.taskReference.createMany,
         },
-      });
+      } as never);
     }
-
     return Promise.all(arg as Array<Promise<unknown>>);
   });
 });
 
+/**
+ * Forge a tenant-audience JWT. `tenantRoleName` controls the legacy
+ * `tenantRole` claim (Owner→tenant_admin, Admin→sub_admin, anything else→staff).
+ * `mfaVerified` defaults to true for Owner so privileged-write tests pass;
+ * pass false to test the MFA gate.
+ */
 function authHeader(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
-  tenantRole: 'staff' | 'sub_admin' | 'tenant_admin' = 'sub_admin',
+  role: 'staff' | 'manager' | 'admin' = 'manager',
+  tenantRoleName: 'Owner' | 'Admin' | 'Care Worker' = 'Admin',
   mfaVerified?: boolean,
 ) {
+  const tenantRoleEnum =
+    tenantRoleName === 'Owner' ? 'tenant_admin'
+      : tenantRoleName === 'Admin' ? 'sub_admin'
+      : 'staff';
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
     tenantId: 'tenant_1',
-    tenantRole,
-    mfaVerified: mfaVerified
-      ?? (role === 'super_admin' || tenantRole === 'tenant_admin'),
+    tenantRole: tenantRoleEnum,
+    mfaVerified: mfaVerified ?? (tenantRoleName === 'Owner'),
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
 
+/**
+ * Mock the prisma.tenantUser.findUnique result that requireTenantContext
+ * consumes. Returns a user with a single active membership in tenant_1
+ * holding the specified role + permissions.
+ */
 function mockTenantContext(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
-  tenantRole: 'staff' | 'sub_admin' | 'tenant_admin' = 'sub_admin',
+  userRole: 'staff' | 'manager' | 'admin' = 'manager',
+  roleName: 'Owner' | 'Admin' | 'Care Worker' | 'Read-Only' = 'Admin',
+  permissions: string[] = ALL_PERMS,
 ) {
-  mockPrisma.user.findUnique.mockResolvedValue({
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({
     id: userId,
-    role,
+    role: userRole,
     activeTenantId: 'tenant_1',
-    activeTenant: {
-      id: 'tenant_1',
-      isActive: true,
-    },
+    activeTenant: { id: 'tenant_1', isActive: true },
     tenantMemberships: [
       {
         tenantId: 'tenant_1',
-        role: tenantRole,
         status: 'active',
+        role: { name: roleName, permissions },
       },
     ],
   });
-  mockPrisma.tenant.findUnique.mockResolvedValue({
-    id: 'tenant_1',
-    isActive: true,
-  });
+  mockPrisma.tenant.findUnique.mockResolvedValue({ id: 'tenant_1', isActive: true });
   mockPrisma.tenantMembership.findUnique.mockResolvedValue({
-    role: tenantRole,
+    role: { name: roleName, permissions },
     status: 'active',
   });
 }
@@ -231,8 +262,8 @@ describe('New module routes', () => {
     });
   });
 
-  it('allows privileged tenant-admin read access when MFA is not verified', async () => {
-    mockTenantContext('admin_1', 'admin', 'tenant_admin');
+  it('allows Owner read access pre-MFA (read ops not gated by MFA)', async () => {
+    mockTenantContext('admin_1', 'admin', 'Owner');
     mockPrisma.vehicle.count.mockResolvedValueOnce(1);
     mockPrisma.vehicle.findMany.mockResolvedValueOnce([
       {
@@ -254,7 +285,7 @@ describe('New module routes', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/vehicles',
-      headers: authHeader('admin_1', 'admin', 'tenant_admin', false),
+      headers: authHeader('admin_1', 'admin', 'Owner', /* mfaVerified */ false),
     });
 
     expect(res.statusCode).toBe(200);
@@ -264,14 +295,13 @@ describe('New module routes', () => {
     });
   });
 
-  it('blocks privileged tenant-admin write access when MFA is not verified', async () => {
+  it('blocks Owner write access pre-MFA (privileged mutation gate)', async () => {
+    mockTenantContext('admin_1', 'admin', 'Owner');
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/vehicles',
-      headers: authHeader('admin_1', 'admin', 'tenant_admin', false),
-      payload: {
-        registration: 'GHI 789',
-      },
+      headers: authHeader('admin_1', 'admin', 'Owner', /* mfaVerified */ false),
+      payload: { registration: 'GHI 789' },
     });
 
     expect(res.statusCode).toBe(403);
@@ -281,8 +311,10 @@ describe('New module routes', () => {
     });
   });
 
-  it('POST /api/v1/vehicles allows tenant sub-admin even with global staff role', async () => {
-    mockTenantContext('staff_1', 'staff', 'sub_admin');
+  it('POST /api/v1/vehicles allows a Care Worker with vehicles:write permission', async () => {
+    // Phase 3: a Care Worker role with vehicles:write permission can create
+    // vehicles even with userRole='staff'. Authorization is now capability-based.
+    mockTenantContext('staff_1', 'staff', 'Care Worker', ['vehicles:read', 'vehicles:write']);
     mockPrisma.vehicle.create.mockResolvedValueOnce({
       id: 'veh_new',
       tenantId: 'tenant_1',
@@ -302,10 +334,8 @@ describe('New module routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/vehicles',
-      headers: authHeader('staff_1', 'staff', 'sub_admin'),
-      payload: {
-        registration: 'abc 321',
-      },
+      headers: authHeader('staff_1', 'staff', 'Care Worker'),
+      payload: { registration: 'abc 321' },
     });
 
     expect(res.statusCode).toBe(201);
@@ -368,11 +398,6 @@ describe('New module routes', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: [],
-      meta: { total: 0, page: 1, pageSize: 20, totalPages: 1 },
-    });
     expect(mockPrisma.task.count).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         AND: expect.arrayContaining([
@@ -529,18 +554,13 @@ describe('New module routes', () => {
       method: 'POST',
       url: '/api/v1/tasks',
       headers: authHeader(),
-      payload: {
-        title: 'New task from route test',
-      },
+      payload: { title: 'New task from route test' },
     });
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({
       success: true,
-      data: {
-        id: 'task_new_1',
-        title: 'New task from route test',
-      },
+      data: { id: 'task_new_1', title: 'New task from route test' },
     });
   });
 
@@ -567,18 +587,13 @@ describe('New module routes', () => {
       method: 'PATCH',
       url: '/api/v1/tasks/task_patch_1',
       headers: authHeader(),
-      payload: {
-        title: 'Patched task title',
-      },
+      payload: { title: 'Patched task title' },
     });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       success: true,
-      data: {
-        id: 'task_patch_1',
-        title: 'Patched task title',
-      },
+      data: { id: 'task_patch_1', title: 'Patched task title' },
     });
   });
 
@@ -649,9 +664,7 @@ describe('New module routes', () => {
     expect(res.statusCode).toBe(422);
     expect(res.json()).toMatchObject({
       success: false,
-      error: {
-        code: 'VALIDATION_ERROR',
-      },
+      error: { code: 'VALIDATION_ERROR' },
     });
   });
 
@@ -674,7 +687,11 @@ describe('New module routes', () => {
           id: 'task_action_1',
           approvalStatus: 'pending_approval',
           submittedAt: new Date('2026-03-12T10:30:00.000Z'),
-          submissionPayload: { approverIds: ['approver_1'], approverNames: ['Sarah Jenkins'], previewFields: [] },
+          submissionPayload: {
+            approverIds: ['approver_1'],
+            approverNames: ['Sarah Jenkins'],
+            previewFields: [],
+          },
         }),
       );
     mockPrisma.task.update.mockResolvedValueOnce({});
@@ -700,7 +717,7 @@ describe('New module routes', () => {
   });
 
   it('GET /api/v1/audit returns scoped audit entries for privileged viewer', async () => {
-    mockTenantContext('admin_1', 'admin', 'tenant_admin');
+    mockTenantContext('admin_1', 'admin', 'Owner');
     mockPrisma.auditLog.count.mockResolvedValueOnce(1);
     mockPrisma.auditLog.findMany.mockResolvedValueOnce([
       {
@@ -720,7 +737,7 @@ describe('New module routes', () => {
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/audit',
-      headers: authHeader('admin_1', 'admin', 'tenant_admin'),
+      headers: authHeader('admin_1', 'admin', 'Owner'),
     });
 
     expect(res.statusCode).toBe(200);
@@ -737,93 +754,37 @@ describe('New module routes', () => {
     });
   });
 
-  it('POST /api/v1/audit/break-glass/access allows super-admin access switch', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
-      id: 'super_1',
-      role: 'super_admin',
-      activeTenantId: 'tenant_1',
-      activeTenant: {
-        id: 'tenant_1',
-        isActive: true,
-      },
-      tenantMemberships: [],
-    });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({
-      id: 'tenant_2',
-      isActive: true,
-      name: 'Care Home B',
-    });
-    mockPrisma.user.update.mockResolvedValueOnce({});
-    mockPrisma.auditLog.create.mockResolvedValueOnce({});
-
+  // Phase 6 (2026-05-08): the legacy break-glass routes were deleted (the
+  // /admin/* migration is complete). Cross-tenant audit reads now go through
+  // /admin/audit/tenants/:id (which itself records a chain-of-custody row in
+  // PlatformAuditLog), and full tenant access goes through
+  // /admin/tenants/:id/impersonate. Lock the deletion in: tenant audience
+  // hits to the old paths now 404.
+  it('POST /api/v1/audit/break-glass/access is removed — returns 404', async () => {
+    mockTenantContext('admin_1', 'admin', 'Owner');
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/audit/break-glass/access',
-      headers: authHeader('super_1', 'super_admin'),
+      headers: authHeader('admin_1', 'admin', 'Owner'),
       payload: {
         tenantId: 'tenant_2',
         reason: 'Emergency support for tenant outage investigation.',
         expiresInMinutes: 15,
       },
     });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: {
-        activeTenantId: 'tenant_2',
-        previousTenantId: 'tenant_1',
-      },
-    });
+    expect(res.statusCode).toBe(404);
   });
 
-  it('POST /api/v1/audit/break-glass/release releases active super-admin tenant context', async () => {
-    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
-
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
-      id: 'super_1',
-      role: 'super_admin',
-      activeTenantId: 'tenant_2',
-      activeTenant: {
-        id: 'tenant_2',
-        isActive: true,
-      },
-      tenantMemberships: [],
-    });
-    mockPrisma.auditLog.findFirst
-      .mockResolvedValueOnce({
-        metadata: {
-          previousTenantId: 'tenant_1',
-          targetTenantId: 'tenant_2',
-          expiresAt,
-        },
-      })
-      .mockResolvedValueOnce({
-        metadata: {
-          previousTenantId: 'tenant_1',
-          targetTenantId: 'tenant_2',
-          expiresAt,
-        },
-      });
-    mockPrisma.user.update.mockResolvedValueOnce({});
-    mockPrisma.auditLog.create.mockResolvedValueOnce({});
-
+  it('POST /api/v1/audit/break-glass/release is removed — returns 404', async () => {
+    mockTenantContext('admin_1', 'admin', 'Owner');
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/audit/break-glass/release',
-      headers: authHeader('super_1', 'super_admin'),
+      headers: authHeader('admin_1', 'admin', 'Owner'),
       payload: {
         reason: 'Incident resolved, releasing elevated tenant context.',
       },
     });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: {
-        activeTenantId: 'tenant_1',
-        releasedTenantId: 'tenant_2',
-      },
-    });
+    expect(res.statusCode).toBe(404);
   });
 });

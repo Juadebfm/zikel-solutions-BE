@@ -334,7 +334,7 @@ export async function generateEvidencePack(
 
   const [actor, totalTasks, openTasks, completedTasks, overdueTasks, unassignedActiveTasks, pendingApprovals, rejectedApprovals, approvedApprovals, activeEmployees, incidents, dailyLogs, regulatory, approvals, audits, homeEvents, shifts, openSupportTickets] =
     await Promise.all([
-      prisma.user.findUnique({
+      prisma.tenantUser.findUnique({
         where: { id: actorUserId },
         select: { id: true, firstName: true, lastName: true, email: true },
       }),

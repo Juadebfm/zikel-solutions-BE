@@ -1,4 +1,6 @@
 import {
+  AiCallStatus,
+  AiCallSurface,
   AuditAction,
   MembershipStatus,
   TaskApprovalStatus,
@@ -15,10 +17,15 @@ import {
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext, type TenantContext } from '../../lib/tenant-context.js';
+import { assertAiEnabledForRequest, recordAiCall } from '../../lib/ai-access.js';
 import { getSummaryStats } from '../summary/summary.service.js';
 import type { AskAiBody, SetAiAccessBody, AiPage } from './ai.schema.js';
 
-const DEFAULT_AI_MODEL = 'gpt-5.4-mini';
+// Phase 8.1 (2026-05-09): default corrected from the previous 'gpt-5.4-mini'
+// (a typo / fictional model — would have 404'd silently and fallen through to
+// the deterministic fallback). Production env override is set in Render and
+// continues to take precedence over this default.
+const DEFAULT_AI_MODEL = 'gpt-4o-mini';
 const DEFAULT_AI_TIMEOUT_MS = 12_000;
 const CONTEXT_ITEM_LIMIT = 5;
 const PAGE_ITEMS_LIMIT = 20;
@@ -227,7 +234,7 @@ function toIsoOrNull(value: string | null | undefined): string | null {
 }
 
 function resolveStrengthProfile(tenant: TenantContext): AssistantStrengthProfile {
-  if (tenant.userRole === UserRole.super_admin || tenant.tenantRole === TenantRole.tenant_admin) {
+  if (tenant.tenantRole === TenantRole.tenant_admin) {
     return 'owner';
   }
   if (
@@ -1184,6 +1191,8 @@ async function callModel(args: {
   model: string;
   redactionApplied: boolean;
   redactionMode: AiContextRedactionMode | 'off';
+  tokensIn: number | null;
+  tokensOut: number | null;
 }> {
   const { body, ctx, analysis, roleInstructionText } = args;
   const config = aiConfig();
@@ -1242,6 +1251,11 @@ async function callModel(args: {
 
     const json = (await response.json()) as {
       choices?: Array<{ message?: { content?: string | null } }>;
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      };
     };
     const answer = json.choices?.[0]?.message?.content?.trim();
     if (!answer) {
@@ -1253,33 +1267,24 @@ async function callModel(args: {
       model: config.model,
       redactionApplied: modelInput.redactionApplied,
       redactionMode: modelInput.redactionMode,
+      tokensIn: typeof json.usage?.prompt_tokens === 'number' ? json.usage.prompt_tokens : null,
+      tokensOut: typeof json.usage?.completion_tokens === 'number' ? json.usage.completion_tokens : null,
     };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function assertAiAccessEnabled(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      id: true,
-      aiAccessEnabled: true,
-    },
-  });
-
-  if (!user) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-
-  if (!user.aiAccessEnabled) {
-    throw httpError(403, 'AI_ACCESS_DISABLED', 'AI access is not enabled for this account.');
-  }
-}
+// `assertAiAccessEnabled` was removed in Phase 8.1 (2026-05-09). The shared
+// `assertAiEnabledForRequest` in `src/lib/ai-access.ts` is now used by every
+// AI surface (chat, dashboard cards, chronology narrative) so the gate is
+// consistent.
 
 export async function askAi(userId: string, body: AskAiBody) {
   const tenant = await requireTenantContext(userId);
-  await assertAiAccessEnabled(userId);
+  // Throws 403 if user/tenant disabled AI; returns globallyEnabled=false when
+  // env AI_ENABLED is off (drives the silent fallback path further down).
+  await assertAiEnabledForRequest({ userId, surface: AiCallSurface.dashboard_card });
   const strengthProfile = resolveStrengthProfile(tenant);
   const responseMode = resolveResponseMode(strengthProfile);
   const displayMode = resolveDisplayMode(body.displayMode, strengthProfile);
@@ -1314,7 +1319,11 @@ export async function askAi(userId: string, body: AskAiBody) {
   let modelPromptRedactionMode: AiContextRedactionMode | 'off' = redactionConfig.enabled
     ? redactionConfig.mode
     : 'off';
+  let tokensIn: number | null = null;
+  let tokensOut: number | null = null;
+  let errorReason: string | null = null;
 
+  const callStartedAt = Date.now();
   try {
     const modelResult = await callModel({
       body,
@@ -1328,9 +1337,30 @@ export async function askAi(userId: string, body: AskAiBody) {
     answer = modelResult.answer;
     modelPromptRedactionApplied = modelResult.redactionApplied;
     modelPromptRedactionMode = modelResult.redactionMode;
-  } catch {
-    // Fallback is intentionally silent and non-blocking.
+    tokensIn = modelResult.tokensIn;
+    tokensOut = modelResult.tokensOut;
+  } catch (err) {
+    // Fallback is intentionally silent and non-blocking, but we record the
+    // attempt so spend monitoring includes failed calls. AI_ENABLED=false and
+    // missing API key both surface here as `Error('AI is disabled.')` /
+    // `Error('AI API key is missing.')`; both are recorded with status=fallback
+    // (the user got a deterministic answer, no model call cost incurred).
+    errorReason = err instanceof Error ? err.message : 'unknown';
   }
+  const latencyMs = Date.now() - callStartedAt;
+
+  // Fire-and-forget AiCallEvent — never blocks the response.
+  void recordAiCall({
+    tenantId: tenant.tenantId,
+    userId,
+    surface: AiCallSurface.dashboard_card,
+    model,
+    status: source === 'model' ? AiCallStatus.success : AiCallStatus.fallback,
+    tokensIn,
+    tokensOut,
+    latencyMs,
+    errorReason,
+  });
 
   const { answer: safeAnswer, languageSafety } = enforceAnswerSafety({
     answer,
@@ -1407,41 +1437,30 @@ export async function askAi(userId: string, body: AskAiBody) {
 }
 
 export async function setUserAiAccess(actorUserId: string, targetUserId: string, body: SetAiAccessBody) {
-  const actor = await prisma.user.findUnique({
+  const actor = await prisma.tenantUser.findUnique({
     where: { id: actorUserId },
     select: { id: true, role: true },
   });
   if (!actor) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
 
-  let auditTenantId: string | null = null;
-  if (actor.role !== UserRole.super_admin) {
-    const tenant = await requireTenantContext(actorUserId);
-    auditTenantId = tenant.tenantId;
+  const tenant = await requireTenantContext(actorUserId);
+  const auditTenantId: string | null = tenant.tenantId;
 
-    const membership = await prisma.tenantMembership.findUnique({
-      where: {
-        tenantId_userId: {
-          tenantId: tenant.tenantId,
-          userId: targetUserId,
-        },
+  const membership = await prisma.tenantMembership.findUnique({
+    where: {
+      tenantId_userId: {
+        tenantId: tenant.tenantId,
+        userId: targetUserId,
       },
-      select: { status: true },
-    });
+    },
+    select: { status: true },
+  });
 
-    if (!membership || membership.status !== MembershipStatus.active) {
-      throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-    }
-  } else {
-    const existingUser = await prisma.user.findUnique({
-      where: { id: targetUserId },
-      select: { id: true },
-    });
-    if (!existingUser) {
-      throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-    }
+  if (!membership || membership.status !== MembershipStatus.active) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  const updated = await prisma.user.update({
+  const updated = await prisma.tenantUser.update({
     where: { id: targetUserId },
     data: { aiAccessEnabled: body.enabled },
     select: {

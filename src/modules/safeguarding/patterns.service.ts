@@ -136,7 +136,7 @@ type IncidentTaskRow = Prisma.TaskGetPayload<{
     youngPersonId: true;
     home: { select: { id: true; name: true } };
     youngPerson: { select: { id: true; firstName: true; lastName: true } };
-    assignee: { select: { jobTitle: true; role: { select: { name: true } } } };
+    assignee: { select: { jobTitle: true } };
   };
 }>;
 
@@ -255,7 +255,7 @@ function resolveWindow(query: IncidentPatternQuery): { from: Date; to: Date; pol
 
 function resolveConfidentialityScope(args: {
   requestedScope: ConfidentialityScope | undefined;
-  userRole: 'super_admin' | 'staff' | 'manager' | 'admin';
+  userRole: 'staff' | 'manager' | 'admin';
   tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null;
 }): ResolvedConfidentiality {
   const requestedScope = args.requestedScope ?? defaultConfidentialityScope();
@@ -439,7 +439,6 @@ function extractRoles(task: IncidentTaskRow): string[] {
     : [];
   const inferred = [
     task.assignee?.jobTitle ?? '',
-    task.assignee?.role?.name ?? '',
   ];
   return dedupeStrings([...payloadRoles, ...inferred], 6);
 }
@@ -996,7 +995,6 @@ async function buildIncidentPatterns(args: {
       assignee: {
         select: {
           jobTitle: true,
-          role: { select: { name: true } },
         },
       },
     },

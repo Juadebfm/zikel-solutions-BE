@@ -36,8 +36,8 @@ type RoleCacheEntry = {
   name: string;
   description: string | null;
   isActive: boolean;
-  isSystemGenerated: boolean;
-  permissions: unknown;
+  isSystemRole: boolean;
+  permissions: string[];
 };
 
 type SettingsCacheEntry = {
@@ -78,7 +78,7 @@ export async function getCachedRoles(tenantId: string): Promise<RoleCacheEntry[]
         name: true,
         description: true,
         isActive: true,
-        isSystemGenerated: true,
+        isSystemRole: true,
         permissions: true,
       },
       orderBy: { name: 'asc' },

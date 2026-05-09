@@ -167,7 +167,7 @@ async function main() {
 
   try {
     const where = buildCandidateWhere(parsed);
-    const candidates = await prisma.user.findMany({
+    const candidates = await prisma.tenantUser.findMany({
       where,
       select: {
         id: true,
@@ -316,7 +316,7 @@ async function main() {
       archivedTenants.push(updatedTenant);
     }
 
-    const remainingMatches = await prisma.user.count({ where });
+    const remainingMatches = await prisma.tenantUser.count({ where });
     console.log(
       JSON.stringify(
         {

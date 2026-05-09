@@ -4,6 +4,7 @@ import authRoutes from '../modules/auth/auth.routes.js';
 import meRoutes from '../modules/me/me.routes.js';
 import publicRoutes from '../modules/public/public.routes.js';
 import aiRoutes from '../modules/ai/ai.routes.js';
+import aiConversationsRoutes from '../modules/ai/conversations.routes.js';
 import announcementsRoutes from '../modules/announcements/announcements.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
@@ -33,18 +34,44 @@ import rotasRoutes from '../modules/rotas/rotas.routes.js';
 import regionsRoutes from '../modules/regions/regions.routes.js';
 import groupingsRoutes from '../modules/groupings/groupings.routes.js';
 import sensitiveDataRoutes from '../modules/sensitive-data/sensitive-data.routes.js';
+import adminAuthRoutes from '../modules/admin/admin-auth.routes.js';
+import adminMfaRoutes from '../modules/admin/admin-mfa.routes.js';
+import adminTenantRoutes from '../modules/admin/admin-tenants.routes.js';
+import adminAuditRoutes from '../modules/admin/admin-audit.routes.js';
+import adminNotificationsRoutes from '../modules/admin/admin-notifications.routes.js';
+import impersonationRoutes from '../modules/admin/impersonation.routes.js';
+import mfaRoutes from '../modules/auth/mfa.routes.js';
+import invitationRoutes, { publicInvitationRoutes } from '../modules/auth/invitations.routes.js';
 
 const rootRouter: FastifyPluginAsync = async (fastify) => {
   // Infrastructure probes — no auth, no /api/v1 prefix
   await fastify.register(healthRoutes);
 
+  // ── /admin/* — Platform user audience (Zikel internal staff) ─────────────
+  // Strictly separated from the tenant API. JWTs minted here carry aud='platform'.
+  await fastify.register(
+    async (admin) => {
+      await admin.register(adminAuthRoutes, { prefix: '/auth' });
+      await admin.register(adminMfaRoutes, { prefix: '/auth/mfa' });
+      await admin.register(adminTenantRoutes, { prefix: '/tenants' });
+      await admin.register(adminAuditRoutes, { prefix: '/audit' });
+      await admin.register(adminNotificationsRoutes, { prefix: '/notifications' });
+      await admin.register(impersonationRoutes);
+    },
+    { prefix: '/admin' },
+  );
+
   // v1 API
   await fastify.register(
     async (v1) => {
       await v1.register(authRoutes, { prefix: '/auth' });
+      await v1.register(mfaRoutes, { prefix: '/auth/mfa' });
+      await v1.register(publicInvitationRoutes, { prefix: '/auth/invitations' });
+      await v1.register(invitationRoutes, { prefix: '/invitations' });
       await v1.register(meRoutes, { prefix: '/me' });
       await v1.register(publicRoutes, { prefix: '/public' });
       await v1.register(aiRoutes, { prefix: '/ai' });
+      await v1.register(aiConversationsRoutes, { prefix: '/ai/conversations' });
       await v1.register(announcementsRoutes, { prefix: '/announcements' });
       await v1.register(summaryRoutes, { prefix: '/summary' });
       await v1.register(dashboardRoutes, { prefix: '/dashboard' });

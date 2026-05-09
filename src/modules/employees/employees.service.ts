@@ -3,11 +3,9 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import { hashPassword } from '../../lib/password.js';
 import { emitNotification, getTenantAdminUserIds } from '../../lib/notification-emitter.js';
 import type {
   CreateEmployeeBody,
-  CreateEmployeeWithUserBody,
   ListEmployeesQuery,
   UpdateEmployeeBody,
 } from './employees.schema.js';
@@ -23,7 +21,6 @@ const EMP_INCLUDE = {
     },
   },
   home: { select: { id: true, name: true } },
-  role: { select: { id: true, name: true } },
 } as const;
 
 function mapEmployee(employee: Prisma.EmployeeGetPayload<{ include: typeof EMP_INCLUDE }>) {
@@ -33,8 +30,6 @@ function mapEmployee(employee: Prisma.EmployeeGetPayload<{ include: typeof EMP_I
     user: employee.user,
     homeId: employee.homeId,
     homeName: employee.home?.name ?? null,
-    roleId: employee.roleId,
-    roleName: employee.role?.name ?? null,
     jobTitle: employee.jobTitle,
     startDate: employee.startDate,
     endDate: employee.endDate,
@@ -50,7 +45,7 @@ function mapEmployee(employee: Prisma.EmployeeGetPayload<{ include: typeof EMP_I
 }
 
 async function ensureUserHasTenantAccess(userId: string, tenantId: string) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { id: true },
   });
@@ -87,16 +82,6 @@ async function ensureHomeExists(homeId: string, tenantId: string) {
   }
 }
 
-async function ensureRoleExists(roleId: string, tenantId: string) {
-  const role = await prisma.role.findFirst({
-    where: { id: roleId, tenantId },
-    select: { id: true },
-  });
-  if (!role) {
-    throw httpError(404, 'ROLE_NOT_FOUND', 'Role not found.');
-  }
-}
-
 // ─── List ────────────────────────────────────────────────────────────────────
 
 export async function listEmployees(actorId: string, query: ListEmployeesQuery) {
@@ -106,7 +91,6 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
     tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
     ...(query.status && query.status !== 'all' ? { status: query.status } : {}),
-    ...(query.roleId ? { roleId: query.roleId } : {}),
     ...(query.isActive !== undefined ? { isActive: query.isActive } : {}),
     ...(query.search
       ? {
@@ -144,7 +128,6 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
       pageSize: query.pageSize,
       homeId: query.homeId ?? null,
       status: query.status ?? null,
-      roleId: query.roleId ?? null,
       hasSearch: Boolean(query.search),
       isActive: query.isActive ?? null,
     },
@@ -192,7 +175,8 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
   const tenant = await requireTenantContext(actorId);
   await ensureUserHasTenantAccess(body.userId, tenant.tenantId);
   if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
-  if (body.roleId) await ensureRoleExists(body.roleId, tenant.tenantId);
+  // body.roleId is silently ignored — Employees no longer carry permissions; those
+  // live on the user's TenantMembership. The schema field is kept for FE compat.
 
   try {
     const employee = await prisma.employee.create({
@@ -200,7 +184,6 @@ export async function createEmployee(actorId: string, body: CreateEmployeeBody) 
         tenantId: tenant.tenantId,
         userId: body.userId,
         homeId: body.homeId ?? null,
-        roleId: body.roleId ?? null,
         jobTitle: body.jobTitle ?? null,
         startDate: body.startDate ?? null,
         endDate: body.endDate ?? null,
@@ -265,16 +248,11 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
   if (body.homeId !== undefined && body.homeId !== null) {
     await ensureHomeExists(body.homeId, tenant.tenantId);
   }
-  if (body.roleId !== undefined && body.roleId !== null) {
-    await ensureRoleExists(body.roleId, tenant.tenantId);
-  }
+  // body.roleId is silently ignored — see createEmployee comment.
 
   const updateData: Prisma.EmployeeUpdateInput = {};
   if (body.homeId !== undefined) {
     updateData.home = body.homeId === null ? { disconnect: true } : { connect: { id: body.homeId } };
-  }
-  if (body.roleId !== undefined) {
-    updateData.role = body.roleId === null ? { disconnect: true } : { connect: { id: body.roleId } };
   }
   if (body.jobTitle !== undefined) updateData.jobTitle = body.jobTitle;
   if (body.startDate !== undefined) updateData.startDate = body.startDate;
@@ -308,93 +286,10 @@ export async function updateEmployee(actorId: string, id: string, body: UpdateEm
   return mapEmployee(employee);
 }
 
-// ─── Create with User (multi-step) ───────────────────────────────────────────
-
-export async function createEmployeeWithUser(actorId: string, body: CreateEmployeeWithUserBody) {
-  const tenant = await requireTenantContext(actorId);
-  if (body.homeId) await ensureHomeExists(body.homeId, tenant.tenantId);
-  if (body.roleId) await ensureRoleExists(body.roleId, tenant.tenantId);
-
-  const passwordHash = await hashPassword(body.password);
-
-  try {
-    const user = await prisma.user.create({
-      data: {
-        email: body.email,
-        passwordHash,
-        firstName: body.firstName,
-        lastName: body.lastName,
-        otherNames: body.otherNames ?? null,
-        dateOfBirth: body.dateOfBirth ?? null,
-        userType: body.userType ?? 'internal',
-        avatarUrl: body.avatarUrl ?? null,
-        landingPage: body.landingPage ?? null,
-        hideFutureTasks: body.hideFutureTasks ?? false,
-        enableIpRestriction: body.enableIpRestriction ?? false,
-        passwordExpiresInstantly: body.passwordExpiresInstantly ?? false,
-        disableLoginAt: body.disableLoginAt ?? null,
-        passwordExpiresAt: body.passwordExpiresAt ?? null,
-        isActive: body.isActive ?? true,
-        emailVerified: true,
-        acceptedTerms: true,
-        activeTenantId: tenant.tenantId,
-      },
-    });
-
-    await prisma.tenantMembership.create({
-      data: {
-        tenantId: tenant.tenantId,
-        userId: user.id,
-        role: MembershipStatus.active ? 'staff' : 'staff',
-        status: MembershipStatus.active,
-        invitedById: actorId,
-      },
-    });
-
-    const employee = await prisma.employee.create({
-      data: {
-        tenantId: tenant.tenantId,
-        userId: user.id,
-        homeId: body.homeId ?? null,
-        roleId: body.roleId ?? null,
-        jobTitle: body.jobTitle ?? null,
-        startDate: body.startDate ?? null,
-        contractType: body.contractType ?? null,
-        status: 'current',
-        isActive: body.isActive ?? true,
-      },
-      include: EMP_INCLUDE,
-    });
-
-    await prisma.auditLog.create({
-      data: {
-        tenantId: tenant.tenantId,
-        userId: actorId,
-        action: AuditAction.record_created,
-        entityType: 'employee',
-        entityId: employee.id,
-        metadata: { createdWithUser: true, userId: user.id },
-      },
-    });
-
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        userType: user.userType,
-        isActive: user.isActive,
-      },
-      employee: mapEmployee(employee),
-    };
-  } catch (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      throw httpError(409, 'EMAIL_TAKEN', 'A user with this email already exists.');
-    }
-    throw error;
-  }
-}
+// Phase 5: removed `createEmployeeWithUser`. Admins onboard new staff via the
+// Invitation flow — see src/modules/auth/invitations.service.ts. The recipient
+// sets their own password and an Employee record is auto-provisioned at accept
+// time when the invitation specifies a homeId.
 
 // ─── Deactivate ──────────────────────────────────────────────────────────────
 

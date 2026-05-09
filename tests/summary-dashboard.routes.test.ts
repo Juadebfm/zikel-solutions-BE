@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 
 const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
-    user: {
+    tenantUser: {
       findUnique: vi.fn(),
       findMany: vi.fn(),
     },
@@ -80,12 +80,30 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockPrisma.user.findMany.mockResolvedValue([]);
+  mockPrisma.tenantUser.findMany.mockResolvedValue([]);
   mockPrisma.taskReviewEvent.findMany.mockResolvedValue([]);
   mockPrisma.taskReviewEvent.findFirst.mockResolvedValue(null);
   mockPrisma.uploadedFile.findMany.mockResolvedValue([]);
   mockPrisma.auditLog.findMany.mockResolvedValue([]);
 });
+
+// Phase 3 permission catalogue (mirrors src/auth/permissions.ts). Owner gets all.
+const ALL_PERMS = [
+  'employees:read', 'employees:write',
+  'homes:read', 'homes:write',
+  'care_groups:read', 'care_groups:write',
+  'young_people:read', 'young_people:write',
+  'tasks:read', 'tasks:write', 'tasks:approve',
+  'safeguarding:read', 'safeguarding:write',
+  'reports:read', 'reports:export',
+  'audit:read',
+  'settings:read', 'settings:write',
+  'members:read', 'members:write',
+  'roles:read', 'roles:write',
+  'ai:use', 'ai:admin',
+  'announcements:read', 'announcements:write',
+  'vehicles:read', 'vehicles:write',
+];
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
   const token = app.jwt.sign({
@@ -94,6 +112,8 @@ function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'ma
     role,
     tenantId: 'tenant_1',
     tenantRole: role === 'staff' ? 'staff' : 'sub_admin',
+    mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -103,17 +123,31 @@ function mockTenantContext(
   userRole: 'staff' | 'manager' | 'admin' = 'manager',
   tenantRole: 'staff' | 'sub_admin' | 'tenant_admin' = 'sub_admin',
 ) {
-  mockPrisma.user.findUnique.mockResolvedValueOnce({
+  // tenantRole legacy enum is derived from role.name in tenant-context.ts:
+  //   Owner→tenant_admin, Admin→sub_admin, anything else→staff. We round-trip
+  //   that here by picking a roleName that maps back to the desired enum.
+  const roleName = tenantRole === 'tenant_admin' ? 'Owner'
+    : tenantRole === 'sub_admin' ? 'Admin'
+    : 'Care Worker';
+  mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
     id: userId,
     role: userRole,
     activeTenantId: 'tenant_1',
+    activeTenant: { id: 'tenant_1', isActive: true },
+    tenantMemberships: [
+      {
+        tenantId: 'tenant_1',
+        status: 'active',
+        role: { name: roleName, permissions: ALL_PERMS },
+      },
+    ],
   });
   mockPrisma.tenant.findUnique.mockResolvedValueOnce({
     id: 'tenant_1',
     isActive: true,
   });
   mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-    role: tenantRole,
+    role: { name: roleName, permissions: ALL_PERMS },
     status: 'active',
   });
 }
@@ -121,11 +155,16 @@ function mockTenantContext(
 describe('Summary routes', () => {
   it('GET /api/v1/summary/stats returns summary KPIs', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
+    // Phase 1+: comments now resolves via auditLog→task.count (not announcement.count),
+    // and `rewards` is the raw pendingRewards task count (not multiplied).
+    // Order of task.count calls: overdue, dueToday, pendingApproval, rejected,
+    // draft, future, [comments task.count is skipped when no commented task IDs
+    // exist], pendingRewards.
     mockPrisma.task.count
       .mockResolvedValueOnce(3) // overdue
       .mockResolvedValueOnce(5) // dueToday
@@ -133,8 +172,7 @@ describe('Summary routes', () => {
       .mockResolvedValueOnce(1) // rejected
       .mockResolvedValueOnce(4) // draft
       .mockResolvedValueOnce(6) // future
-      .mockResolvedValueOnce(9); // completed tasks
-    mockPrisma.announcement.count.mockResolvedValueOnce(7); // unread announcements
+      .mockResolvedValueOnce(9); // pendingRewards (with no comments task IDs, this slot)
 
     const res = await app.inject({
       method: 'GET',
@@ -152,8 +190,8 @@ describe('Summary routes', () => {
         rejected: 1,
         draft: 4,
         future: 6,
-        comments: 7,
-        rewards: 90,
+        comments: 0,   // listCommentedTaskIdsForTenant short-circuits to 0 with empty mock
+        rewards: 9,    // raw pendingRewards count
       },
     });
 
@@ -205,7 +243,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/provisions returns grouped events and shifts', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -270,7 +308,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/todos includes a friendly taskRef', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -330,7 +368,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/overdue-tasks returns only overdue rows with taskRef', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -416,12 +454,12 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/tasks-to-approve returns table-ready approval rows', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
     mockPrisma.employee.findFirst.mockResolvedValueOnce({ id: 'emp_1', homeId: 'home_1' });
-    mockPrisma.user.findMany.mockResolvedValueOnce([
+    mockPrisma.tenantUser.findMany.mockResolvedValueOnce([
       { id: 'admin_1', firstName: 'Ruhman', lastName: 'Akoto' },
       { id: 'manager_1', firstName: 'Izu', lastName: 'Obani' },
     ]);
@@ -512,7 +550,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/tasks-to-approve applies form/date/search filters', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -548,7 +586,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/tasks-to-approve supports scope=all without gate filtering', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -571,7 +609,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/tasks-to-approve supports scope=gate overdue filter', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -597,7 +635,7 @@ describe('Summary routes', () => {
 
   it('GET /api/v1/summary/tasks-to-approve/:id returns dynamic detail payload', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -648,7 +686,7 @@ describe('Summary routes', () => {
         home: { name: 'Fortuna Homes' },
       },
     });
-    mockPrisma.user.findMany.mockResolvedValueOnce([
+    mockPrisma.tenantUser.findMany.mockResolvedValueOnce([
       { id: 'user_submitter_1', firstName: 'Ruhman', lastName: 'Akoto' },
       { id: 'user_updater_1', firstName: 'Jubilee', lastName: 'Penn' },
     ]);
@@ -697,7 +735,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/:id/review-events records review state', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -755,7 +793,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/:id/approve blocks acknowledge when any popup item is unreviewed', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -792,7 +830,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/:id/approve uses per-task gate by default', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -882,7 +920,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/:id/approve stores signature evidence when provided', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -981,7 +1019,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/process-batch blocks approve submit when popup has unreviewed items', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -1013,7 +1051,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/process-batch stores signature evidence for approve action', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });
@@ -1058,7 +1096,7 @@ describe('Summary routes', () => {
 
   it('POST /api/v1/summary/tasks-to-approve/process-batch rejects signature on reject action', async () => {
     mockTenantContext('user_1', 'manager', 'sub_admin');
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       role: 'manager',
     });

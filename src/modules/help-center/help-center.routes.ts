@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import * as faqsService from './faqs.service.js';
 import * as ticketsService from './tickets.service.js';
 import {
@@ -85,7 +86,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/faqs', {
-    preHandler: [requireRole('super_admin', 'admin')],
+    preHandler: [requirePermission(P.HELP_CENTER_ADMIN)],
     schema: {
       tags: ['Help Center'],
       summary: 'Create FAQ article',
@@ -117,7 +118,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/faqs/:id', {
-    preHandler: [requireRole('super_admin', 'admin')],
+    preHandler: [requirePermission(P.HELP_CENTER_ADMIN)],
     schema: {
       tags: ['Help Center'],
       summary: 'Update FAQ article',
@@ -151,7 +152,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/faqs/:id', {
-    preHandler: [requireRole('super_admin', 'admin')],
+    preHandler: [requirePermission(P.HELP_CENTER_ADMIN)],
     schema: {
       tags: ['Help Center'],
       summary: 'Delete FAQ article',

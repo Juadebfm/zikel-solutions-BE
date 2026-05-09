@@ -6,7 +6,7 @@ import { invalidateRolesCache } from '../../lib/cache.js';
 import type { CreateRoleBody, ListRolesQuery, UpdateRoleBody } from './roles.schema.js';
 
 const ROLE_INCLUDE = {
-  _count: { select: { employees: true } },
+  _count: { select: { memberships: true } },
 } as const;
 
 function mapRole(role: Prisma.RoleGetPayload<{ include: typeof ROLE_INCLUDE }>) {
@@ -15,9 +15,10 @@ function mapRole(role: Prisma.RoleGetPayload<{ include: typeof ROLE_INCLUDE }>) 
     name: role.name,
     description: role.description,
     isActive: role.isActive,
-    isSystemGenerated: role.isSystemGenerated,
+    isSystemRole: role.isSystemRole,
+    isAssignable: role.isAssignable,
     permissions: role.permissions,
-    activeUsers: role._count.employees,
+    activeUsers: role._count.memberships,
     createdAt: role.createdAt,
     updatedAt: role.updatedAt,
   };
@@ -88,7 +89,7 @@ export async function createRole(actorId: string, body: CreateRoleBody) {
         tenantId: tenant.tenantId,
         name: body.name,
         description: body.description ?? null,
-        permissions: (body.permissions ?? {}) as Prisma.InputJsonValue,
+        permissions: body.permissions ?? [],
         isActive: body.isActive ?? true,
       },
       include: ROLE_INCLUDE,
@@ -129,7 +130,7 @@ export async function updateRole(actorId: string, id: string, body: UpdateRoleBo
   const updateData: Prisma.RoleUpdateInput = {};
   if (body.name !== undefined) updateData.name = body.name;
   if (body.description !== undefined) updateData.description = body.description;
-  if (body.permissions !== undefined) updateData.permissions = body.permissions as Prisma.InputJsonValue;
+  if (body.permissions !== undefined) updateData.permissions = body.permissions;
   if (body.isActive !== undefined) updateData.isActive = body.isActive;
 
   try {
@@ -166,7 +167,7 @@ export async function deactivateRole(actorId: string, id: string) {
   const tenant = await requireTenantContext(actorId);
   const existing = await prisma.role.findFirst({
     where: { id, tenantId: tenant.tenantId },
-    select: { id: true, isSystemGenerated: true },
+    select: { id: true, isSystemRole: true },
   });
   if (!existing) {
     throw httpError(404, 'ROLE_NOT_FOUND', 'Role not found.');

@@ -1,4 +1,6 @@
 import {
+  AiCallStatus,
+  AiCallSurface,
   AuditAction,
   Prisma,
   TenantRole,
@@ -18,6 +20,7 @@ import {
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { assertAiEnabledForRequest, recordAiCall } from '../../lib/ai-access.js';
 import type {
   ChronologyEventType,
   ChronologyQuery,
@@ -495,9 +498,16 @@ async function generateModelNarrative(args: {
   targetName: string;
   chronology: ChronologyEvent[];
   fallback: ChronologyNarrative;
-}): Promise<ChronologyNarrative | null> {
+}): Promise<{
+  narrative: ChronologyNarrative | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  errorReason: string | null;
+}> {
   const cfg = aiConfig();
-  if (!cfg.enabled || !cfg.apiKey || args.chronology.length === 0) return null;
+  if (!cfg.enabled || !cfg.apiKey || args.chronology.length === 0) {
+    return { narrative: null, tokensIn: null, tokensOut: null, errorReason: null };
+  }
 
   const condensed = args.chronology.slice(-24).map((event) => ({
     id: event.id,
@@ -552,12 +562,29 @@ async function generateModelNarrative(args: {
       }),
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+      return {
+        narrative: null,
+        tokensIn: null,
+        tokensOut: null,
+        errorReason: `provider_status_${response.status}`,
+      };
+    }
     const payload = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+    const tokensIn = typeof payload.usage?.prompt_tokens === 'number'
+      ? payload.usage.prompt_tokens
+      : null;
+    const tokensOut = typeof payload.usage?.completion_tokens === 'number'
+      ? payload.usage.completion_tokens
+      : null;
+
     const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || !content.trim()) return null;
+    if (typeof content !== 'string' || !content.trim()) {
+      return { narrative: null, tokensIn, tokensOut, errorReason: 'empty_content' };
+    }
 
     const summary = applyChronologyNonBlamingLanguage(content.trim());
     const qualityChecks = evaluateChronologyNarrativeQuality({
@@ -568,18 +595,28 @@ async function generateModelNarrative(args: {
     });
 
     if (!qualityChecks.passed) {
-      return null;
+      return { narrative: null, tokensIn, tokensOut, errorReason: 'quality_check_failed' };
     }
 
     return {
-      ...args.fallback,
-      source: 'model',
-      generatedAt: new Date().toISOString(),
-      summary,
-      qualityChecks,
+      narrative: {
+        ...args.fallback,
+        source: 'model',
+        generatedAt: new Date().toISOString(),
+        summary,
+        qualityChecks,
+      },
+      tokensIn,
+      tokensOut,
+      errorReason: null,
     };
-  } catch {
-    return null;
+  } catch (err) {
+    return {
+      narrative: null,
+      tokensIn: null,
+      tokensOut: null,
+      errorReason: err instanceof Error ? err.message : 'unknown',
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -587,6 +624,8 @@ async function generateModelNarrative(args: {
 
 async function buildNarrative(args: {
   includeNarrative: boolean;
+  actorUserId: string;
+  tenantId: string;
   targetType: ChronologyTargetType;
   targetName: string;
   chronology: ChronologyEvent[];
@@ -598,13 +637,51 @@ async function buildNarrative(args: {
     targetName: args.targetName,
     chronology: args.chronology,
   });
-  const model = await generateModelNarrative({
+
+  // Phase 8.1 gate: chronology narrative respects the same access matrix as
+  // /ai/ask. If the user/tenant is denied, we silently fall back to the
+  // deterministic narrative — narrative is a side-feature of the chronology
+  // read, so we never fail the whole request just because AI is off.
+  let aiAccessAllowed = true;
+  try {
+    const access = await assertAiEnabledForRequest({
+      userId: args.actorUserId,
+      surface: AiCallSurface.chronology_narrative,
+    });
+    if (!access.globallyEnabled) {
+      aiAccessAllowed = false;
+    }
+  } catch {
+    aiAccessAllowed = false;
+  }
+
+  if (!aiAccessAllowed) {
+    return fallback;
+  }
+
+  const callStartedAt = Date.now();
+  const result = await generateModelNarrative({
     targetType: args.targetType,
     targetName: args.targetName,
     chronology: args.chronology,
     fallback,
   });
-  return model ?? fallback;
+  const latencyMs = Date.now() - callStartedAt;
+
+  // Fire-and-forget AiCallEvent.
+  void recordAiCall({
+    tenantId: args.tenantId,
+    userId: args.actorUserId,
+    surface: AiCallSurface.chronology_narrative,
+    model: result.narrative ? aiConfig().model : null,
+    status: result.narrative ? AiCallStatus.success : AiCallStatus.fallback,
+    tokensIn: result.tokensIn,
+    tokensOut: result.tokensOut,
+    latencyMs,
+    errorReason: result.errorReason,
+  });
+
+  return result.narrative ?? fallback;
 }
 
 function toScopeLinkage(target: ChronologyTarget) {
@@ -896,6 +973,7 @@ async function resolveHomeScope(args: {
 
 async function buildChronology(args: {
   tenantId: string;
+  actorUserId: string;
   scope: ScopeDescriptor;
   query: ChronologyQuery;
   confidentiality: ResolvedConfidentiality;
@@ -1020,6 +1098,8 @@ async function buildChronology(args: {
 
   const narrative = await buildNarrative({
     includeNarrative: args.query.includeNarrative,
+    actorUserId: args.actorUserId,
+    tenantId: args.tenantId,
     targetType: args.scope.targetType,
     targetName: args.scope.target.name,
     chronology,
@@ -1075,7 +1155,7 @@ export async function getYoungPersonChronology(
     tenantId: tenant.tenantId,
     youngPersonId,
   });
-  return buildChronology({ tenantId: tenant.tenantId, scope, query, confidentiality });
+  return buildChronology({ tenantId: tenant.tenantId, actorUserId, scope, query, confidentiality });
 }
 
 export async function getHomeChronology(
@@ -1093,7 +1173,7 @@ export async function getHomeChronology(
     tenantId: tenant.tenantId,
     homeId,
   });
-  return buildChronology({ tenantId: tenant.tenantId, scope, query, confidentiality });
+  return buildChronology({ tenantId: tenant.tenantId, actorUserId, scope, query, confidentiality });
 }
 
 type ReflectivePromptCategory =
@@ -1332,7 +1412,7 @@ function reflectiveRolloutConfig(): ReflectiveRolloutConfig {
 async function resolveReflectiveActor(userId: string): Promise<ReflectiveActorContext> {
   const tenant = await requireTenantContext(userId);
   const [user, employee] = await Promise.all([
-    prisma.user.findUnique({
+    prisma.tenantUser.findUnique({
       where: { id: userId },
       select: { id: true, role: true },
     }),
@@ -1358,7 +1438,6 @@ async function resolveReflectiveActor(userId: string): Promise<ReflectiveActorCo
 }
 
 function isPrivilegedReflectiveActor(actor: ReflectiveActorContext) {
-  if (actor.userRole === UserRole.super_admin) return true;
   if (actor.userRole === UserRole.admin || actor.userRole === UserRole.manager) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }

@@ -15,6 +15,7 @@ import cookiePlugin from './plugins/cookie.js';
 import authPlugin from './plugins/auth.js';
 import rootRouter from './routes/index.js';
 import { startSafeguardingRiskBackfillScheduler } from './modules/safeguarding/risk-alerts.scheduler.js';
+import { startOtpRetentionScheduler } from './lib/otp-retention.js';
 
 function buildAuditSource(request: FastifyRequest) {
   const routePath = request.routeOptions?.url ?? request.url.split('?')[0];
@@ -110,6 +111,7 @@ export async function buildApp() {
   await fastify.register(rootRouter);
 
   const stopSafeguardingRiskBackfillScheduler = startSafeguardingRiskBackfillScheduler();
+  const stopOtpRetentionScheduler = startOtpRetentionScheduler();
 
   let clearDbKeepAliveTimer = () => {};
   if (env.DB_KEEPALIVE_ENABLED) {
@@ -124,6 +126,7 @@ export async function buildApp() {
   fastify.addHook('onClose', async () => {
     clearDbKeepAliveTimer();
     stopSafeguardingRiskBackfillScheduler();
+    stopOtpRetentionScheduler();
   });
 
   return fastify;

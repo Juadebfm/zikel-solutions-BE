@@ -24,6 +24,7 @@ export function enrichAuditLogCreateData<T extends MutableAuditCreateData>(
     metadata?: Prisma.InputJsonValue | null;
     ipAddress?: string | null;
     userAgent?: string | null;
+    impersonatorId?: string | null;
   };
 
   if ((mutable.ipAddress === undefined || mutable.ipAddress === null || mutable.ipAddress === '') && context?.ipAddress) {
@@ -31,6 +32,16 @@ export function enrichAuditLogCreateData<T extends MutableAuditCreateData>(
   }
   if ((mutable.userAgent === undefined || mutable.userAgent === null || mutable.userAgent === '') && context?.userAgent) {
     mutable.userAgent = context.userAgent;
+  }
+
+  // Phase 5: stamp impersonatorId from request context unless the caller
+  // already specified one. This makes "actions performed under impersonation"
+  // auditable without service code remembering to pass it.
+  if (
+    (mutable.impersonatorId === undefined || mutable.impersonatorId === null) &&
+    context?.impersonatorId
+  ) {
+    mutable.impersonatorId = context.impersonatorId;
   }
 
   const metadata = {

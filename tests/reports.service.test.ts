@@ -4,6 +4,7 @@ import JSZip from 'jszip';
 const { mockPrisma, requireTenantContext } = vi.hoisted(() => ({
   mockPrisma: {
     user: { findUnique: vi.fn() },
+    tenantUser: { findUnique: vi.fn() },
     home: { findFirst: vi.fn(), findMany: vi.fn() },
     careGroup: { findFirst: vi.fn() },
     task: { count: vi.fn(), findMany: vi.fn(), groupBy: vi.fn() },
@@ -62,7 +63,7 @@ beforeEach(() => {
 
 describe('reports.service', () => {
   it('generates a reg44 evidence pack with chronology and checksum', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       id: 'user_1',
       firstName: 'Admin',
       lastName: 'User',

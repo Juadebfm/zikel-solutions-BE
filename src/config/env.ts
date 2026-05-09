@@ -26,6 +26,23 @@ const envSchema = z.object({
   AUTH_REFRESH_COOKIE_DOMAIN: z.string().min(1).optional(),
   AUTH_HINT_COOKIE_NAME: z.string().min(1).default('zk_authed'),
   AUTH_HINT_COOKIE_DOMAIN: z.string().min(1).optional(),
+  AUTH_PLATFORM_COOKIE_NAME: z.string().min(1).default('__Host-zikel_admin_rt'),
+  AUTH_PLATFORM_COOKIE_DOMAIN: z.string().min(1).optional(),
+  AUTH_PLATFORM_COOKIE_PATH: z.string().min(1).default('/'),
+  /**
+   * Base64-encoded 32-byte symmetric key used to encrypt MFA TOTP secrets at
+   * rest (AES-256-GCM). Required in production; in dev a deterministic
+   * fallback is used so seed data survives restarts.
+   *
+   * Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   */
+  MFA_SECRET_KEY_BASE64: z.string().min(1).optional(),
+  /**
+   * TOTP issuer string shown in authenticator apps (e.g. Google Authenticator).
+   * Tenant users see "Zikel Solutions"; platform users see "Zikel Admin".
+   */
+  MFA_TOTP_ISSUER_TENANT: z.string().min(1).default('Zikel Solutions'),
+  MFA_TOTP_ISSUER_PLATFORM: z.string().min(1).default('Zikel Admin'),
   AUTH_LEGACY_REFRESH_TOKEN_IN_BODY: z
     .enum(['true', 'false'])
     .default('true')
@@ -120,6 +137,20 @@ const envSchema = z.object({
   SAFEGUARDING_RISK_BACKFILL_SEND_EMAIL_HOOKS: z
     .enum(['true', 'false'])
     .default('false')
+    .transform((v) => v === 'true'),
+
+  // OTP retention — purges OtpCode rows older than the retention window so
+  // expired/used codes do not accumulate indefinitely. Used codes hold no
+  // secret value, but stale rows still bloat indexes and audit traces.
+  OTP_RETENTION_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  OTP_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  OTP_RETENTION_INTERVAL_MINUTES: z.coerce.number().int().min(15).max(1440).default(360),
+  OTP_RETENTION_RUN_ON_STARTUP: z
+    .enum(['true', 'false'])
+    .default('true')
     .transform((v) => v === 'true'),
   SAFEGUARDING_CHRONOLOGY_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
   SAFEGUARDING_PATTERNS_RETENTION_DAYS: z.coerce.number().int().min(30).max(3650).default(365),
@@ -235,6 +266,17 @@ function parseEnv(): Env {
     if (!parsed.AUTH_REFRESH_COOKIE_NAME.startsWith('__Host-') && !parsed.AUTH_REFRESH_COOKIE_NAME.startsWith('__Secure-')) {
       throw new Error(
         'AUTH_REFRESH_COOKIE_NAME should use a secure prefix (__Host- or __Secure-) in staging/production.',
+      );
+    }
+    if (!parsed.AUTH_PLATFORM_COOKIE_NAME.startsWith('__Host-') && !parsed.AUTH_PLATFORM_COOKIE_NAME.startsWith('__Secure-')) {
+      throw new Error(
+        'AUTH_PLATFORM_COOKIE_NAME should use a secure prefix (__Host- or __Secure-) in staging/production.',
+      );
+    }
+    if (!parsed.MFA_SECRET_KEY_BASE64) {
+      throw new Error(
+        'MFA_SECRET_KEY_BASE64 is required in staging/production. Generate with: ' +
+          'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"',
       );
     }
 

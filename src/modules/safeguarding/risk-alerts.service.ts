@@ -355,7 +355,7 @@ function mapAlert(
 
 async function resolveSafeguardingActor(userId: string): Promise<SafeguardingActorContext> {
   const tenant = await requireTenantContext(userId);
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { id: true, role: true },
   });
@@ -371,7 +371,6 @@ async function resolveSafeguardingActor(userId: string): Promise<SafeguardingAct
 }
 
 function isRiskAlertViewer(actor: SafeguardingActorContext) {
-  if (actor.userRole === UserRole.super_admin) return true;
   if (actor.userRole === UserRole.admin || actor.userRole === UserRole.manager) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
@@ -803,7 +802,7 @@ async function routeAlert(args: {
       where: {
         tenantId: args.alert.tenantId,
         status: MembershipStatus.active,
-        role: { in: [TenantRole.tenant_admin, TenantRole.sub_admin] },
+        role: { name: { in: ['Owner', 'Admin'] } },
       },
       select: {
         userId: true,
@@ -832,7 +831,7 @@ async function routeAlert(args: {
       });
 
       if (args.sendEmailHooks) {
-        const users = await prisma.user.findMany({
+        const users = await prisma.tenantUser.findMany({
           where: {
             id: { in: recipientUserIds },
             isActive: true,

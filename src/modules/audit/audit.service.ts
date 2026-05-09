@@ -3,15 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import {
-  getActiveBreakGlassSession,
-  reconcileExpiredBreakGlassAccess,
-} from '../../lib/break-glass.js';
-import type {
-  BreakGlassAccessBody,
-  BreakGlassReleaseBody,
-  ListAuditLogsQuery,
-} from './audit.schema.js';
+import type { ListAuditLogsQuery } from './audit.schema.js';
 
 type AuditActorContext = {
   userId: string;
@@ -21,7 +13,6 @@ type AuditActorContext = {
 };
 
 function isAuditViewer(actor: AuditActorContext) {
-  if (actor.userRole === UserRole.super_admin) return true;
   if (actor.userRole === UserRole.admin || actor.userRole === UserRole.manager) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
@@ -62,27 +53,12 @@ function mapAuditLog(row: {
 }
 
 async function resolveAuditActorContext(actorUserId: string): Promise<AuditActorContext> {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: actorUserId },
     select: { id: true, role: true, activeTenantId: true },
   });
   if (!user) {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-
-  const activeTenantId = await reconcileExpiredBreakGlassAccess({
-    userId: user.id,
-    userRole: user.role,
-    activeTenantId: user.activeTenantId,
-  });
-
-  if (user.role === UserRole.super_admin) {
-    return {
-      userId: user.id,
-      userRole: user.role,
-      tenantRole: null,
-      tenantId: activeTenantId,
-    };
   }
 
   const tenant = await requireTenantContext(actorUserId);
@@ -98,18 +74,7 @@ function buildWhereInput(
   actor: AuditActorContext,
   query: ListAuditLogsQuery,
 ): Prisma.AuditLogWhereInput {
-  let tenantIdScope: string | null = actor.tenantId;
-
-  if (actor.userRole === UserRole.super_admin && query.tenantId) {
-    if (!actor.tenantId || actor.tenantId !== query.tenantId) {
-      throw httpError(
-        403,
-        'BREAK_GLASS_REQUIRED',
-        'Switch tenant via break-glass endpoint before reading this tenant audit scope.',
-      );
-    }
-    tenantIdScope = query.tenantId;
-  }
+  const tenantIdScope: string | null = actor.tenantId;
 
   const andFilters: Prisma.AuditLogWhereInput[] = [];
   if (tenantIdScope) andFilters.push({ tenantId: tenantIdScope });
@@ -215,147 +180,6 @@ export async function getAuditLog(actorUserId: string, auditLogId: string, reque
   });
 
   return mapAuditLog(record);
-}
-
-export async function breakGlassAccess(
-  actorUserId: string,
-  body: BreakGlassAccessBody,
-  requestMeta: { ipAddress?: string | undefined; userAgent?: string | undefined },
-) {
-  const actor = await prisma.user.findUnique({
-    where: { id: actorUserId },
-    select: { id: true, role: true, activeTenantId: true },
-  });
-
-  if (!actor) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-  if (actor.role !== UserRole.super_admin) {
-    throw httpError(403, 'FORBIDDEN', 'Only super-admins can perform break-glass access.');
-  }
-
-  const tenant = await prisma.tenant.findUnique({
-    where: { id: body.tenantId },
-    select: { id: true, isActive: true, name: true },
-  });
-  if (!tenant || !tenant.isActive) {
-    throw httpError(404, 'TENANT_NOT_FOUND', 'Target tenant not found or inactive.');
-  }
-
-  const expiresAt = new Date(Date.now() + body.expiresInMinutes * 60_000);
-  const reconciledActiveTenantId = await reconcileExpiredBreakGlassAccess({
-    userId: actor.id,
-    userRole: actor.role,
-    activeTenantId: actor.activeTenantId,
-  });
-  const previousTenantId = reconciledActiveTenantId ?? null;
-
-  await prisma.$transaction([
-    prisma.user.update({
-      where: { id: actor.id },
-      data: { activeTenantId: tenant.id },
-    }),
-    prisma.auditLog.create({
-      data: {
-        tenantId: tenant.id,
-        userId: actor.id,
-        action: AuditAction.permission_changed,
-        entityType: 'break_glass_access',
-        entityId: tenant.id,
-        metadata: {
-          reason: body.reason,
-          previousTenantId,
-          targetTenantId: tenant.id,
-          expiresAt: expiresAt.toISOString(),
-          immutable: true,
-        },
-        ipAddress: requestMeta.ipAddress ?? null,
-        userAgent: requestMeta.userAgent ?? null,
-      },
-    }),
-  ]);
-
-  return {
-    message: `Break-glass access granted for tenant ${tenant.name}.`,
-    activeTenantId: tenant.id,
-    previousTenantId,
-    expiresAt,
-  };
-}
-
-export async function breakGlassRelease(
-  actorUserId: string,
-  body: BreakGlassReleaseBody,
-  requestMeta: { ipAddress?: string | undefined; userAgent?: string | undefined },
-) {
-  const actor = await prisma.user.findUnique({
-    where: { id: actorUserId },
-    select: { id: true, role: true, activeTenantId: true },
-  });
-
-  if (!actor) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-  if (actor.role !== UserRole.super_admin) {
-    throw httpError(403, 'FORBIDDEN', 'Only super-admins can release break-glass access.');
-  }
-
-  const reconciledActiveTenantId = await reconcileExpiredBreakGlassAccess({
-    userId: actor.id,
-    userRole: actor.role,
-    activeTenantId: actor.activeTenantId,
-  });
-
-  const activeSession = await getActiveBreakGlassSession({
-    userId: actor.id,
-    userRole: actor.role,
-    activeTenantId: reconciledActiveTenantId,
-  });
-
-  if (!activeSession) {
-    throw httpError(
-      409,
-      'BREAK_GLASS_NOT_ACTIVE',
-      'No active break-glass tenant context to release.',
-    );
-  }
-
-  const releasedAt = new Date();
-
-  await prisma.$transaction([
-    prisma.user.update({
-      where: { id: actor.id },
-      data: { activeTenantId: activeSession.previousTenantId },
-    }),
-    prisma.auditLog.create({
-      data: {
-        tenantId: activeSession.targetTenantId,
-        userId: actor.id,
-        action: AuditAction.permission_changed,
-        entityType: 'break_glass_access',
-        entityId: activeSession.targetTenantId,
-        metadata: {
-          type: 'released',
-          reason: body.reason ?? 'Manual break-glass release by super-admin.',
-          previousTenantId: activeSession.previousTenantId,
-          targetTenantId: activeSession.targetTenantId,
-          expiresAt: activeSession.expiresAt.toISOString(),
-          releasedAt: releasedAt.toISOString(),
-          source: 'super_admin',
-          immutable: true,
-        },
-        ipAddress: requestMeta.ipAddress ?? null,
-        userAgent: requestMeta.userAgent ?? null,
-      },
-    }),
-  ]);
-
-  return {
-    message: 'Break-glass access released successfully.',
-    activeTenantId: activeSession.previousTenantId,
-    releasedTenantId: activeSession.targetTenantId,
-    releasedAt,
-  };
 }
 
 export async function listSecurityAlerts(actorUserId: string, lookbackHours: number) {

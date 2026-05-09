@@ -7,7 +7,7 @@ async function run() {
   // Get homes and young people
   const homes = await pool.query(`SELECT id, name FROM "Home" WHERE "tenantId" = $1 ORDER BY name`, [TENANT]);
   const yps = await pool.query(`SELECT id, "firstName", "lastName", "homeId" FROM "YoungPerson" WHERE "tenantId" = $1`, [TENANT]);
-  const users = await pool.query(`SELECT id FROM "User" WHERE "activeTenantId" = $1 LIMIT 1`, [TENANT]);
+  const users = await pool.query(`SELECT id FROM "TenantUser" WHERE "activeTenantId" = $1 LIMIT 1`, [TENANT]);
   const emps = await pool.query(`SELECT id FROM "Employee" WHERE "tenantId" = $1`, [TENANT]);
 
   const h = homes.rows;

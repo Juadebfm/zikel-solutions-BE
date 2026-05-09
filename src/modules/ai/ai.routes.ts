@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import * as aiService from './ai.service.js';
 import {
   AskAiBodySchema,
@@ -102,10 +103,7 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.patch('/access/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['admin', 'super_admin'],
-        tenantRoles: ['tenant_admin'],
-      }),
+      requirePermission(P.AI_ADMIN),
     ],
     schema: {
       tags: ['AI'],

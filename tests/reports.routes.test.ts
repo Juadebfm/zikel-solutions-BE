@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import type { FastifyInstance } from 'fastify';
 
 const {
+  mockPrisma,
   generateEvidencePack,
   toEvidencePackExport,
   toEvidencePackZipBundle,
@@ -11,6 +12,24 @@ const {
   toRiDashboardDrilldownExport,
   generateExport,
 } = vi.hoisted(() => ({
+  mockPrisma: (() => {
+    const mp = {
+      tenantUser: { findUnique: vi.fn() },
+      auditLog: { create: vi.fn(async () => ({ id: 'audit_1' })) },
+      $transaction: vi.fn(),
+      $disconnect: vi.fn(async () => undefined),
+      $on: vi.fn(),
+      $extends: vi.fn(),
+      $queryRawUnsafe: vi.fn(async () => []),
+    };
+    mp.$transaction.mockImplementation(async (ops: unknown) => {
+      if (typeof ops === 'function') return (ops as (tx: typeof mp) => Promise<unknown>)(mp);
+      if (Array.isArray(ops)) return Promise.all(ops);
+      return ops;
+    });
+    mp.$extends.mockReturnValue(mp);
+    return mp;
+  })(),
   generateEvidencePack: vi.fn(),
   toEvidencePackExport: vi.fn(),
   toEvidencePackZipBundle: vi.fn(),
@@ -20,6 +39,8 @@ const {
   toRiDashboardDrilldownExport: vi.fn(),
   generateExport: vi.fn(),
 }));
+
+vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 
 vi.mock('../src/modules/reports/reports.service.js', () => ({
   generateEvidencePack,
@@ -51,20 +72,61 @@ afterAll(async () => {
   await app.close();
 });
 
+// Owner permissions cover every reports endpoint via requirePermission(...).
+// Mirrors src/auth/permissions.ts → SYSTEM_ROLE_PERMISSIONS.Owner.
+const OWNER_PERMISSIONS = [
+  'employees:read', 'employees:write', 'employees:deactivate', 'employees:invite',
+  'homes:read', 'homes:write',
+  'care_groups:read', 'care_groups:write',
+  'young_people:read', 'young_people:write', 'young_people:sensitive_read',
+  'tasks:read', 'tasks:write', 'tasks:approve',
+  'care_logs:read', 'care_logs:write',
+  'safeguarding:read', 'safeguarding:write', 'safeguarding:escalate',
+  'reports:read', 'reports:export',
+  'audit:read',
+  'settings:read', 'settings:write',
+  'members:read', 'members:write',
+  'roles:read', 'roles:write',
+  'billing:read', 'billing:write',
+  'ai:use', 'ai:admin',
+  'announcements:read', 'announcements:write',
+  'vehicles:read', 'vehicles:write',
+  'help_center:admin',
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default tenant context: an Owner with full permissions so
+  // requirePermission(...) passes for every report endpoint. Individual tests
+  // can override mockPrisma.tenantUser.findUnique for negative cases.
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({
+    id: 'user_1',
+    role: 'admin',
+    activeTenantId: 'tenant_1',
+    activeTenant: { id: 'tenant_1', isActive: true },
+    tenantMemberships: [
+      {
+        tenantId: 'tenant_1',
+        status: 'active',
+        role: { name: 'Owner', permissions: OWNER_PERMISSIONS },
+      },
+    ],
+  });
 });
 
 function authHeader(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
-  tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = null,
+  role: 'staff' | 'manager' | 'admin' = 'manager',
+  tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = 'tenant_admin',
 ) {
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
     tenantRole,
+    mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -143,6 +205,21 @@ describe('Reports routes', () => {
   });
 
   it('forbids staff user without report role scope', async () => {
+    // Override default Owner mock — staff role lacks `reports:read` permission.
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
+      id: 'staff_user',
+      role: 'staff',
+      activeTenantId: 'tenant_1',
+      activeTenant: { id: 'tenant_1', isActive: true },
+      tenantMemberships: [
+        {
+          tenantId: 'tenant_1',
+          status: 'active',
+          role: { name: 'Care Worker', permissions: ['care_logs:read', 'care_logs:write'] },
+        },
+      ],
+    });
+
     const res = await app.inject({
       method: 'GET',
       url: '/api/v1/reports/reg44-pack',

@@ -29,11 +29,15 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-function authHeader(userId = 'user_1', role: 'super_admin' | 'staff' | 'manager' | 'admin' = 'staff') {
+function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'staff') {
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
+    tenantRole: 'staff',
+    mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }

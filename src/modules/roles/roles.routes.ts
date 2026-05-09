@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import * as rolesService from './roles.service.js';
 import {
   CreateRoleBodySchema,
@@ -71,7 +72,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
   // ─── Create role ───────────────────────────────────────────────────────────
 
   fastify.post('/', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    preHandler: [requirePermission(P.ROLES_WRITE)],
     schema: {
       tags: ['Roles'],
       summary: 'Create a role',
@@ -96,7 +97,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
   // ─── Update role ───────────────────────────────────────────────────────────
 
   fastify.patch('/:id', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    preHandler: [requirePermission(P.ROLES_WRITE)],
     schema: {
       tags: ['Roles'],
       summary: 'Update a role',
@@ -124,7 +125,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
   // ─── Bulk update permissions ─────────────────────────────────────────────
 
   fastify.patch('/:id/permissions', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    preHandler: [requirePermission(P.ROLES_WRITE)],
     schema: {
       tags: ['Roles'],
       summary: 'Bulk update role permissions',
@@ -138,8 +139,11 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
-      const body = request.body as Record<string, unknown>;
-      const data = await rolesService.updateRole(userId, id, { permissions: body });
+      const body = request.body as { permissions?: unknown };
+      const permissions = Array.isArray(body?.permissions)
+        ? body.permissions.filter((p): p is string => typeof p === 'string')
+        : [];
+      const data = await rolesService.updateRole(userId, id, { permissions });
       return reply.send({ success: true, data });
     },
   });
@@ -147,7 +151,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
   // ─── Delete role ───────────────────────────────────────────────────────────
 
   fastify.delete('/:id', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
+    preHandler: [requirePermission(P.ROLES_WRITE)],
     schema: {
       tags: ['Roles'],
       summary: 'Deactivate a role',

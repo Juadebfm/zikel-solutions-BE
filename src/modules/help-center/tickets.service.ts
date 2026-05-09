@@ -20,7 +20,7 @@ type TicketActorContext = {
 
 async function resolveTicketActor(userId: string): Promise<TicketActorContext> {
   const tenant = await requireTenantContext(userId);
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { id: true, role: true },
   });
@@ -38,7 +38,7 @@ async function resolveTicketActor(userId: string): Promise<TicketActorContext> {
 }
 
 function isTicketAdmin(actor: TicketActorContext) {
-  if (actor.userRole === UserRole.super_admin || actor.userRole === UserRole.admin) return true;
+  if (actor.userRole === UserRole.admin) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
 
