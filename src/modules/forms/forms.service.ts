@@ -349,7 +349,6 @@ function sortForms(
 }
 
 function isPrivilegedActor(actor: FormActorContext) {
-  if (actor.userRole === UserRole.super_admin) return true;
   if (actor.userRole === UserRole.admin || actor.userRole === UserRole.manager) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
@@ -357,21 +356,19 @@ function isPrivilegedActor(actor: FormActorContext) {
 function canReadTemplate(actor: FormActorContext, row: FormTemplateRow) {
   const templateTenantId = getTemplateTenantId(row);
   if (!templateTenantId) return true;
-  if (templateTenantId === actor.tenantId) return true;
-  return actor.userRole === UserRole.super_admin;
+  return templateTenantId === actor.tenantId;
 }
 
 function canMutateTemplate(actor: FormActorContext, row: FormTemplateRow) {
   if (!isPrivilegedActor(actor)) return false;
   const templateTenantId = getTemplateTenantId(row);
-  if (actor.userRole === UserRole.super_admin) return true;
   if (!templateTenantId) return false;
   return templateTenantId === actor.tenantId;
 }
 
 async function resolveActorContext(actorUserId: string): Promise<FormActorContext> {
   const tenant = await requireTenantContext(actorUserId);
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: actorUserId },
     select: { id: true, role: true, firstName: true, lastName: true },
   });
@@ -556,9 +553,9 @@ export async function getFormsMetadata(actorUserId: string) {
     }),
     prisma.tenantMembership.findMany({
       where: { tenantId: actor.tenantId, status: MembershipStatus.active },
-      select: { role: true },
-      distinct: ['role'],
-      orderBy: { role: 'asc' },
+      select: { role: { select: { name: true } } },
+      distinct: ['roleId'],
+      orderBy: { roleId: 'asc' },
     }),
   ]);
 
@@ -568,7 +565,7 @@ export async function getFormsMetadata(actorUserId: string) {
   const groups = Array.from(new Set(mapped.map((row) => row.formGroup))).sort((a, b) => a.localeCompare(b));
 
   const roleValues = Array.from(new Set([
-    ...membershipRoles.map((row) => row.role),
+    ...membershipRoles.map((row) => row.role.name),
     TenantRole.tenant_admin,
     TenantRole.sub_admin,
     TenantRole.staff,

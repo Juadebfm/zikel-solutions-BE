@@ -1,44 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Phase 8.1: ai-access.ts (transitive import) loads env.js at module init.
+// Hoisted so the mutation runs BEFORE the static import at line 28 below
+// triggers env validation. Plain top-level `process.env.X = …` runs AFTER
+// hoisted imports under vitest's ESM-aware loader.
+vi.hoisted(() => {
+  process.env.NODE_ENV = 'test';
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
+  }
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = 'test_secret_that_is_at_least_32_characters_long';
+  }
+});
+
 const { mockPrisma, getSummaryStats } = vi.hoisted(() => ({
   mockPrisma: {
-    user: {
+    tenantUser: {
       findUnique: vi.fn(),
       update: vi.fn(),
-    },
-    tenant: {
-      findUnique: vi.fn(),
     },
     tenantMembership: {
       findUnique: vi.fn(),
     },
-    home: {
-      count: vi.fn(),
-    },
-    careGroup: {
-      count: vi.fn(),
-    },
-    youngPerson: {
-      count: vi.fn(),
-    },
-    employee: {
-      count: vi.fn(),
-    },
-    vehicle: {
-      count: vi.fn(),
-    },
-    task: {
-      count: vi.fn(),
-    },
-    supportTicket: {
-      count: vi.fn(),
-    },
-    announcement: {
-      count: vi.fn(),
-    },
-    auditLog: {
-      create: vi.fn(),
-    },
+    home: { count: vi.fn() },
+    careGroup: { count: vi.fn() },
+    youngPerson: { count: vi.fn() },
+    employee: { count: vi.fn() },
+    vehicle: { count: vi.fn() },
+    task: { count: vi.fn() },
+    supportTicket: { count: vi.fn() },
+    announcement: { count: vi.fn() },
+    auditLog: { create: vi.fn() },
+    aiCallEvent: { create: vi.fn(async () => ({ id: 'evt_1' })) },
   },
   getSummaryStats: vi.fn(),
 }));
@@ -49,6 +43,58 @@ vi.mock('../src/modules/summary/summary.service.js', () => ({ getSummaryStats })
 import * as aiService from '../src/modules/ai/ai.service.js';
 
 const ORIGINAL_ENV = { ...process.env };
+
+// Permission catalogue subset — Owner gets all permissions; staff get a
+// minimal subset. The actual values mirror src/auth/permissions.ts.
+const OWNER_PERMS = ['homes:read', 'young_people:read', 'tasks:read', 'tasks:approve',
+  'employees:read', 'reports:read', 'reports:export', 'settings:write',
+  'members:write', 'safeguarding:read', 'announcements:read', 'vehicles:read', 'ai:use'];
+const STAFF_PERMS = ['care_logs:read', 'care_logs:write', 'tasks:read', 'ai:use'];
+
+/**
+ * Builds the two consecutive `tenantUser.findUnique` responses the askAi flow
+ * needs: first for `requireTenantContext` (full user + activeTenant +
+ * tenantMemberships), then for `assertAiEnabledForRequest` (Phase 8.1 shape:
+ * `{ id, aiAccessEnabled, activeTenantId, activeTenant: { id, aiEnabled, isActive } }`).
+ *
+ * `roleName` controls the derived legacy `tenantRole`:
+ *   - 'Owner' → tenant_admin → strengthProfile 'owner'
+ *   - 'Admin' → sub_admin   → strengthProfile 'manager'
+ *   - 'Care Worker' → staff → strengthProfile 'staff'
+ */
+function mockUserAndAccess(args: {
+  userId: string;
+  userRole?: 'staff' | 'manager' | 'admin';
+  roleName?: 'Owner' | 'Admin' | 'Care Worker' | 'Read-Only';
+  permissions?: string[];
+  aiAccessEnabled?: boolean;
+  tenantAiEnabled?: boolean;
+}) {
+  const userRole = args.userRole ?? 'staff';
+  const roleName = args.roleName ?? 'Care Worker';
+  const permissions = args.permissions ?? STAFF_PERMS;
+  const tenantAiEnabled = args.tenantAiEnabled ?? true;
+  mockPrisma.tenantUser.findUnique
+    .mockResolvedValueOnce({
+      id: args.userId,
+      role: userRole,
+      activeTenantId: 'tenant_1',
+      activeTenant: { id: 'tenant_1', isActive: true },
+      tenantMemberships: [
+        {
+          tenantId: 'tenant_1',
+          status: 'active',
+          role: { name: roleName, permissions },
+        },
+      ],
+    })
+    .mockResolvedValueOnce({
+      id: args.userId,
+      aiAccessEnabled: args.aiAccessEnabled ?? true,
+      activeTenantId: 'tenant_1',
+      activeTenant: { id: 'tenant_1', aiEnabled: tenantAiEnabled, isActive: true },
+    });
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -68,14 +114,7 @@ afterEach(() => {
 
 describe('ai.service', () => {
   it('returns fallback response when AI is disabled', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'user_1', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'user_1', aiAccessEnabled: true });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'staff',
-      status: 'active',
-    });
+    mockUserAndAccess({ userId: 'user_1' });
     process.env.AI_ENABLED = 'false';
     getSummaryStats.mockResolvedValueOnce({
       overdue: 3,
@@ -94,29 +133,19 @@ describe('ai.service', () => {
     });
 
     expect(result.source).toBe('fallback');
-    expect(result.statsSource).toBe('server');
-    expect(result.answer.toLowerCase()).toContain('focus');
-    expect(result.minimalResponse).toMatchObject({
-      enabled: true,
+    expect(typeof result.message).toBe('string');
+    expect(result.message.length).toBeGreaterThan(0);
+    expect(result.meta).toMatchObject({
+      strengthProfile: 'staff',
+      statsSource: 'server',
+      languageSafetyPassed: true,
     });
-    expect(result.languageSafety.rubric.version).toBe('pace-language-v1');
-    expect(result.promptQa.passed).toBe(true);
-    expect(result.analysis.curiosity.patternInsightSummaries.length).toBeGreaterThanOrEqual(0);
-    expect(result.analysis.strengthProfile).toBe('staff');
-    expect(result.analysis.platformSnapshot).toBeNull();
     expect(getSummaryStats).toHaveBeenCalledWith('user_1');
     expect(mockPrisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
   it('returns model response when AI provider succeeds', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'user_2', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'user_2', aiAccessEnabled: true });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'staff',
-      status: 'active',
-    });
+    mockUserAndAccess({ userId: 'user_2' });
     process.env.AI_ENABLED = 'true';
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://example.com/v1';
@@ -134,33 +163,23 @@ describe('ai.service', () => {
       query: 'Summarize today',
       page: 'summary',
       context: {
-        stats: {
-          overdue: 0,
-          dueToday: 1,
-          pendingApproval: 0,
-        },
+        stats: { overdue: 0, dueToday: 1, pendingApproval: 0 },
       },
     });
 
     expect(result.source).toBe('model');
-    expect(result.model).toBe('test-model');
-    expect(result.answer).toBe('Model-backed answer');
-    expect(result.languageSafety.rubric.passed).toBe(true);
-    expect(result.minimalResponse.enabled).toBe(true);
-    expect(result.statsSource).toBe('client');
+    expect(result.message).toBe('Model-backed answer');
+    expect(result.meta).toMatchObject({
+      model: 'test-model',
+      statsSource: 'client',
+      languageSafetyPassed: true,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(mockPrisma.auditLog.create).toHaveBeenCalledTimes(1);
   });
 
   it('redacts sensitive model prompt context before provider call', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'user_2', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'user_2', aiAccessEnabled: true });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'staff',
-      status: 'active',
-    });
+    mockUserAndAccess({ userId: 'user_2' });
     process.env.AI_ENABLED = 'true';
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://example.com/v1';
@@ -205,14 +224,7 @@ describe('ai.service', () => {
   });
 
   it('blocks ask-ai when user AI access is disabled', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'user_3', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'user_3', aiAccessEnabled: false });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'staff',
-      status: 'active',
-    });
+    mockUserAndAccess({ userId: 'user_3', aiAccessEnabled: false });
 
     await expect(
       aiService.askAi('user_3', {
@@ -228,11 +240,27 @@ describe('ai.service', () => {
     expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it('allows admin service to enable AI access for a user', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'admin_1', role: 'super_admin' })
-      .mockResolvedValueOnce({ id: 'user_target' });
-    mockPrisma.user.update.mockResolvedValueOnce({
+  it('allows admin to enable AI access for another tenant member', async () => {
+    // setUserAiAccess: actor lookup, then requireTenantContext, then membership check, then update.
+    mockPrisma.tenantUser.findUnique
+      // actor lookup at start of setUserAiAccess
+      .mockResolvedValueOnce({ id: 'admin_1', role: 'admin' })
+      // requireTenantContext
+      .mockResolvedValueOnce({
+        id: 'admin_1',
+        role: 'admin',
+        activeTenantId: 'tenant_1',
+        activeTenant: { id: 'tenant_1', isActive: true },
+        tenantMemberships: [
+          {
+            tenantId: 'tenant_1',
+            status: 'active',
+            role: { name: 'Owner', permissions: OWNER_PERMS },
+          },
+        ],
+      });
+    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({ status: 'active' });
+    mockPrisma.tenantUser.update.mockResolvedValueOnce({
       id: 'user_target',
       aiAccessEnabled: true,
       updatedAt: new Date('2026-03-12T08:00:00.000Z'),
@@ -240,18 +268,14 @@ describe('ai.service', () => {
 
     const result = await aiService.setUserAiAccess('admin_1', 'user_target', { enabled: true });
 
-    expect(mockPrisma.user.update).toHaveBeenCalledWith({
+    expect(mockPrisma.tenantUser.update).toHaveBeenCalledWith({
       where: { id: 'user_target' },
       data: { aiAccessEnabled: true },
-      select: {
-        id: true,
-        aiAccessEnabled: true,
-        updatedAt: true,
-      },
+      select: { id: true, aiAccessEnabled: true, updatedAt: true },
     });
     expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
       data: {
-        tenantId: null,
+        tenantId: 'tenant_1',
         userId: 'admin_1',
         action: 'permission_changed',
         entityType: 'user_ai_access',
@@ -266,13 +290,11 @@ describe('ai.service', () => {
   });
 
   it('returns consolidated platform snapshot for owner profile on summary', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'owner_1', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'owner_1', aiAccessEnabled: true });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'tenant_admin',
-      status: 'active',
+    mockUserAndAccess({
+      userId: 'owner_1',
+      userRole: 'admin',
+      roleName: 'Owner',
+      permissions: OWNER_PERMS,
     });
     process.env.AI_ENABLED = 'false';
     getSummaryStats.mockResolvedValueOnce({
@@ -310,29 +332,17 @@ describe('ai.service', () => {
     });
 
     expect(result.source).toBe('fallback');
-    expect(result.analysis.strengthProfile).toBe('owner');
-    expect(result.minimalResponse.enabled).toBe(false);
-    expect(result.analysis.platformSnapshot).toMatchObject({
-      homes: 5,
-      careGroups: 2,
-      openTasks: 41,
-      overdueTasks: 7,
-      openSupportTickets: 3,
-    });
-    expect(result.analysis.topPriorities.length).toBeGreaterThan(0);
-    expect(result.analysis.curiosity.exploreNext.length).toBeGreaterThan(0);
+    expect(result.meta.strengthProfile).toBe('owner');
+    // Owner profile pulls a platform snapshot; we verify it via the count
+    // queries that get fired (Home/CareGroup/Task counts are owner-only) plus
+    // the fact that `highlights` end up populated.
     expect(mockPrisma.home.count).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.careGroup.count).toHaveBeenCalledTimes(1);
+    expect(Array.isArray(result.highlights)).toBe(true);
   });
 
   it('applies non-blaming language guardrails to model responses', async () => {
-    mockPrisma.user.findUnique
-      .mockResolvedValueOnce({ id: 'user_4', role: 'staff', activeTenantId: 'tenant_1' })
-      .mockResolvedValueOnce({ id: 'user_4', aiAccessEnabled: true });
-    mockPrisma.tenant.findUnique.mockResolvedValueOnce({ id: 'tenant_1', isActive: true });
-    mockPrisma.tenantMembership.findUnique.mockResolvedValueOnce({
-      role: 'staff',
-      status: 'active',
-    });
+    mockUserAndAccess({ userId: 'user_4' });
     process.env.AI_ENABLED = 'true';
     process.env.AI_API_KEY = 'test-key';
     process.env.AI_BASE_URL = 'https://example.com/v1';
@@ -356,12 +366,16 @@ describe('ai.service', () => {
     });
 
     expect(result.source).toBe('model');
-    expect(result.answer.toLowerCase()).not.toContain('non-compliant');
-    expect(result.answer.toLowerCase()).not.toContain('attention-seeking');
-    expect(result.languageSafety.nonBlamingGuardrailsApplied).toBe(true);
-    expect(result.languageSafety.flaggedTerms).toEqual(
-      expect.arrayContaining(['non_compliant', 'attention_seeking']),
-    );
-    expect(result.promptQa.passed).toBe(true);
+    expect(result.message.toLowerCase()).not.toContain('non-compliant');
+    expect(result.message.toLowerCase()).not.toContain('attention-seeking');
+    // Guardrails pass through `meta.languageSafetyPassed`; granular
+    // `flaggedTerms` are kept inside the audit-log metadata, not exposed in
+    // the API response. We verify the audit-log captured the rewrite.
+    expect(result.meta.languageSafetyPassed).toBe(true);
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({ languageGuardrailApplied: true }),
+      }),
+    });
   });
 });

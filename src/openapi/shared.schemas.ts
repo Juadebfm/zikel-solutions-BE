@@ -69,7 +69,7 @@ export const CuidParamSchema = {
 export const UserRoleSchema = {
   $id: 'UserRole',
   type: 'string',
-  enum: ['super_admin', 'staff', 'manager', 'admin'],
+  enum: ['staff', 'manager', 'admin'],
 } as const;
 
 export const UserSchema = {
@@ -131,6 +131,12 @@ export const AuthSessionMembershipSchema = {
     tenantName: { type: 'string' },
     tenantSlug: { type: 'string' },
     tenantRole: { $ref: 'TenantRole#' },
+    // Phase 3: capability-based authorization. roleName is the human-readable
+    // role (Owner/Admin/Care Worker/Read-Only or a custom name); permissions
+    // is the array of capability strings (`employees:read`, `tasks:approve`,
+    // …) granted by that role.
+    roleName: { type: 'string' },
+    permissions: { type: 'array', items: { type: 'string' } },
   },
 } as const;
 
@@ -143,6 +149,10 @@ export const AuthSessionSchema = {
     activeTenantRole: {
       anyOf: [{ $ref: 'TenantRole#' }, { type: 'null' }],
     },
+    // Phase 3: name + permissions of the active membership's role. Frontend
+    // uses these to drive button visibility / route guards.
+    activeRoleName: { type: 'string', nullable: true },
+    activePermissions: { type: 'array', items: { type: 'string' } },
     memberships: {
       type: 'array',
       items: { $ref: 'AuthSessionMembership#' },
@@ -233,7 +243,7 @@ export const TenantMembershipSchema = {
     tenantId: { type: 'string' },
     userId: { type: 'string' },
     role: { $ref: 'TenantRole#' },
-    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked', 'pending_approval'] },
+    status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
     invitedById: { type: 'string', nullable: true },
     user: {
       type: ['object', 'null'],

@@ -509,7 +509,7 @@ export async function getHomeSummary(actorId: string, homeId: string) {
     include: {
       ...HOME_INCLUDE,
       youngPeople: { where: { isActive: true }, select: { id: true, firstName: true, lastName: true, status: true, type: true, roomNumber: true }, orderBy: { lastName: 'asc' } },
-      employees: { where: { isActive: true }, include: { user: { select: { firstName: true, lastName: true } }, role: { select: { name: true } } }, orderBy: { createdAt: 'asc' } },
+      employees: { where: { isActive: true }, include: { user: { select: { firstName: true, lastName: true } } }, orderBy: { createdAt: 'asc' } },
       vehicles: { where: { isActive: true }, select: { id: true, registration: true, make: true, model: true, status: true }, orderBy: { registration: 'asc' } },
       events: { where: { startsAt: { gte: new Date() } }, orderBy: { startsAt: 'asc' }, take: 10 },
       shifts: {
@@ -537,7 +537,6 @@ export async function getHomeSummary(actorId: string, homeId: string) {
       id: e.id,
       name: `${e.user.firstName} ${e.user.lastName}`.trim(),
       jobTitle: e.jobTitle,
-      roleName: e.role?.name ?? null,
       status: e.status,
     })),
     vehicles: home.vehicles,
@@ -616,7 +615,6 @@ export async function getHomeEmployeeStats(actorId: string, homeId: string) {
     where: { tenantId: tenant.tenantId, homeId },
     include: {
       user: { select: { firstName: true, lastName: true, email: true } },
-      role: { select: { name: true } },
     },
     orderBy: { createdAt: 'asc' },
   });
@@ -628,7 +626,6 @@ export async function getHomeEmployeeStats(actorId: string, homeId: string) {
       name: `${e.user.firstName} ${e.user.lastName}`.trim(),
       email: e.user.email,
       jobTitle: e.jobTitle,
-      roleName: e.role?.name ?? null,
       status: e.status,
       contractType: e.contractType,
       startDate: e.startDate,
@@ -821,7 +818,7 @@ export async function listHomeEmployees(actorId: string, homeId: string, query: 
     prisma.employee.count({ where }),
     prisma.employee.findMany({
       where,
-      include: { user: { select: { firstName: true, lastName: true, email: true } }, role: { select: { name: true } } },
+      include: { user: { select: { firstName: true, lastName: true, email: true } } },
       orderBy: { createdAt: 'asc' },
       skip,
       take: query.pageSize,
@@ -829,7 +826,7 @@ export async function listHomeEmployees(actorId: string, homeId: string, query: 
   ]);
 
   return {
-    data: rows.map((e) => ({ id: e.id, name: `${e.user.firstName} ${e.user.lastName}`.trim(), email: e.user.email, jobTitle: e.jobTitle, roleName: e.role?.name ?? null, status: e.status })),
+    data: rows.map((e) => ({ id: e.id, name: `${e.user.firstName} ${e.user.lastName}`.trim(), email: e.user.email, jobTitle: e.jobTitle, status: e.status })),
     meta: { total, page: query.page, pageSize: query.pageSize, totalPages: Math.max(1, Math.ceil(total / query.pageSize)) },
   };
 }

@@ -25,16 +25,6 @@ export const ListAuditLogsQuerySchema = z.object({
   dateTo: z.string().datetime().optional(),
 });
 
-export const BreakGlassAccessBodySchema = z.object({
-  tenantId: z.string().min(1),
-  reason: z.string().min(10).max(500),
-  expiresInMinutes: z.coerce.number().int().min(5).max(120).default(30),
-});
-
-export const BreakGlassReleaseBodySchema = z.object({
-  reason: z.string().min(10).max(500).optional(),
-});
-
 export const SecurityAlertsQuerySchema = z.object({
   lookbackHours: z.coerce.number().int().min(1).max(168).default(24),
 });
@@ -69,25 +59,6 @@ export const listAuditLogsQueryJson = {
   },
 } as const;
 
-export const breakGlassAccessBodyJson = {
-  type: 'object',
-  required: ['tenantId', 'reason'],
-  additionalProperties: false,
-  properties: {
-    tenantId: { type: 'string' },
-    reason: { type: 'string', minLength: 10, maxLength: 500 },
-    expiresInMinutes: { type: 'integer', minimum: 5, maximum: 120, default: 30 },
-  },
-} as const;
-
-export const breakGlassReleaseBodyJson = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    reason: { type: 'string', minLength: 10, maxLength: 500 },
-  },
-} as const;
-
 export const securityAlertsQueryJson = {
   type: 'object',
   additionalProperties: false,
@@ -97,6 +68,4 @@ export const securityAlertsQueryJson = {
 } as const;
 
 export type ListAuditLogsQuery = z.infer<typeof ListAuditLogsQuerySchema>;
-export type BreakGlassAccessBody = z.infer<typeof BreakGlassAccessBodySchema>;
-export type BreakGlassReleaseBody = z.infer<typeof BreakGlassReleaseBodySchema>;
 export type SecurityAlertsQuery = z.infer<typeof SecurityAlertsQuerySchema>;

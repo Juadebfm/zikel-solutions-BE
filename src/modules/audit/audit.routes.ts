@@ -3,12 +3,8 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import * as auditService from './audit.service.js';
 import {
-  BreakGlassAccessBodySchema,
-  BreakGlassReleaseBodySchema,
   ListAuditLogsQuerySchema,
   SecurityAlertsQuerySchema,
-  breakGlassAccessBodyJson,
-  breakGlassReleaseBodyJson,
   listAuditLogsQueryJson,
   securityAlertsQueryJson,
 } from './audit.schema.js';
@@ -149,100 +145,13 @@ const auditRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  fastify.post('/break-glass/access', {
-    schema: {
-      tags: ['Audit'],
-      summary: 'Break-glass tenant access (super-admin only)',
-      body: breakGlassAccessBodyJson,
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['message', 'activeTenantId', 'previousTenantId', 'expiresAt'],
-              properties: {
-                message: { type: 'string' },
-                activeTenantId: { type: 'string' },
-                previousTenantId: { type: ['string', 'null'] },
-                expiresAt: { type: 'string', format: 'date-time' },
-              },
-            },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        404: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = BreakGlassAccessBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
-
-      const actorUserId = (request.user as JwtPayload).sub;
-      const data = await auditService.breakGlassAccess(actorUserId, parse.data, {
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] as string | undefined,
-      });
-      return reply.send({ success: true, data });
-    },
-  });
-
-  fastify.post('/break-glass/release', {
-    schema: {
-      tags: ['Audit'],
-      summary: 'Release active break-glass tenant context (super-admin only)',
-      body: breakGlassReleaseBodyJson,
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['message', 'activeTenantId', 'releasedTenantId', 'releasedAt'],
-              properties: {
-                message: { type: 'string' },
-                activeTenantId: { type: ['string', 'null'] },
-                releasedTenantId: { type: 'string' },
-                releasedAt: { type: 'string', format: 'date-time' },
-              },
-            },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        404: { $ref: 'ApiError#' },
-        409: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = BreakGlassReleaseBodySchema.safeParse(request.body ?? {});
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
-
-      const actorUserId = (request.user as JwtPayload).sub;
-      const data = await auditService.breakGlassRelease(actorUserId, parse.data, {
-        ipAddress: request.ip,
-        userAgent: request.headers['user-agent'] as string | undefined,
-      });
-      return reply.send({ success: true, data });
-    },
-  });
+  // Phase 6 (2026-05-08): legacy break-glass routes
+  // (`POST /api/v1/audit/break-glass/access` and `release`) were removed.
+  // Cross-tenant audit reads by Zikel platform staff now go through:
+  //   - GET  /admin/audit/tenants/:id           (the read is itself audited)
+  //   - POST /admin/tenants/:id/impersonate     (full tenant access, ticket-bound)
+  // Historical AuditLog rows with entityType='break_glass_access' are still
+  // surfaced by `listSecurityAlerts` for retrospective visibility.
 };
 
 export default auditRoutes;

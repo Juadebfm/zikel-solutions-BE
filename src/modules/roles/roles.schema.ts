@@ -18,7 +18,7 @@ export const ListRolesQuerySchema = z.object({
 export const CreateRoleBodySchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().max(500).optional(),
-  permissions: z.record(z.string(), z.unknown()).default({}),
+  permissions: z.array(z.string()).default([]),
   isActive: z.boolean().default(true),
 });
 
@@ -28,7 +28,7 @@ export const UpdateRoleBodySchema = z
   .object({
     name: z.string().min(1).max(100).optional(),
     description: z.string().max(500).nullable().optional(),
-    permissions: z.record(z.string(), z.unknown()).optional(),
+    permissions: z.array(z.string()).optional(),
     isActive: z.boolean().optional(),
   })
   .refine((v) => Object.values(v).some((value) => value !== undefined), {
@@ -55,7 +55,7 @@ export const createRoleBodyJson = {
   properties: {
     name: { type: 'string', minLength: 1, maxLength: 100 },
     description: { type: 'string', maxLength: 500 },
-    permissions: { type: 'object', additionalProperties: true },
+    permissions: { type: 'array', items: { type: 'string' } },
     isActive: { type: 'boolean', default: true },
   },
 } as const;
@@ -67,7 +67,7 @@ export const updateRoleBodyJson = {
   properties: {
     name: { type: 'string', minLength: 1, maxLength: 100 },
     description: { type: ['string', 'null'], maxLength: 500 },
-    permissions: { type: 'object', additionalProperties: true },
+    permissions: { type: 'array', items: { type: 'string' } },
     isActive: { type: 'boolean' },
   },
 } as const;

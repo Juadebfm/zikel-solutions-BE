@@ -6,6 +6,7 @@ import { sendOtpEmail, sendTenantInviteEmail } from '../../lib/email.js';
 import { logger } from '../../lib/logger.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { hashPassword } from '../../lib/password.js';
+import { seedSystemRolesForTenant, getSystemRoleId } from '../../auth/system-roles.js';
 import type {
   AcceptTenantInviteBody,
   AddTenantMemberBody,
@@ -19,7 +20,7 @@ import type {
   UpdateTenantMemberBody,
 } from './tenants.schema.js';
 
-type ActorGlobalRole = 'super_admin' | 'admin' | 'manager' | 'staff';
+type ActorGlobalRole = 'admin' | 'manager' | 'staff';
 
 const INVITE_TOKEN_BYTES = 32;
 const STAFF_ACTIVATION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1_000; // 7 days
@@ -57,7 +58,8 @@ function mapMembership(row: {
   id: string;
   tenantId: string;
   userId: string;
-  role: TenantRole;
+  roleId: string;
+  role?: { id: string; name: string; permissions: string[] } | null;
   status: MembershipStatus;
   invitedById: string | null;
   createdAt: Date;
@@ -72,7 +74,9 @@ function mapMembership(row: {
     id: row.id,
     tenantId: row.tenantId,
     userId: row.userId,
-    role: row.role,
+    roleId: row.roleId,
+    roleName: row.role?.name ?? null,
+    permissions: row.role?.permissions ?? [],
     status: row.status,
     invitedById: row.invitedById,
     user: row.user
@@ -141,18 +145,34 @@ async function resolveUserByMemberInput(body: {
   email?: string | undefined;
 }) {
   if (body.userId) {
-    return prisma.user.findUnique({
+    return prisma.tenantUser.findUnique({
       where: { id: body.userId },
       select: { id: true, email: true, firstName: true, lastName: true },
     });
   }
   if (body.email) {
-    return prisma.user.findUnique({
+    return prisma.tenantUser.findUnique({
       where: { email: body.email },
       select: { id: true, email: true, firstName: true, lastName: true },
     });
   }
   return null;
+}
+
+// Phase 3 transitional helper: maps legacy TenantRole enum values to Role.name
+// strings (the new source of truth). Staff/Read-Only both belong to the
+// legacy 'staff' bucket.
+function roleNamesForLegacyRoles(legacy: TenantRole[]): string[] {
+  const names = new Set<string>();
+  for (const role of legacy) {
+    if (role === TenantRole.tenant_admin) names.add('Owner');
+    else if (role === TenantRole.sub_admin) names.add('Admin');
+    else if (role === TenantRole.staff) {
+      names.add('Care Worker');
+      names.add('Read-Only');
+    }
+  }
+  return Array.from(names);
 }
 
 async function ensureTenantExists(tenantId: string) {
@@ -169,12 +189,9 @@ async function ensureTenantExists(tenantId: string) {
 }
 
 function manageableInviteRoles(
-  actorGlobalRole: ActorGlobalRole,
+  _actorGlobalRole: ActorGlobalRole,
   actorTenantRole: TenantRole | null,
 ): TenantRole[] {
-  if (actorGlobalRole === 'super_admin') {
-    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
-  }
   if (actorTenantRole === TenantRole.tenant_admin) {
     return [TenantRole.sub_admin, TenantRole.staff];
   }
@@ -185,12 +202,9 @@ function manageableInviteRoles(
 }
 
 function viewableMembershipRoles(
-  actorGlobalRole: ActorGlobalRole,
+  _actorGlobalRole: ActorGlobalRole,
   actorTenantRole: TenantRole | null,
 ): TenantRole[] {
-  if (actorGlobalRole === 'super_admin') {
-    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
-  }
   if (actorTenantRole === TenantRole.tenant_admin) {
     return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
   }
@@ -201,12 +215,9 @@ function viewableMembershipRoles(
 }
 
 function manageableMembershipRoles(
-  actorGlobalRole: ActorGlobalRole,
+  _actorGlobalRole: ActorGlobalRole,
   actorTenantRole: TenantRole | null,
 ): TenantRole[] {
-  if (actorGlobalRole === 'super_admin') {
-    return [TenantRole.tenant_admin, TenantRole.sub_admin, TenantRole.staff];
-  }
   if (actorTenantRole === TenantRole.tenant_admin) {
     return [TenantRole.sub_admin, TenantRole.staff];
   }
@@ -227,14 +238,17 @@ async function resolveActorTenantRole(
         userId: actorUserId,
       },
     },
-    select: { role: true, status: true },
+    select: { role: { select: { name: true } }, status: true },
   });
 
   if (!membership || membership.status !== MembershipStatus.active) {
     return null;
   }
 
-  return membership.role;
+  // Map role.name → legacy TenantRole enum so callers using the old enum still work.
+  if (membership.role.name === 'Owner') return TenantRole.tenant_admin;
+  if (membership.role.name === 'Admin') return TenantRole.sub_admin;
+  return TenantRole.staff;
 }
 
 async function assertInvitePermission(
@@ -243,9 +257,7 @@ async function assertInvitePermission(
   tenantId: string,
   targetRole: TenantRole,
 ) {
-  const actorTenantRole = actorGlobalRole === 'super_admin'
-    ? null
-    : await resolveActorTenantRole(actorUserId, tenantId);
+  const actorTenantRole = await resolveActorTenantRole(actorUserId, tenantId);
   const allowedRoles = manageableInviteRoles(actorGlobalRole, actorTenantRole);
 
   if (!allowedRoles.includes(targetRole)) {
@@ -264,9 +276,7 @@ async function resolveMembershipPermissionContext(
   actorGlobalRole: ActorGlobalRole,
   tenantId: string,
 ) {
-  const actorTenantRole = actorGlobalRole === 'super_admin'
-    ? null
-    : await resolveActorTenantRole(actorUserId, tenantId);
+  const actorTenantRole = await resolveActorTenantRole(actorUserId, tenantId);
   return {
     actorTenantRole,
     viewableRoles: viewableMembershipRoles(actorGlobalRole, actorTenantRole),
@@ -335,6 +345,7 @@ export async function getTenantById(id: string) {
           user: {
             select: { email: true, firstName: true, lastName: true },
           },
+          role: { select: { id: true, name: true, permissions: true } },
         },
         orderBy: { createdAt: 'asc' },
       },
@@ -380,10 +391,14 @@ export async function listTenantMemberships(
     );
   }
 
+  // Map legacy TenantRole enum values to the new Role.name strings (system roles).
+  // Staff/Read-Only both map from legacy 'staff' so we include both.
+  const viewableRoleNames = roleNamesForLegacyRoles(permission.viewableRoles);
+  const queryRoleNames = query.role ? roleNamesForLegacyRoles([query.role]) : null;
+
   const where: Prisma.TenantMembershipWhereInput = {
     tenantId,
-    role: { in: permission.viewableRoles },
-    ...(query.role ? { role: query.role } : {}),
+    role: { name: { in: queryRoleNames ?? viewableRoleNames } },
     ...(query.status ? { status: query.status } : {}),
     ...(query.search
       ? {
@@ -410,6 +425,7 @@ export async function listTenantMemberships(
         user: {
           select: { email: true, firstName: true, lastName: true },
         },
+        role: { select: { id: true, name: true, permissions: true } },
       },
     }),
   ]);
@@ -468,12 +484,15 @@ export async function createTenant(actorUserId: string, body: CreateTenantBody) 
         },
       });
 
+      // Seed the four system roles for this tenant.
+      const systemRoles = await seedSystemRolesForTenant(tenant.id, tx);
+
       const membership = adminUser
         ? await tx.tenantMembership.create({
             data: {
               tenantId: tenant.id,
               userId: adminUser.id,
-              role: TenantRole.tenant_admin,
+              roleId: systemRoles.Owner,
               status: MembershipStatus.active,
               invitedById: actorUserId,
             },
@@ -481,6 +500,7 @@ export async function createTenant(actorUserId: string, body: CreateTenantBody) 
               user: {
                 select: { email: true, firstName: true, lastName: true },
               },
+              role: { select: { id: true, name: true, permissions: true } },
             },
           })
         : null;
@@ -505,7 +525,7 @@ export async function createTenant(actorUserId: string, body: CreateTenantBody) 
             metadata: {
               tenantId: tenant.id,
               userId: membership.userId,
-              role: membership.role,
+              roleName: membership.role.name,
               status: membership.status,
             },
           },
@@ -574,11 +594,18 @@ export async function addTenantMembership(
     throw httpError(409, 'TENANT_MEMBERSHIP_EXISTS', 'User already belongs to this tenant.');
   }
 
+  // Map legacy TenantRole enum to a system Role.id
+  const targetRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+    body.role === TenantRole.tenant_admin ? 'Owner'
+      : body.role === TenantRole.sub_admin ? 'Admin'
+      : 'Care Worker';
+  const targetRoleId = await getSystemRoleId(tenantId, targetRoleName);
+
   const membership = await prisma.tenantMembership.create({
     data: {
       tenantId,
       userId: user.id,
-      role: body.role,
+      roleId: targetRoleId,
       status: body.status,
       invitedById: actorUserId,
     },
@@ -586,6 +613,7 @@ export async function addTenantMembership(
       user: {
         select: { email: true, firstName: true, lastName: true },
       },
+      role: { select: { id: true, name: true, permissions: true } },
     },
   });
 
@@ -598,7 +626,7 @@ export async function addTenantMembership(
       metadata: {
         tenantId,
         userId: membership.userId,
-        role: membership.role,
+        roleName: membership.role.name,
         status: membership.status,
       },
     },
@@ -630,7 +658,7 @@ export async function provisionStaff(
   }
 
   const email = normalizeEmail(body.email);
-  const existingUser = await prisma.user.findUnique({ where: { email } });
+  const existingUser = await prisma.tenantUser.findUnique({ where: { email } });
   if (existingUser) {
     throw httpError(409, 'EMAIL_TAKEN', 'A user with this email already exists.');
   }
@@ -641,7 +669,7 @@ export async function provisionStaff(
   const otpCode = randomInt(100_000, 1_000_000).toString();
 
   const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
+    const user = await tx.tenantUser.create({
       data: {
         email,
         passwordHash,
@@ -655,11 +683,17 @@ export async function provisionStaff(
       },
     });
 
+    const targetRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+      targetRole === TenantRole.tenant_admin ? 'Owner'
+        : targetRole === TenantRole.sub_admin ? 'Admin'
+        : 'Care Worker';
+    const targetRoleId = await getSystemRoleId(tenantId, targetRoleName, tx);
+
     const membership = await tx.tenantMembership.create({
       data: {
         tenantId,
         userId: user.id,
-        role: targetRole,
+        roleId: targetRoleId,
         status: MembershipStatus.invited,
         invitedById: actorUserId,
       },
@@ -667,6 +701,7 @@ export async function provisionStaff(
         user: {
           select: { email: true, firstName: true, lastName: true },
         },
+        role: { select: { id: true, name: true, permissions: true } },
       },
     });
 
@@ -688,7 +723,7 @@ export async function provisionStaff(
         tenantId,
         metadata: {
           staffEmail: email,
-          role: targetRole,
+          roleName: targetRoleName,
           tenantName: tenant.name,
         },
       },
@@ -738,14 +773,19 @@ export async function updateTenantMembership(
 
   const existing = await prisma.tenantMembership.findUnique({
     where: { id: membershipId },
-    select: { id: true, tenantId: true, role: true },
+    select: { id: true, tenantId: true, role: { select: { name: true } } },
   });
 
   if (!existing || existing.tenantId !== tenantId) {
     throw httpError(404, 'TENANT_MEMBERSHIP_NOT_FOUND', 'Tenant membership not found.');
   }
 
-  if (!permission.manageableRoles.includes(existing.role)) {
+  // Map existing.role.name → legacy enum for permission check
+  const existingLegacy: TenantRole =
+    existing.role.name === 'Owner' ? TenantRole.tenant_admin
+      : existing.role.name === 'Admin' ? TenantRole.sub_admin
+      : TenantRole.staff;
+  if (!permission.manageableRoles.includes(existingLegacy)) {
     throw httpError(
       403,
       'TENANT_MEMBERSHIP_FORBIDDEN',
@@ -760,16 +800,27 @@ export async function updateTenantMembership(
     );
   }
 
+  // Resolve new roleId if a legacy enum was supplied in the body.
+  const newRoleId = body.role !== undefined
+    ? await getSystemRoleId(
+        tenantId,
+        body.role === TenantRole.tenant_admin ? 'Owner'
+          : body.role === TenantRole.sub_admin ? 'Admin'
+          : 'Care Worker',
+      )
+    : null;
+
   const membership = await prisma.tenantMembership.update({
     where: { id: membershipId },
     data: {
-      ...(body.role !== undefined ? { role: body.role } : {}),
+      ...(newRoleId ? { roleId: newRoleId } : {}),
       ...(body.status !== undefined ? { status: body.status } : {}),
     },
     include: {
       user: {
         select: { email: true, firstName: true, lastName: true },
       },
+      role: { select: { id: true, name: true, permissions: true } },
     },
   });
 
@@ -798,9 +849,7 @@ export async function listTenantInvites(
 ) {
   await ensureTenantExists(tenantId);
 
-  const actorTenantRole = actorGlobalRole === 'super_admin'
-    ? null
-    : await resolveActorTenantRole(actorUserId, tenantId);
+  const actorTenantRole = await resolveActorTenantRole(actorUserId, tenantId);
   const allowedRoles = manageableInviteRoles(actorGlobalRole, actorTenantRole);
   if (allowedRoles.length === 0) {
     throw httpError(
@@ -879,7 +928,7 @@ export async function createTenantInvite(
       },
       select: { id: true },
     }),
-    prisma.user.findUnique({
+    prisma.tenantUser.findUnique({
       where: { email },
       select: { id: true },
     }),
@@ -1001,28 +1050,36 @@ export async function acceptTenantInvite(
       },
     });
 
+    const inviteRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+      invite.role === TenantRole.tenant_admin ? 'Owner'
+        : invite.role === TenantRole.sub_admin ? 'Admin'
+        : 'Care Worker';
+    const inviteRoleId = await getSystemRoleId(invite.tenantId, inviteRoleName, tx);
+
     const membership = existingMembership
       ? await tx.tenantMembership.update({
           where: { id: existingMembership.id },
           data: {
-            role: invite.role,
+            roleId: inviteRoleId,
             status: MembershipStatus.active,
             invitedById: invite.invitedById,
           },
           include: {
             user: { select: { email: true, firstName: true, lastName: true } },
+            role: { select: { id: true, name: true, permissions: true } },
           },
         })
       : await tx.tenantMembership.create({
           data: {
             tenantId: invite.tenantId,
             userId: actorUserId,
-            role: invite.role,
+            roleId: inviteRoleId,
             status: MembershipStatus.active,
             invitedById: invite.invitedById,
           },
           include: {
             user: { select: { email: true, firstName: true, lastName: true } },
+            role: { select: { id: true, name: true, permissions: true } },
           },
         });
 
@@ -1034,7 +1091,7 @@ export async function acceptTenantInvite(
       },
     });
 
-    await tx.user.updateMany({
+    await tx.tenantUser.updateMany({
       where: { id: actorUserId, activeTenantId: null },
       data: { activeTenantId: invite.tenantId },
     });
@@ -1168,17 +1225,15 @@ export async function createInviteLink(
 
 export async function getInviteLink(
   actorUserId: string,
-  actorGlobalRole: ActorGlobalRole,
+  _actorGlobalRole: ActorGlobalRole,
   tenantId: string,
 ) {
   await ensureTenantExists(tenantId);
 
-  // Only admins can view invite links
-  if (actorGlobalRole !== 'super_admin') {
-    const role = await resolveActorTenantRole(actorUserId, tenantId);
-    if (role !== TenantRole.tenant_admin && role !== TenantRole.sub_admin) {
-      throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to view invite links.');
-    }
+  // Only tenant admins/sub-admins can view invite links
+  const viewRole = await resolveActorTenantRole(actorUserId, tenantId);
+  if (viewRole !== TenantRole.tenant_admin && viewRole !== TenantRole.sub_admin) {
+    throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to view invite links.');
   }
 
   const links = await prisma.tenantInviteLink.findMany({
@@ -1201,17 +1256,15 @@ export async function getInviteLink(
 
 export async function revokeInviteLink(
   actorUserId: string,
-  actorGlobalRole: ActorGlobalRole,
+  _actorGlobalRole: ActorGlobalRole,
   tenantId: string,
   linkId: string,
 ) {
   await ensureTenantExists(tenantId);
 
-  if (actorGlobalRole !== 'super_admin') {
-    const role = await resolveActorTenantRole(actorUserId, tenantId);
-    if (role !== TenantRole.tenant_admin) {
-      throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to revoke invite links.');
-    }
+  const revokeRole = await resolveActorTenantRole(actorUserId, tenantId);
+  if (revokeRole !== TenantRole.tenant_admin) {
+    throw httpError(403, 'TENANT_INVITE_LINK_FORBIDDEN', 'You do not have permission to revoke invite links.');
   }
 
   const link = await prisma.tenantInviteLink.findFirst({

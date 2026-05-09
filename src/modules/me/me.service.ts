@@ -1,4 +1,4 @@
-import { AuditAction, MembershipStatus, Prisma, TenantRole, UserRole } from '@prisma/client';
+import { AuditAction, MembershipStatus, Prisma, UserRole } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
@@ -16,16 +16,6 @@ type PermissionSet = {
 };
 
 const GLOBAL_ROLE_PERMISSIONS: Record<UserRole, PermissionSet> = {
-  super_admin: {
-    canViewAllHomes: true,
-    canViewAllYoungPeople: true,
-    canViewAllEmployees: true,
-    canApproveIOILogs: true,
-    canManageUsers: true,
-    canManageSettings: true,
-    canViewReports: true,
-    canExportData: true,
-  },
   staff: {
     canViewAllHomes: false,
     canViewAllYoungPeople: false,
@@ -55,39 +45,6 @@ const GLOBAL_ROLE_PERMISSIONS: Record<UserRole, PermissionSet> = {
     canManageSettings: true,
     canViewReports: true,
     canExportData: true,
-  },
-};
-
-const TENANT_ROLE_PERMISSIONS: Record<TenantRole, PermissionSet> = {
-  tenant_admin: {
-    canViewAllHomes: true,
-    canViewAllYoungPeople: true,
-    canViewAllEmployees: true,
-    canApproveIOILogs: true,
-    canManageUsers: true,
-    canManageSettings: true,
-    canViewReports: true,
-    canExportData: true,
-  },
-  sub_admin: {
-    canViewAllHomes: true,
-    canViewAllYoungPeople: true,
-    canViewAllEmployees: true,
-    canApproveIOILogs: true,
-    canManageUsers: true,
-    canManageSettings: false,
-    canViewReports: true,
-    canExportData: true,
-  },
-  staff: {
-    canViewAllHomes: false,
-    canViewAllYoungPeople: false,
-    canViewAllEmployees: false,
-    canApproveIOILogs: false,
-    canManageUsers: false,
-    canManageSettings: false,
-    canViewReports: false,
-    canExportData: false,
   },
 };
 
@@ -129,7 +86,7 @@ function mapProfile(user: UserWithEmployee) {
 }
 
 async function getUserOrThrow(userId: string): Promise<UserWithEmployee> {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: {
       id: true,
@@ -178,13 +135,13 @@ export async function getMyProfile(userId: string) {
 }
 
 export async function updateMyProfile(userId: string, body: UpdateMeBody) {
-  const updateData: Prisma.UserUpdateInput = {};
+  const updateData: Prisma.TenantUserUpdateInput = {};
   if (body.firstName !== undefined) updateData.firstName = body.firstName;
   if (body.lastName !== undefined) updateData.lastName = body.lastName;
   if (body.phone !== undefined) updateData.phoneNumber = body.phone;
   if (body.avatar !== undefined) updateData.avatarUrl = body.avatar;
 
-  await prisma.user.update({
+  await prisma.tenantUser.update({
     where: { id: userId },
     data: updateData,
   });
@@ -204,7 +161,7 @@ export async function updateMyProfile(userId: string, body: UpdateMeBody) {
 }
 
 export async function changeMyPassword(userId: string, body: ChangePasswordBody) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { id: true, passwordHash: true },
   });
@@ -226,13 +183,17 @@ export async function changeMyPassword(userId: string, body: ChangePasswordBody)
   const newPasswordHash = await hashPassword(body.newPassword);
 
   await prisma.$transaction([
-    prisma.user.update({
+    prisma.tenantUser.update({
       where: { id: userId },
       data: {
         passwordHash: newPasswordHash,
         failedAttempts: 0,
         lockedUntil: null,
       },
+    }),
+    prisma.tenantSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
     }),
     prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
@@ -253,17 +214,13 @@ export async function changeMyPassword(userId: string, body: ChangePasswordBody)
 }
 
 export async function getMyPermissions(userId: string) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { role: true, activeTenantId: true },
   });
 
   if (!user) {
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-
-  if (user.role === UserRole.super_admin) {
-    return GLOBAL_ROLE_PERMISSIONS[user.role];
   }
 
   if (user.activeTenantId) {
@@ -274,11 +231,23 @@ export async function getMyPermissions(userId: string) {
         status: MembershipStatus.active,
         tenant: { isActive: true },
       },
-      select: { role: true },
+      select: { role: { select: { name: true, permissions: true } } },
     });
 
     if (membership) {
-      return TENANT_ROLE_PERMISSIONS[membership.role];
+      // Phase 3: return the actual permissions[] from the membership's role.
+      // Legacy boolean-flags shape kept for FE back-compat — derived from new strings.
+      const perms = new Set(membership.role.permissions);
+      return {
+        canViewAllHomes: perms.has('homes:read'),
+        canViewAllYoungPeople: perms.has('young_people:read'),
+        canViewAllEmployees: perms.has('employees:read'),
+        canApproveIOILogs: perms.has('tasks:approve'),
+        canManageUsers: perms.has('members:write'),
+        canManageSettings: perms.has('settings:write'),
+        canViewReports: perms.has('reports:read'),
+        canExportData: perms.has('reports:export'),
+      };
     }
   }
 
@@ -286,7 +255,7 @@ export async function getMyPermissions(userId: string) {
 }
 
 export async function getMyPreferences(userId: string) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { language: true, timezone: true },
   });
@@ -299,11 +268,11 @@ export async function getMyPreferences(userId: string) {
 }
 
 export async function updateMyPreferences(userId: string, body: UpdatePreferencesBody) {
-  const updateData: Prisma.UserUpdateInput = {};
+  const updateData: Prisma.TenantUserUpdateInput = {};
   if (body.language !== undefined) updateData.language = body.language;
   if (body.timezone !== undefined) updateData.timezone = body.timezone;
 
-  const updated = await prisma.user.update({
+  const updated = await prisma.tenantUser.update({
     where: { id: userId },
     data: updateData,
     select: { language: true, timezone: true },

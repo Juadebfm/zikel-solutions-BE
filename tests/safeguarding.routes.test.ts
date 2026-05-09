@@ -42,14 +42,17 @@ beforeEach(() => {
 
 function authHeader(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
+  role: 'staff' | 'manager' | 'admin' = 'manager',
   tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = 'tenant_admin',
 ) {
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
     tenantRole,
+    mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -135,7 +138,9 @@ describe('Safeguarding routes', () => {
       {
         eventType: 'incident',
         maxEvents: 50,
-        includeNarrative: true,
+        // Phase 8.1 (2026-05-09): default flipped to false. FE opts in
+        // explicitly when the user wants the AI-generated narrative.
+        includeNarrative: false,
       },
     );
     expect(response.json()).toMatchObject({

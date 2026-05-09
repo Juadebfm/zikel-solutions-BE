@@ -1,14 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// Phase 8.1: ai-access.ts (transitive import) loads env.js at module init.
+vi.hoisted(() => {
+  process.env.NODE_ENV = 'test';
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
+  }
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = 'test_secret_that_is_at_least_32_characters_long';
+  }
+});
+
 const { mockPrisma, requireTenantContext } = vi.hoisted(() => ({
   mockPrisma: {
     user: { findUnique: vi.fn() },
+    tenantUser: { findUnique: vi.fn() },
     employee: { findFirst: vi.fn() },
     youngPerson: { findFirst: vi.fn() },
     home: { findFirst: vi.fn() },
     task: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
     homeEvent: { findMany: vi.fn() },
     auditLog: { findMany: vi.fn(), create: vi.fn() },
+    aiCallEvent: { create: vi.fn(async () => ({ id: 'evt_1' })) },
   },
   requireTenantContext: vi.fn(),
 }));
@@ -48,6 +61,12 @@ beforeEach(() => {
     tenantRole: 'tenant_admin',
   });
   mockPrisma.user.findUnique.mockResolvedValue({
+    id: 'user_1',
+    role: 'admin',
+  });
+  // Phase 1 split: services that resolved the actor via `prisma.user` now
+  // use `prisma.tenantUser`. Mirror the same fixture so unrelated tests pass.
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({
     id: 'user_1',
     role: 'admin',
   });

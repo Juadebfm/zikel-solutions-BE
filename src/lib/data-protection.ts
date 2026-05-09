@@ -63,7 +63,7 @@ export function canUseRestrictedConfidentialityScope(args: {
   userRole: UserRole;
   tenantRole: TenantRole | null;
 }) {
-  if (args.userRole === 'super_admin' || args.userRole === 'admin' || args.userRole === 'manager') {
+  if (args.userRole === 'admin' || args.userRole === 'manager') {
     return true;
   }
   return args.tenantRole === 'tenant_admin' || args.tenantRole === 'sub_admin';

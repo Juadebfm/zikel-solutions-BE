@@ -4,19 +4,25 @@ import { prisma } from '../../lib/prisma.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { generateRefreshToken, refreshExpiresAt, refreshIdleExpiresAt } from '../../lib/tokens.js';
 import { httpError } from '../../lib/errors.js';
-import { reconcileExpiredBreakGlassAccess } from '../../lib/break-glass.js';
 import {
   hashPassword,
   normalizePasswordCheckTiming,
   verifyPassword,
 } from '../../lib/password.js';
-import { resolveInviteLinkByCode } from '../tenants/tenants.service.js';
+import { seedSystemRolesForTenant } from '../../auth/system-roles.js';
+import { tenantHasMfa, verifyTenantTotp, verifyTenantBackupCode } from './mfa.service.js';
+import {
+  signMfaChallengeToken,
+  verifyMfaChallengeToken,
+  MFA_CHALLENGE_EXPIRY_SECONDS,
+} from '../../auth/mfa-challenge-token.js';
+import {
+  signMfaEnrollmentToken,
+  MFA_ENROLLMENT_EXPIRY_SECONDS,
+} from '../../auth/mfa-enrollment-token.js';
 import type {
   RegisterBody,
-  JoinViaInviteLinkBody,
-  StaffActivateBody,
   VerifyOtpBody,
-  VerifyMfaChallengeBody,
   ResendOtpBody,
   LoginBody,
   ForgotPasswordBody,
@@ -42,9 +48,9 @@ type OtpIdentifier = { userId: string } | { email: string };
 
 async function findUserByOtpIdentifier(identifier: OtpIdentifier) {
   if ('userId' in identifier) {
-    return prisma.user.findUnique({ where: { id: identifier.userId } });
+    return prisma.tenantUser.findUnique({ where: { id: identifier.userId } });
   }
-  return prisma.user.findUnique({ where: { email: identifier.email } });
+  return prisma.tenantUser.findUnique({ where: { email: identifier.email } });
 }
 
 function resolveOtpPurpose(body: VerifyOtpBody | ResendOtpBody): OtpPurpose {
@@ -82,16 +88,6 @@ function resendMessageFor(status: OtpDeliveryStatus): string {
   }
 }
 
-function mfaChallengeMessageFor(status: OtpDeliveryStatus): string {
-  switch (status) {
-    case 'sent':
-      return 'MFA code sent to your email.';
-    case 'queued':
-      return "MFA code generated and being sent now.";
-    case 'failed':
-      return 'MFA code generated, but delivery failed. Please try again.';
-  }
-}
 
 async function dispatchOtp(
   email: string,
@@ -150,7 +146,7 @@ function parseUniqueConstraintTarget(metaTarget: unknown): string[] {
 function safeUser(user: {
   id: string;
   email: string;
-  role: 'super_admin' | 'staff' | 'manager' | 'admin';
+  role: 'staff' | 'manager' | 'admin';
   firstName: string;
   middleName: string | null;
   lastName: string;
@@ -193,34 +189,50 @@ function safeUser(user: {
   };
 }
 
-async function createRefreshTokenForUser(args: {
+async function createSessionWithRefreshToken(args: {
   userId: string;
-  absoluteExpiresAt?: Date;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }) {
-  const refreshToken = generateRefreshToken();
-  const record = await prisma.refreshToken.create({
+  const absoluteExpiresAt = refreshExpiresAt();
+  const idleExpiresAt = refreshIdleExpiresAt();
+  const token = generateRefreshToken();
+
+  const session = await prisma.tenantSession.create({
     data: {
       userId: args.userId,
-      token: refreshToken,
-      expiresAt: args.absoluteExpiresAt ?? refreshExpiresAt(),
-      idleExpiresAt: refreshIdleExpiresAt(),
+      ipAddress: args.ipAddress ?? null,
+      userAgent: args.userAgent ?? null,
+      absoluteExpiresAt,
+      refreshTokens: {
+        create: {
+          userId: args.userId,
+          token,
+          idleExpiresAt,
+        },
+      },
     },
   });
+
   return {
-    token: record.token,
-    absoluteExpiresAt: record.expiresAt,
-    idleExpiresAt: record.idleExpiresAt,
+    sessionId: session.id,
+    token,
+    absoluteExpiresAt: session.absoluteExpiresAt,
+    idleExpiresAt,
   };
 }
 
-type RefreshTokenState = {
+type RefreshTokenWithSessionState = {
   revokedAt: Date | null;
-  expiresAt: Date;
   idleExpiresAt: Date;
+  session: {
+    revokedAt: Date | null;
+    absoluteExpiresAt: Date;
+  };
 };
 
-function assertRefreshTokenState(
-  stored: RefreshTokenState,
+function assertRefreshTokenAndSessionState(
+  stored: RefreshTokenWithSessionState,
   now: Date,
 ) {
   if (stored.revokedAt !== null) {
@@ -231,7 +243,15 @@ function assertRefreshTokenState(
     );
   }
 
-  if (stored.expiresAt <= now) {
+  if (stored.session.revokedAt !== null) {
+    throw httpError(
+      401,
+      'SESSION_REVOKED',
+      'Session has been revoked. Please sign in again.',
+    );
+  }
+
+  if (stored.session.absoluteExpiresAt <= now) {
     throw httpError(
       401,
       'SESSION_ABSOLUTE_EXPIRED',
@@ -262,12 +282,16 @@ export interface AuthSessionMembership {
   tenantId: string;
   tenantName: string;
   tenantSlug: string;
-  tenantRole: TenantRole;
+  tenantRole: TenantRole; // Legacy enum derived from role.name; new code should use permissions.
+  roleName: string;
+  permissions: string[];
 }
 
 export interface AuthSessionContext {
   activeTenantId: string | null;
   activeTenantRole: TenantRole | null;
+  activeRoleName: string | null;
+  activePermissions: string[];
   memberships: AuthSessionMembership[];
   mfaRequired: boolean;
   mfaVerified: boolean;
@@ -278,48 +302,34 @@ async function resolveAuthSessionContext(args: {
   userRole: UserRole;
   currentActiveTenantId: string | null;
   preferredTenantId?: string | null;
+  mfaJustVerified?: boolean;
 }): Promise<AuthSessionContext> {
-  const effectiveActiveTenantId = await reconcileExpiredBreakGlassAccess({
-    userId: args.userId,
-    userRole: args.userRole,
-    activeTenantId: args.currentActiveTenantId,
-  });
+  const effectiveActiveTenantId = args.currentActiveTenantId;
 
-  if (args.userRole === UserRole.super_admin) {
-    return {
-      activeTenantId: effectiveActiveTenantId,
-      activeTenantRole: null,
-      memberships: [],
-      mfaRequired: false,
-      mfaVerified: true,
-    };
-  }
-
-  const memberships = await prisma.tenantMembership.findMany({
-    where: {
-      userId: args.userId,
-      status: MembershipStatus.active,
-      tenant: { isActive: true },
-    },
-    select: {
-      tenantId: true,
-      role: true,
-      tenant: {
-        select: {
-          name: true,
-          slug: true,
-          mfaSetupCompletedAt: true,
-        },
+  const [memberships, totpEnrolled] = await Promise.all([
+    prisma.tenantMembership.findMany({
+      where: {
+        userId: args.userId,
+        status: MembershipStatus.active,
+        tenant: { isActive: true },
       },
-    },
-    orderBy: { createdAt: 'asc' },
-  });
+      select: {
+        tenantId: true,
+        role: { select: { name: true, permissions: true } },
+        tenant: { select: { name: true, slug: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    }),
+    tenantHasMfa(args.userId),
+  ]);
 
   const mappedMemberships: AuthSessionMembership[] = memberships.map((membership) => ({
     tenantId: membership.tenantId,
     tenantName: membership.tenant.name,
     tenantSlug: membership.tenant.slug,
-    tenantRole: membership.role,
+    tenantRole: legacyTenantRoleFromName(membership.role.name),
+    roleName: membership.role.name,
+    permissions: membership.role.permissions,
   }));
 
   const preferredMembership = args.preferredTenantId
@@ -330,12 +340,17 @@ async function resolveAuthSessionContext(args: {
     : null;
   const selectedMembership = preferredMembership ?? currentMembership ?? memberships[0] ?? null;
   const resolvedActiveTenantId = selectedMembership?.tenantId ?? null;
-  const mfaSetupCompleted = Boolean(selectedMembership?.tenant.mfaSetupCompletedAt);
-  const mfaRequired = selectedMembership?.role === TenantRole.tenant_admin && !mfaSetupCompleted;
-  const mfaVerified = !mfaRequired;
+
+  // Phase 4: Owners must enroll TOTP. mfaRequired flags users who SHOULD have
+  // MFA enrolled but don't — frontend should drive them to enrollment.
+  const isOwner = selectedMembership?.role.name === 'Owner';
+  const mfaRequired = isOwner && !totpEnrolled;
+  // mfaVerified is true if MFA isn't required, OR the user just completed
+  // a TOTP/backup challenge (the verify endpoints pass mfaJustVerified=true).
+  const mfaVerified = !mfaRequired || Boolean(args.mfaJustVerified);
 
   if (effectiveActiveTenantId !== resolvedActiveTenantId) {
-    await prisma.user.update({
+    await prisma.tenantUser.update({
       where: { id: args.userId },
       data: { activeTenantId: resolvedActiveTenantId },
     });
@@ -343,11 +358,22 @@ async function resolveAuthSessionContext(args: {
 
   return {
     activeTenantId: resolvedActiveTenantId,
-    activeTenantRole: selectedMembership?.role ?? null,
+    activeTenantRole: selectedMembership ? legacyTenantRoleFromName(selectedMembership.role.name) : null,
+    activeRoleName: selectedMembership?.role.name ?? null,
+    activePermissions: selectedMembership?.role.permissions ?? [],
     memberships: mappedMemberships,
     mfaRequired,
     mfaVerified,
   };
+}
+
+// Maps the new Role.name → legacy TenantRole enum for back-compat with the JWT
+// claim and middleware that still inspects `tenantRole`. Phase 3.5 migrates those
+// consumers to permission-based checks; once that lands, this shim can be removed.
+function legacyTenantRoleFromName(roleName: string): TenantRole {
+  if (roleName === 'Owner') return TenantRole.tenant_admin;
+  if (roleName === 'Admin') return TenantRole.sub_admin;
+  return TenantRole.staff;
 }
 
 // ─── Service functions ────────────────────────────────────────────────────────
@@ -357,7 +383,7 @@ async function resolveAuthSessionContext(args: {
  * Creates a pending user (emailVerified: false) and initiates 6-digit OTP delivery.
  */
 export async function register(body: RegisterBody) {
-  const existing = await prisma.user.findUnique({ where: { email: body.email } });
+  const existing = await prisma.tenantUser.findUnique({ where: { email: body.email } });
   if (existing) {
     throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
   }
@@ -379,7 +405,10 @@ export async function register(body: RegisterBody) {
         },
       });
 
-      const user = await tx.user.create({
+      // Seed the four system roles for this brand-new tenant.
+      const systemRoles = await seedSystemRolesForTenant(tenant.id, tx);
+
+      const user = await tx.tenantUser.create({
         data: {
           email: body.email,
           passwordHash,
@@ -395,11 +424,12 @@ export async function register(body: RegisterBody) {
         },
       });
 
+      // Registering self-creates the tenant — the registrant is the Owner.
       await tx.tenantMembership.create({
         data: {
           tenantId: tenant.id,
           userId: user.id,
-          role: TenantRole.tenant_admin,
+          roleId: systemRoles.Owner,
           status: MembershipStatus.active,
         },
       });
@@ -461,195 +491,10 @@ export async function register(body: RegisterBody) {
   }
 }
 
-/**
- * Staff self-registration via org invite link.
- * Creates an account with pending_approval membership. Admin must approve.
- */
-export async function joinViaInviteLink(inviteCode: string, body: JoinViaInviteLinkBody) {
-  const linkInfo = await resolveInviteLinkByCode(inviteCode);
-
-  const existing = await prisma.user.findUnique({ where: { email: body.email } });
-  if (existing) {
-    throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
-  }
-
-  const passwordHash = await hashPassword(body.password);
-
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.create({
-        data: {
-          email: body.email,
-          passwordHash,
-          firstName: body.firstName,
-          lastName: body.lastName,
-          phoneNumber: body.phoneNumber ?? null,
-          country: 'UK',
-          acceptedTerms: body.acceptTerms as boolean,
-          emailVerified: false,
-          activeTenantId: linkInfo.tenantId,
-        },
-      });
-
-      await tx.tenantMembership.create({
-        data: {
-          tenantId: linkInfo.tenantId,
-          userId: user.id,
-          role: linkInfo.defaultRole,
-          status: MembershipStatus.pending_approval,
-        },
-      });
-
-      const otpCode = generateOtpCode();
-      await tx.otpCode.create({
-        data: {
-          userId: user.id,
-          code: otpCode,
-          purpose: OtpPurpose.email_verification,
-          expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          userId: user.id,
-          action: AuditAction.register,
-          metadata: {
-            joinedVia: 'invite_link',
-            tenantId: linkInfo.tenantId,
-            tenantName: linkInfo.tenantName,
-            role: linkInfo.defaultRole,
-          },
-        },
-      });
-
-      return { user, otpCode };
-    });
-
-    const otpDeliveryStatus = await dispatchOtp(
-      body.email,
-      result.otpCode,
-      OtpPurpose.email_verification,
-    );
-
-    return {
-      userId: result.user.id,
-      message: registerMessageFor(otpDeliveryStatus),
-      otpDeliveryStatus,
-      resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
-      tenantName: linkInfo.tenantName,
-      pendingApproval: true,
-    };
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2002'
-    ) {
-      throw httpError(409, 'EMAIL_TAKEN', 'An account with this email already exists.');
-    }
-    throw error;
-  }
-}
-
-/**
- * Public endpoint — validates an invite link code and returns the org name.
- */
-export async function validateInviteLink(inviteCode: string) {
-  const linkInfo = await resolveInviteLinkByCode(inviteCode);
-  return {
-    tenantName: linkInfo.tenantName,
-    tenantSlug: linkInfo.tenantSlug,
-    defaultRole: linkInfo.defaultRole,
-  };
-}
-
-/**
- * Activates a pre-provisioned staff account.
- * Staff enters email + 6-digit activation code + sets password.
- * On success, activates account, sets password, upgrades membership to active, and issues tokens.
- */
-export async function staffActivate(body: StaffActivateBody) {
-  const user = await prisma.user.findUnique({ where: { email: body.email } });
-  if (!user) {
-    throw httpError(400, 'ACTIVATION_INVALID', 'Invalid email or activation code.');
-  }
-
-  if (user.emailVerified) {
-    throw httpError(409, 'ALREADY_ACTIVATED', 'This account has already been activated. Please log in.');
-  }
-
-  const otp = await prisma.otpCode.findFirst({
-    where: {
-      userId: user.id,
-      code: body.code,
-      purpose: OtpPurpose.staff_activation,
-      usedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-  });
-
-  if (!otp) {
-    throw httpError(400, 'ACTIVATION_INVALID', 'Invalid email or activation code.');
-  }
-
-  const passwordHash = await hashPassword(body.password);
-
-  await prisma.$transaction(async (tx) => {
-    // Mark OTP consumed
-    await tx.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } });
-
-    // Activate user account + set password
-    await tx.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash,
-        emailVerified: true,
-        acceptedTerms: true,
-      },
-    });
-
-    // Upgrade membership from invited to active
-    await tx.tenantMembership.updateMany({
-      where: {
-        userId: user.id,
-        status: MembershipStatus.invited,
-      },
-      data: {
-        status: MembershipStatus.active,
-      },
-    });
-
-    await tx.auditLog.create({
-      data: {
-        userId: user.id,
-        action: AuditAction.register,
-        entityType: 'staff_activation',
-        metadata: { activatedVia: 'staff_code' },
-      },
-    });
-  });
-
-  // Fetch updated user for session
-  const updatedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-
-  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
-
-  const session = await resolveAuthSessionContext({
-    userId: updatedUser.id,
-    userRole: updatedUser.role,
-    currentActiveTenantId: updatedUser.activeTenantId,
-  });
-
-  return {
-    user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
-    refreshToken: refreshToken.token,
-    session,
-    sessionExpiry: asSessionExpiryData({
-      idleExpiresAt: refreshToken.idleExpiresAt,
-      absoluteExpiresAt: refreshToken.absoluteExpiresAt,
-    }),
-  };
-}
+// Phase 5: removed legacy `joinViaInviteLink`, `validateInviteLink`, and
+// `staffActivate` service functions. Staff onboarding now uses the unified
+// Invitation flow — see src/modules/auth/invitations.service.ts and the
+// /api/v1/invitations + /api/v1/auth/invitations/:token routes.
 
 export async function checkEmailAvailability(email: string) {
   // Deliberately avoid account enumeration via this public endpoint.
@@ -689,13 +534,13 @@ export async function verifyOtp(body: VerifyOtpBody) {
   // Activate account on email verification
   let updatedUser = user;
   if (purpose === OtpPurpose.email_verification) {
-    updatedUser = await prisma.user.update({
+    updatedUser = await prisma.tenantUser.update({
       where: { id: user.id },
       data: { emailVerified: true },
     });
   }
 
-  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
+  const refreshToken = await createSessionWithRefreshToken({ userId: user.id });
 
   await prisma.auditLog.create({
     data: { userId: user.id, action: AuditAction.otp_verified },
@@ -709,6 +554,7 @@ export async function verifyOtp(body: VerifyOtpBody) {
 
   return {
     user: { ...safeUser(updatedUser), activeTenantId: session.activeTenantId },
+    sessionId: refreshToken.sessionId,
     refreshToken: refreshToken.token,
     session,
     sessionExpiry: asSessionExpiryData({
@@ -776,175 +622,10 @@ export async function resendOtp(body: ResendOtpBody) {
   };
 }
 
-/**
- * Starts a privileged-session MFA challenge by issuing a one-time code.
- * Only super_admin or tenant_admin sessions can request this challenge.
- */
-export async function requestMfaChallenge(actorUserId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: actorUserId },
-    select: {
-      id: true,
-      email: true,
-      role: true,
-      isActive: true,
-      emailVerified: true,
-      activeTenantId: true,
-    },
-  });
-
-  if (!user) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-  if (!user.isActive) {
-    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
-  }
-  if (!user.emailVerified) {
-    throw httpError(403, 'EMAIL_NOT_VERIFIED', 'Please verify your email address first.');
-  }
-
-  const session = await resolveAuthSessionContext({
-    userId: user.id,
-    userRole: user.role,
-    currentActiveTenantId: user.activeTenantId,
-  });
-  if (!session.mfaRequired) {
-    throw httpError(400, 'MFA_NOT_REQUIRED', 'MFA challenge is not required for this session.');
-  }
-
-  const recent = await prisma.otpCode.findFirst({
-    where: { userId: user.id, purpose: OtpPurpose.mfa_challenge },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  if (recent) {
-    const elapsedMs = Date.now() - recent.createdAt.getTime();
-    if (elapsedMs < OTP_COOLDOWN_MS) {
-      const remainingSec = Math.ceil((OTP_COOLDOWN_MS - elapsedMs) / 1_000);
-      throw httpError(
-        429,
-        'OTP_COOLDOWN',
-        `Please wait ${remainingSec} seconds before requesting a new MFA code.`,
-      );
-    }
-
-    await prisma.otpCode.updateMany({
-      where: { userId: user.id, purpose: OtpPurpose.mfa_challenge, usedAt: null },
-      data: { usedAt: new Date() },
-    });
-  }
-
-  const code = generateOtpCode();
-  await prisma.otpCode.create({
-    data: {
-      userId: user.id,
-      code,
-      purpose: OtpPurpose.mfa_challenge,
-      expiresAt: new Date(Date.now() + OTP_EXPIRY_MS),
-    },
-  });
-
-  const otpDeliveryStatus = await dispatchOtp(user.email, code, OtpPurpose.mfa_challenge);
-
-  await prisma.auditLog.create({
-    data: {
-      userId: user.id,
-      action: AuditAction.login,
-      entityType: 'auth_mfa',
-      entityId: user.id,
-      metadata: {
-        type: 'mfa_challenge_requested',
-        activeTenantId: session.activeTenantId,
-        activeTenantRole: session.activeTenantRole,
-      },
-    },
-  });
-
-  return {
-    message: mfaChallengeMessageFor(otpDeliveryStatus),
-    cooldownSeconds: OTP_COOLDOWN_MS / 1_000,
-    otpDeliveryStatus,
-    resendAvailableAt: isoAfter(OTP_COOLDOWN_MS),
-  };
-}
-
-/**
- * Completes a privileged-session MFA challenge.
- * Returns refreshed session context and expects the route to sign a new access token.
- */
-export async function verifyMfaChallenge(actorUserId: string, body: VerifyMfaChallengeBody) {
-  const user = await prisma.user.findUnique({
-    where: { id: actorUserId },
-  });
-
-  if (!user) {
-    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
-  }
-  if (!user.isActive) {
-    throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
-  }
-
-  const session = await resolveAuthSessionContext({
-    userId: user.id,
-    userRole: user.role,
-    currentActiveTenantId: user.activeTenantId,
-  });
-  if (!session.mfaRequired) {
-    throw httpError(400, 'MFA_NOT_REQUIRED', 'MFA challenge is not required for this session.');
-  }
-
-  const otp = await prisma.otpCode.findFirst({
-    where: {
-      userId: user.id,
-      purpose: OtpPurpose.mfa_challenge,
-      code: body.code,
-      usedAt: null,
-      expiresAt: { gt: new Date() },
-    },
-    select: { id: true },
-  });
-
-  if (!otp) {
-    throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
-  }
-
-  const verifiedAt = new Date();
-  const ops: Prisma.PrismaPromise<unknown>[] = [
-    prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: verifiedAt } }),
-    prisma.auditLog.create({
-      data: {
-        userId: user.id,
-        action: AuditAction.otp_verified,
-        entityType: 'auth_mfa',
-        entityId: user.id,
-        metadata: {
-          purpose: OtpPurpose.mfa_challenge,
-          activeTenantId: session.activeTenantId,
-          activeTenantRole: session.activeTenantRole,
-        },
-      },
-    }),
-  ];
-
-  if (session.activeTenantId && session.activeTenantRole === TenantRole.tenant_admin) {
-    ops.push(
-      prisma.tenant.updateMany({
-        where: { id: session.activeTenantId, mfaSetupCompletedAt: null },
-        data: { mfaSetupCompletedAt: verifiedAt },
-      }),
-    );
-  }
-
-  await prisma.$transaction(ops);
-
-  return {
-    user: { ...safeUser(user), activeTenantId: session.activeTenantId },
-    session: {
-      ...session,
-      mfaVerified: true,
-    },
-  };
-}
+// Phase 4: removed legacy email-OTP MFA flow (requestMfaChallenge / verifyMfaChallenge).
+// MFA is now TOTP-based — see src/modules/auth/mfa.service.ts and the
+// /auth/mfa/totp/* routes. The OtpPurpose.mfa_challenge enum value is left
+// in place for backwards-compat but is no longer issued by the service.
 
 /**
  * Authenticates a user by email + password.
@@ -952,7 +633,7 @@ export async function verifyMfaChallenge(actorUserId: string, body: VerifyMfaCha
  * Returns the safe user + a raw refresh token for the caller to use.
  */
 export async function login(body: LoginBody) {
-  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  const user = await prisma.tenantUser.findUnique({ where: { email: body.email } });
 
   if (!user) {
     // Constant-time dummy compare to prevent user-enumeration via timing
@@ -975,7 +656,7 @@ export async function login(body: LoginBody) {
       ? new Date(Date.now() + LOCKOUT_MS)
       : null;
     await prisma.$transaction([
-      prisma.user.update({
+      prisma.tenantUser.update({
         where: { id: user.id },
         data: {
           failedAttempts: newFailed,
@@ -1005,17 +686,92 @@ export async function login(body: LoginBody) {
     ? await hashPassword(body.password)
     : null;
 
-  await prisma.user.update({
+  // Reset lockout state and persist any password rehash up-front — these
+  // are intent-of-login signals, not contingent on MFA outcome.
+  await prisma.tenantUser.update({
     where: { id: user.id },
     data: {
       failedAttempts: 0,
       lockedUntil: null,
-      lastLoginAt: new Date(),
       ...(maybeRehashedPassword ? { passwordHash: maybeRehashedPassword } : {}),
     },
   });
 
-  const refreshToken = await createRefreshTokenForUser({ userId: user.id });
+  // ── MFA gate ─────────────────────────────────────────────────────────────
+  // Two paths beyond password:
+  //  1. User has confirmed TOTP → issue a challenge token (existing flow).
+  //  2. User MUST have MFA (Owner role) but has not enrolled → issue an
+  //     enrollment token instead of a session. Hard block: no partial session
+  //     is ever minted. The enrollment token is single-purpose and only
+  //     authorizes /auth/mfa/totp/enroll/* — once enrollment confirms, that
+  //     endpoint mints the full session in the same flow.
+  const [hasMfa, isPrivileged] = await Promise.all([
+    tenantHasMfa(user.id),
+    isPrivilegedTenantUser(user.id),
+  ]);
+
+  if (hasMfa) {
+    return {
+      kind: 'mfa-required' as const,
+      mfaRequired: true,
+      challengeToken: signMfaChallengeToken({ userId: user.id, audience: 'tenant' }),
+      challengeExpiresInSeconds: MFA_CHALLENGE_EXPIRY_SECONDS,
+    };
+  }
+
+  if (isPrivileged) {
+    return {
+      kind: 'mfa-enrollment-required' as const,
+      mfaEnrollmentRequired: true,
+      enrollmentToken: signMfaEnrollmentToken({ userId: user.id, audience: 'tenant' }),
+      enrollmentExpiresInSeconds: MFA_ENROLLMENT_EXPIRY_SECONDS,
+    };
+  }
+
+  return finalizeTenantLogin(user.id);
+}
+
+/**
+ * True if this tenant user holds an Owner role in any active membership.
+ * Owners are required to have TOTP enrolled — login hard-blocks until they do.
+ */
+async function isPrivilegedTenantUser(userId: string): Promise<boolean> {
+  const owner = await prisma.tenantMembership.findFirst({
+    where: {
+      userId,
+      status: MembershipStatus.active,
+      tenant: { isActive: true },
+      role: { name: 'Owner' },
+    },
+    select: { id: true },
+  });
+  return Boolean(owner);
+}
+
+/**
+ * Mints a session for a tenant user whose identity has already been verified
+ * (either by password-only login or password + MFA verify). Sets lastLoginAt,
+ * creates a session + refresh token, audit-logs, and resolves the AuthSession
+ * context for the route layer to sign an access token from.
+ *
+ * Pass `mfaJustVerified: true` from the MFA verify endpoints so the resulting
+ * session is marked as MFA-validated for privileged-mutation gating.
+ *
+ * Returns the discriminated `kind: 'completed'` shape used by every login
+ * downstream (login, MFA verify, backup verify).
+ */
+export async function finalizeTenantLogin(userId: string, opts?: { mfaJustVerified?: boolean }) {
+  const user = await prisma.tenantUser.findUnique({ where: { id: userId } });
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+
+  await prisma.tenantUser.update({
+    where: { id: user.id },
+    data: { lastLoginAt: new Date() },
+  });
+
+  const refreshToken = await createSessionWithRefreshToken({ userId: user.id });
 
   await prisma.auditLog.create({
     data: { userId: user.id, action: AuditAction.login },
@@ -1025,10 +781,13 @@ export async function login(body: LoginBody) {
     userId: user.id,
     userRole: user.role,
     currentActiveTenantId: user.activeTenantId,
+    ...(opts?.mfaJustVerified ? { mfaJustVerified: true } : {}),
   });
 
   return {
+    kind: 'completed' as const,
     user: { ...safeUser(user), activeTenantId: session.activeTenantId },
+    sessionId: refreshToken.sessionId,
     refreshToken: refreshToken.token,
     session,
     sessionExpiry: asSessionExpiryData({
@@ -1039,27 +798,161 @@ export async function login(body: LoginBody) {
 }
 
 /**
- * Revokes the provided refresh token for the authenticated user.
- * Idempotent — silently succeeds if the token is not found.
+ * Exchanges a challenge token + 6-digit TOTP for a full session.
+ * Used at /auth/mfa/totp/verify after the password step issued a challenge.
  */
-export async function logout(refreshToken: string, actorUserId: string) {
-  const result = await prisma.refreshToken.updateMany({
-    where: { token: refreshToken, userId: actorUserId, revokedAt: null },
-    data: { revokedAt: new Date() },
+export async function verifyTenantTotpAndLogin(args: {
+  challengeToken: string;
+  code: string;
+}) {
+  const userId = verifyMfaChallengeToken({ token: args.challengeToken, expectedAudience: 'tenant' });
+  const ok = await verifyTenantTotp({ userId, code: args.code });
+  if (!ok) {
+    throw httpError(401, 'MFA_CODE_INVALID', 'The code did not match. Try again.');
+  }
+  return finalizeTenantLogin(userId, { mfaJustVerified: true });
+}
+
+/** Exchanges a challenge token + a single-use backup code for a full session. */
+export async function verifyTenantBackupAndLogin(args: {
+  challengeToken: string;
+  code: string;
+}) {
+  const userId = verifyMfaChallengeToken({ token: args.challengeToken, expectedAudience: 'tenant' });
+  const ok = await verifyTenantBackupCode({ userId, code: args.code });
+  if (!ok) {
+    throw httpError(401, 'MFA_BACKUP_INVALID', 'Backup code is invalid or already used.');
+  }
+  return finalizeTenantLogin(userId, { mfaJustVerified: true });
+}
+
+/**
+ * Mints a session for a tenant user who has just completed first-time TOTP
+ * enrollment via the enrollment-token flow. The enrollment route is
+ * responsible for verifying the enrollment token and the TOTP setup code
+ * BEFORE calling this — by the time we reach here, the user's identity and
+ * second factor have both been confirmed.
+ */
+export async function finalizeTenantLoginAfterEnrollment(userId: string) {
+  return finalizeTenantLogin(userId, { mfaJustVerified: true });
+}
+
+/**
+ * Revokes the entire session associated with the provided refresh token (or the
+ * caller-provided sessionId). Idempotent — silently succeeds if not found.
+ */
+export async function logout(args: {
+  actorUserId: string;
+  refreshToken?: string | null;
+  sessionId?: string | null;
+}) {
+  let sessionId = args.sessionId ?? null;
+
+  if (!sessionId && args.refreshToken) {
+    const tokenRow = await prisma.refreshToken.findUnique({
+      where: { token: args.refreshToken },
+      select: { sessionId: true, userId: true },
+    });
+    if (tokenRow && tokenRow.userId === args.actorUserId) {
+      sessionId = tokenRow.sessionId;
+    }
+  }
+
+  if (!sessionId) return { revoked: 0 };
+
+  const now = new Date();
+  const updated = await prisma.tenantSession.updateMany({
+    where: { id: sessionId, userId: args.actorUserId, revokedAt: null },
+    data: { revokedAt: now },
+  });
+  if (updated.count === 0) return { revoked: 0 };
+
+  await prisma.refreshToken.updateMany({
+    where: { sessionId, revokedAt: null },
+    data: { revokedAt: now },
   });
 
-  if (result.count > 0) {
-    await prisma.auditLog.create({
-      data: { userId: actorUserId, action: AuditAction.logout },
-    });
+  await prisma.auditLog.create({
+    data: {
+      userId: args.actorUserId,
+      action: AuditAction.logout,
+      entityType: 'tenant_session',
+      entityId: sessionId,
+    },
+  });
+
+  return { revoked: 1 };
+}
+
+// ─── Session listing & management (tenant) ────────────────────────────────────
+
+export async function listTenantSessions(userId: string) {
+  return prisma.tenantSession.findMany({
+    where: { userId, revokedAt: null },
+    orderBy: { lastActiveAt: 'desc' },
+    select: {
+      id: true,
+      deviceLabel: true,
+      userAgent: true,
+      ipAddress: true,
+      createdAt: true,
+      lastActiveAt: true,
+      absoluteExpiresAt: true,
+    },
+  });
+}
+
+export async function revokeTenantSession(args: { userId: string; sessionId: string }) {
+  const now = new Date();
+  const updated = await prisma.tenantSession.updateMany({
+    where: { id: args.sessionId, userId: args.userId, revokedAt: null },
+    data: { revokedAt: now },
+  });
+  if (updated.count === 0) {
+    throw httpError(404, 'SESSION_NOT_FOUND', 'Session not found or already revoked.');
   }
+  await prisma.refreshToken.updateMany({
+    where: { sessionId: args.sessionId, revokedAt: null },
+    data: { revokedAt: now },
+  });
+  await prisma.auditLog.create({
+    data: {
+      userId: args.userId,
+      action: AuditAction.logout,
+      entityType: 'tenant_session',
+      entityId: args.sessionId,
+      metadata: { kind: 'revoke_one' },
+    },
+  });
+  return { revoked: 1 };
+}
+
+export async function revokeAllTenantSessions(userId: string) {
+  const now = new Date();
+  const sessions = await prisma.tenantSession.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: now },
+  });
+  await prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: now },
+  });
+  await prisma.auditLog.create({
+    data: {
+      userId,
+      action: AuditAction.logout,
+      entityType: 'tenant_session',
+      metadata: { kind: 'revoke_all', count: sessions.count },
+    },
+  });
+  return { revoked: sessions.count };
 }
 
 /**
  * Returns the authenticated user's profile (sensitive fields excluded).
  */
 export async function getMe(userId: string) {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
+  const user = await prisma.tenantUser.findUnique({ where: { id: userId } });
   if (!user) throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   const session = await resolveAuthSessionContext({
     userId: user.id,
@@ -1074,7 +967,7 @@ export async function getMe(userId: string) {
  * returns refreshed session context for token re-issuance.
  */
 export async function switchTenant(actorUserId: string, tenantId: string) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: actorUserId },
     select: {
       id: true,
@@ -1127,7 +1020,7 @@ export async function switchTenant(actorUserId: string, tenantId: string) {
   }
 
   await prisma.$transaction([
-    prisma.user.update({
+    prisma.tenantUser.update({
       where: { id: actorUserId },
       data: { activeTenantId: tenantId },
     }),
@@ -1168,14 +1061,40 @@ export async function switchTenant(actorUserId: string, tenantId: string) {
 export async function refreshAccessToken(refreshToken: string) {
   const stored = await prisma.refreshToken.findUnique({
     where: { token: refreshToken },
-    include: { user: true },
+    include: { user: true, session: true },
   });
 
   const now = new Date();
   if (!stored) {
     throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
   }
-  assertRefreshTokenState(stored, now);
+
+  // ── Token-reuse detection: a revoked refresh token being presented again
+  // strongly suggests theft. Revoke the entire session as a tripwire.
+  if (stored.revokedAt !== null) {
+    await prisma.$transaction([
+      prisma.tenantSession.updateMany({
+        where: { id: stored.sessionId, revokedAt: null },
+        data: { revokedAt: now },
+      }),
+      prisma.refreshToken.updateMany({
+        where: { sessionId: stored.sessionId, revokedAt: null },
+        data: { revokedAt: now },
+      }),
+      prisma.auditLog.create({
+        data: {
+          userId: stored.userId,
+          action: AuditAction.permission_changed,
+          entityType: 'tenant_session',
+          entityId: stored.sessionId,
+          metadata: { reason: 'refresh_token_reused', sessionRevoked: true },
+        },
+      }),
+    ]);
+    throw httpError(401, 'REFRESH_TOKEN_REUSED', 'Refresh token already used. Session revoked. Please sign in again.');
+  }
+
+  assertRefreshTokenAndSessionState(stored, now);
 
   if (!stored.user.isActive) {
     throw httpError(403, 'ACCOUNT_INACTIVE', 'Account is disabled.');
@@ -1183,31 +1102,33 @@ export async function refreshAccessToken(refreshToken: string) {
 
   const newRawToken = generateRefreshToken();
   const nextIdleExpiry = refreshIdleExpiresAt();
+  const sessionAbsoluteExpiresAt = stored.session.absoluteExpiresAt;
 
-  // Atomic rotation: revoke the old token and create the new one in a single transaction.
+  const newRecord = await prisma.refreshToken.create({
+    data: {
+      sessionId: stored.sessionId,
+      userId: stored.userId,
+      token: newRawToken,
+      idleExpiresAt: nextIdleExpiry,
+    },
+  });
   await prisma.$transaction([
     prisma.refreshToken.update({
       where: { id: stored.id },
-      data: { revokedAt: now },
+      data: { revokedAt: now, replacedByTokenId: newRecord.id },
     }),
-    prisma.refreshToken.create({
+    prisma.tenantSession.update({
+      where: { id: stored.sessionId },
+      data: { lastActiveAt: now },
+    }),
+    prisma.auditLog.create({
       data: {
         userId: stored.userId,
-        token: newRawToken,
-        expiresAt: stored.expiresAt,
-        idleExpiresAt: nextIdleExpiry,
+        action: AuditAction.login,
+        metadata: { type: 'token_refreshed', sessionId: stored.sessionId },
       },
     }),
   ]);
-
-  // Audit log — reuse 'login' action with metadata to distinguish token refreshes.
-  await prisma.auditLog.create({
-    data: {
-      userId: stored.userId,
-      action: AuditAction.login,
-      metadata: { type: 'token_refreshed' },
-    },
-  });
 
   const session = await resolveAuthSessionContext({
     userId: stored.user.id,
@@ -1218,10 +1139,11 @@ export async function refreshAccessToken(refreshToken: string) {
   return {
     user: { ...safeUser(stored.user), activeTenantId: session.activeTenantId },
     newRefreshToken: newRawToken,
+    sessionId: stored.sessionId,
     session,
     sessionExpiry: asSessionExpiryData({
       idleExpiresAt: nextIdleExpiry,
-      absoluteExpiresAt: stored.expiresAt,
+      absoluteExpiresAt: sessionAbsoluteExpiresAt,
     }),
   };
 }
@@ -1234,8 +1156,8 @@ export async function getSessionExpiry(userId: string, token?: string) {
         select: {
           userId: true,
           revokedAt: true,
-          expiresAt: true,
           idleExpiresAt: true,
+          session: { select: { revokedAt: true, absoluteExpiresAt: true } },
         },
       })
     : await prisma.refreshToken.findFirst({
@@ -1244,8 +1166,8 @@ export async function getSessionExpiry(userId: string, token?: string) {
         select: {
           userId: true,
           revokedAt: true,
-          expiresAt: true,
           idleExpiresAt: true,
+          session: { select: { revokedAt: true, absoluteExpiresAt: true } },
         },
       });
 
@@ -1253,16 +1175,16 @@ export async function getSessionExpiry(userId: string, token?: string) {
     throw httpError(401, 'REFRESH_TOKEN_INVALID', 'Refresh token is invalid.');
   }
 
-  assertRefreshTokenState(stored, now);
+  assertRefreshTokenAndSessionState(stored, now);
 
   return {
     serverTime: now.toISOString(),
     session: asSessionExpiryData({
       idleExpiresAt: stored.idleExpiresAt,
-      absoluteExpiresAt: stored.expiresAt,
+      absoluteExpiresAt: stored.session.absoluteExpiresAt,
     }),
     tokens: {
-      refreshTokenExpiresAt: stored.expiresAt,
+      refreshTokenExpiresAt: stored.session.absoluteExpiresAt,
     },
   };
 }
@@ -1275,7 +1197,7 @@ export async function getSessionExpiry(userId: string, token?: string) {
  * and never reveals cooldown state for existing accounts.
  */
 export async function forgotPassword(body: ForgotPasswordBody) {
-  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  const user = await prisma.tenantUser.findUnique({ where: { email: body.email } });
 
   // Silent early-return — do not reveal whether the email exists
   if (!user) {
@@ -1324,7 +1246,7 @@ export async function forgotPassword(body: ForgotPasswordBody) {
  * Audit logs the password_change action.
  */
 export async function resetPassword(body: ResetPasswordBody) {
-  const user = await prisma.user.findUnique({ where: { email: body.email } });
+  const user = await prisma.tenantUser.findUnique({ where: { email: body.email } });
   if (!user) throw httpError(400, 'OTP_INVALID', 'OTP is invalid, expired, or already used.');
 
   const otp = await prisma.otpCode.findFirst({
@@ -1346,9 +1268,13 @@ export async function resetPassword(body: ResetPasswordBody) {
   // Atomic: mark OTP used + update password + revoke all refresh tokens
   await prisma.$transaction([
     prisma.otpCode.update({ where: { id: otp.id }, data: { usedAt: new Date() } }),
-    prisma.user.update({
+    prisma.tenantUser.update({
       where: { id: user.id },
       data: { passwordHash: newPasswordHash, failedAttempts: 0, lockedUntil: null },
+    }),
+    prisma.tenantSession.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date() },
     }),
     prisma.refreshToken.updateMany({
       where: { userId: user.id, revokedAt: null },

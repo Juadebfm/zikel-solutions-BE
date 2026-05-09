@@ -1,56 +1,59 @@
+/**
+ * Coverage for the /admin/tenants/* surface that platform staff use to view,
+ * suspend, and reactivate tenants. Replaces the legacy super_admin tenant-
+ * audience tests that were removed in Phase 5.
+ *
+ * Cross-audience JWT isolation is locked in by tests/phase-regression.test.ts
+ * (Phase 1 — JWT audience isolation). This file focuses on the new admin
+ * surface's role gating and state transitions.
+ */
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-const {
-  listTenants,
-  getTenantById,
-  createTenant,
-  provisionStaff,
-  createInviteLink,
-  getInviteLink,
-  revokeInviteLink,
-  resolveInviteLinkByCode,
-  listTenantMemberships,
-  addTenantMembership,
-  updateTenantMembership,
-  listTenantInvites,
-  createTenantInvite,
-  revokeTenantInvite,
-  acceptTenantInvite,
-} = vi.hoisted(() => ({
-  listTenants: vi.fn(),
-  getTenantById: vi.fn(),
-  createTenant: vi.fn(),
-  provisionStaff: vi.fn(),
-  createInviteLink: vi.fn(),
-  getInviteLink: vi.fn(),
-  revokeInviteLink: vi.fn(),
-  resolveInviteLinkByCode: vi.fn(),
-  listTenantMemberships: vi.fn(),
-  addTenantMembership: vi.fn(),
-  updateTenantMembership: vi.fn(),
-  listTenantInvites: vi.fn(),
-  createTenantInvite: vi.fn(),
-  revokeTenantInvite: vi.fn(),
-  acceptTenantInvite: vi.fn(),
-}));
+const { mockPrisma, sendTenantSuspendedEmail, sendTenantReactivatedEmail } = vi.hoisted(() => {
+  const mp = {
+    tenant: {
+      findUnique: vi.fn(),
+      findMany: vi.fn(),
+      count: vi.fn(),
+      update: vi.fn(),
+    },
+    tenantMembership: {
+      findMany: vi.fn(),
+    },
+    tenantSession: {
+      updateMany: vi.fn(),
+    },
+    refreshToken: {
+      updateMany: vi.fn(),
+    },
+    platformUser: {
+      findUnique: vi.fn(),
+    },
+    platformAuditLog: {
+      create: vi.fn(async () => ({})),
+    },
+    $transaction: vi.fn(),
+    $disconnect: vi.fn(async () => undefined),
+    $on: vi.fn(),
+  };
+  mp.$transaction.mockImplementation(async (ops: unknown) => {
+    if (typeof ops === 'function') return (ops as (tx: typeof mp) => Promise<unknown>)(mp);
+    if (Array.isArray(ops)) return Promise.all(ops);
+    return ops;
+  });
+  return {
+    mockPrisma: mp,
+    sendTenantSuspendedEmail: vi.fn(async () => undefined),
+    sendTenantReactivatedEmail: vi.fn(async () => undefined),
+  };
+});
 
-vi.mock('../src/modules/tenants/tenants.service.js', () => ({
-  listTenants,
-  getTenantById,
-  createTenant,
-  provisionStaff,
-  createInviteLink,
-  getInviteLink,
-  revokeInviteLink,
-  resolveInviteLinkByCode,
-  listTenantMemberships,
-  addTenantMembership,
-  updateTenantMembership,
-  listTenantInvites,
-  createTenantInvite,
-  revokeTenantInvite,
-  acceptTenantInvite,
+vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
+vi.mock('../src/lib/tenant-lifecycle-email.js', () => ({
+  sendTenantSuspendedEmail,
+  sendTenantReactivatedEmail,
 }));
 
 process.env.NODE_ENV = 'test';
@@ -71,444 +74,280 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPrisma.$transaction.mockImplementation(async (ops: unknown) => {
+    if (typeof ops === 'function') return (ops as (tx: typeof mockPrisma) => Promise<unknown>)(mockPrisma);
+    if (Array.isArray(ops)) return Promise.all(ops);
+    return ops;
+  });
 });
 
-function authHeader(
-  userId = 'user_1',
-  role: 'super_admin' | 'staff' | 'manager' | 'admin' = 'super_admin',
-  tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = null,
-  mfaVerified?: boolean,
-) {
-  const token = app.jwt.sign({
-    sub: userId,
-    email: `${userId}@example.com`,
-    role,
-    tenantId: tenantRole ? 'tenant_1' : null,
-    tenantRole,
-    mfaVerified: mfaVerified
-      ?? (role === 'super_admin' || tenantRole === 'tenant_admin'),
+function platformToken(extra: Record<string, unknown> = {}) {
+  return app.jwt.sign({
+    sub: 'p_admin',
+    email: 'admin@zikelsolutions.com',
+    role: 'platform_admin',
+    sid: 'ps_1',
+    mfaVerified: true,
+    aud: 'platform',
+    ...extra,
   });
-  return { authorization: `Bearer ${token}` };
 }
 
-describe('Tenant routes', () => {
-  it('blocks non-super-admin access', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/tenants',
-      headers: authHeader('manager_1', 'manager'),
-    });
-
-    expect(res.statusCode).toBe(403);
-    expect(listTenants).not.toHaveBeenCalled();
-  });
-
-  it('lists tenants for super-admin', async () => {
-    listTenants.mockResolvedValueOnce({
-      data: [
-        {
-          id: 'tenant_1',
-          name: 'Acme Care',
-          slug: 'acme-care',
-          country: 'UK',
-          isActive: true,
-          createdAt: '2026-03-12T10:00:00.000Z',
-          updatedAt: '2026-03-12T10:00:00.000Z',
-        },
-      ],
-      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
-    });
-
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/tenants?page=1&pageSize=20',
-      headers: authHeader(),
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(listTenants).toHaveBeenCalledWith({
-      page: 1,
-      pageSize: 20,
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: [{ id: 'tenant_1', slug: 'acme-care' }],
-    });
-  });
-
-  it('creates a tenant for super-admin', async () => {
-    createTenant.mockResolvedValueOnce({
-      tenant: {
-        id: 'tenant_2',
-        name: 'North Homes',
-        slug: 'north-homes',
+describe('Admin Tenants — list & detail', () => {
+  it('returns paginated list of tenants', async () => {
+    mockPrisma.tenant.count.mockResolvedValue(2);
+    mockPrisma.tenant.findMany.mockResolvedValue([
+      {
+        id: 't_1',
+        name: 'Acme Care',
+        slug: 'acme-care',
         country: 'UK',
         isActive: true,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T10:00:00.000Z',
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-02'),
+        _count: { memberships: 5, homes: 2 },
       },
-      adminMembership: null,
-    });
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/v1/tenants',
-      headers: authHeader('super_1', 'super_admin'),
-      payload: {
-        name: 'North Homes',
+      {
+        id: 't_2',
+        name: 'Beacon Homes',
+        slug: 'beacon-homes',
         country: 'UK',
+        isActive: false,
+        createdAt: new Date('2026-02-01'),
+        updatedAt: new Date('2026-02-02'),
+        _count: { memberships: 3, homes: 1 },
       },
-    });
-
-    expect(res.statusCode).toBe(201);
-    expect(createTenant).toHaveBeenCalledWith('super_1', {
-      name: 'North Homes',
-      country: 'UK',
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: { tenant: { slug: 'north-homes' } },
-    });
-  });
-
-  it('provisions a staff member', async () => {
-    provisionStaff.mockResolvedValueOnce({
-      user: {
-        id: 'staff_new',
-        email: 'jane@example.com',
-        firstName: 'Jane',
-        lastName: 'Doe',
-      },
-      membership: {
-        id: 'membership_staff_1',
-        tenantId: 'tenant_1',
-        userId: 'staff_new',
-        role: 'staff',
-        status: 'invited',
-        invitedById: 'admin_1',
-        user: null,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T10:00:00.000Z',
-      },
-      tenantName: 'Acme Care',
-    });
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/v1/tenants/tenant_1/staff',
-      headers: authHeader('admin_1', 'admin', 'tenant_admin'),
-      payload: {
-        firstName: 'Jane',
-        lastName: 'Doe',
-        email: 'jane@example.com',
-      },
-    });
-
-    expect(res.statusCode).toBe(201);
-    expect(provisionStaff).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
-      firstName: 'Jane',
-      lastName: 'Doe',
-      email: 'jane@example.com',
-      role: 'staff',
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: { user: { email: 'jane@example.com' }, tenantName: 'Acme Care' },
-    });
-  });
-
-  it('validates tenant membership request body', async () => {
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/v1/tenants/tenant_1/memberships',
-      headers: authHeader(),
-      payload: {
-        role: 'tenant_admin',
-      },
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({
-      success: false,
-      error: { code: 'FST_ERR_VALIDATION' },
-    });
-    expect(addTenantMembership).not.toHaveBeenCalled();
-  });
-
-  it('lists tenant memberships for scoped actor', async () => {
-    listTenantMemberships.mockResolvedValueOnce({
-      data: [
-        {
-          id: 'membership_1',
-          tenantId: 'tenant_1',
-          userId: 'user_1',
-          role: 'staff',
-          status: 'active',
-          invitedById: 'admin_1',
-          user: null,
-          createdAt: '2026-03-12T10:00:00.000Z',
-          updatedAt: '2026-03-12T10:00:00.000Z',
-        },
-      ],
-      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
-    });
+    ]);
 
     const res = await app.inject({
       method: 'GET',
-      url: '/api/v1/tenants/tenant_1/memberships?page=1&pageSize=20',
-      headers: authHeader('admin_1', 'admin'),
+      url: '/admin/tenants',
+      headers: { authorization: `Bearer ${platformToken()}` },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(listTenantMemberships).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
-      page: 1,
-      pageSize: 20,
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: [{ id: 'membership_1', role: 'staff' }],
-      meta: { total: 1, page: 1, pageSize: 20, totalPages: 1 },
-    });
+    const body = res.json() as {
+      data: Array<{ id: string; activeMemberCount: number; homeCount: number }>;
+      meta: { total: number };
+    };
+    expect(body.data).toHaveLength(2);
+    expect(body.data[0]?.activeMemberCount).toBe(5);
+    expect(body.meta.total).toBe(2);
   });
 
-  it('adds tenant membership for scoped actor', async () => {
-    addTenantMembership.mockResolvedValueOnce({
-      id: 'membership_new',
-      tenantId: 'tenant_1',
-      userId: 'user_77',
-      role: 'staff',
-      status: 'active',
-      invitedById: 'admin_1',
-      user: null,
-      createdAt: '2026-03-12T10:00:00.000Z',
-      updatedAt: '2026-03-12T10:00:00.000Z',
-    });
-
+  it('returns 404 on detail for an unknown tenant', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue(null);
     const res = await app.inject({
-      method: 'POST',
-      url: '/api/v1/tenants/tenant_1/memberships',
-      headers: authHeader('admin_1', 'admin'),
-      payload: {
-        email: 'user_77@example.com',
-        role: 'staff',
-      },
+      method: 'GET',
+      url: '/admin/tenants/missing_id',
+      headers: { authorization: `Bearer ${platformToken()}` },
     });
-
-    expect(res.statusCode).toBe(201);
-    expect(addTenantMembership).toHaveBeenCalledWith('admin_1', 'admin', 'tenant_1', {
-      email: 'user_77@example.com',
-      role: 'staff',
-      status: 'active',
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: { id: 'membership_new', role: 'staff' },
-    });
+    expect(res.statusCode).toBe(404);
+    const body = res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('TENANT_NOT_FOUND');
   });
+});
 
-  it('updates tenant membership status', async () => {
-    updateTenantMembership.mockResolvedValueOnce({
-      id: 'membership_1',
-      tenantId: 'tenant_1',
-      userId: 'user_22',
-      role: 'tenant_admin',
-      status: 'suspended',
-      invitedById: 'super_1',
-      createdAt: '2026-03-12T10:00:00.000Z',
-      updatedAt: '2026-03-12T10:00:00.000Z',
-      user: null,
-    });
-
-    const res = await app.inject({
-      method: 'PATCH',
-      url: '/api/v1/tenants/tenant_1/memberships/membership_1',
-      headers: authHeader('super_1', 'super_admin'),
-      payload: {
-        status: 'suspended',
-      },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(updateTenantMembership).toHaveBeenCalledWith(
-      'super_1',
-      'super_admin',
-      'tenant_1',
-      'membership_1',
-      { status: 'suspended' },
-    );
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: { status: 'suspended' },
-    });
-  });
-
-  it('fetches tenant details', async () => {
-    getTenantById.mockResolvedValueOnce({
-      id: 'tenant_1',
+describe('Admin Tenants — suspend / reactivate', () => {
+  it('platform_admin can suspend an active tenant; sessions are revoked', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 't_1',
       name: 'Acme Care',
-      slug: 'acme-care',
-      country: 'UK',
       isActive: true,
-      createdAt: '2026-03-12T10:00:00.000Z',
-      updatedAt: '2026-03-12T10:00:00.000Z',
-      memberships: [],
     });
+    mockPrisma.tenant.update.mockResolvedValue({ id: 't_1', isActive: false });
+    mockPrisma.tenantSession.updateMany.mockResolvedValue({ count: 3 });
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 5 });
 
     const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/tenants/tenant_1',
-      headers: authHeader(),
+      method: 'POST',
+      url: '/admin/tenants/t_1/suspend',
+      headers: {
+        authorization: `Bearer ${platformToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: { reason: 'Compliance review pending' },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(getTenantById).toHaveBeenCalledWith('tenant_1');
     expect(res.json()).toMatchObject({
       success: true,
-      data: { id: 'tenant_1', memberships: [] },
+      data: { id: 't_1', isActive: false },
     });
+    expect(mockPrisma.tenantSession.updateMany).toHaveBeenCalled();
+    expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalled();
   });
 
-  it('creates tenant invite for super-admin', async () => {
-    createTenantInvite.mockResolvedValueOnce({
-      invite: {
-        id: 'invite_1',
-        tenantId: 'tenant_1',
-        email: 'newstaff@example.com',
-        role: 'staff',
-        status: 'pending',
-        invitedById: 'super_1',
-        acceptedByUserId: null,
-        expiresAt: '2026-03-19T10:00:00.000Z',
-        acceptedAt: null,
-        revokedAt: null,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T10:00:00.000Z',
+  it("support role cannot suspend (PLATFORM_ROLE_DENIED)", async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/tenants/t_1/suspend',
+      headers: {
+        authorization: `Bearer ${platformToken({ role: 'support' })}`,
+        'content-type': 'application/json',
       },
-      inviteToken: 'token_abc',
+      payload: { reason: 'Compliance review pending' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('PLATFORM_ROLE_DENIED');
+  });
+
+  it('returns 409 when suspending an already-suspended tenant', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 't_1',
+      name: 'Acme',
+      isActive: false,
     });
 
     const res = await app.inject({
       method: 'POST',
-      url: '/api/v1/tenants/tenant_1/invites',
-      headers: authHeader('super_1', 'super_admin'),
-      payload: {
-        email: 'newstaff@example.com',
-        role: 'staff',
+      url: '/admin/tenants/t_1/suspend',
+      headers: {
+        authorization: `Bearer ${platformToken()}`,
+        'content-type': 'application/json',
       },
+      payload: { reason: 'Compliance review pending' },
     });
 
-    expect(res.statusCode).toBe(201);
-    expect(createTenantInvite).toHaveBeenCalledWith('super_1', 'super_admin', 'tenant_1', {
-      email: 'newstaff@example.com',
-      role: 'staff',
-      expiresInHours: 168,
-    });
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: {
-        invite: { id: 'invite_1', status: 'pending' },
-        inviteToken: 'token_abc',
-      },
-    });
+    expect(res.statusCode).toBe(409);
+    const body = res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('TENANT_ALREADY_SUSPENDED');
   });
 
-  it('accepts tenant invite for authenticated user', async () => {
-    acceptTenantInvite.mockResolvedValueOnce({
-      membership: {
-        id: 'membership_22',
-        tenantId: 'tenant_1',
-        userId: 'user_22',
-        role: 'staff',
-        status: 'active',
-        invitedById: 'super_1',
-        user: null,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T10:00:00.000Z',
-      },
-      invite: {
-        id: 'invite_22',
-        tenantId: 'tenant_1',
-        email: 'user_22@example.com',
-        role: 'staff',
-        status: 'accepted',
-        invitedById: 'super_1',
-        acceptedByUserId: 'user_22',
-        expiresAt: '2026-03-19T10:00:00.000Z',
-        acceptedAt: '2026-03-12T11:00:00.000Z',
-        revokedAt: null,
-        createdAt: '2026-03-12T10:00:00.000Z',
-        updatedAt: '2026-03-12T11:00:00.000Z',
-      },
+  it('platform_admin can reactivate a suspended tenant', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 't_1',
+      name: 'Acme',
+      isActive: false,
     });
+    mockPrisma.tenant.update.mockResolvedValue({ id: 't_1', isActive: true });
 
     const res = await app.inject({
       method: 'POST',
-      url: '/api/v1/tenants/invites/accept',
-      headers: authHeader('user_22', 'staff'),
-      payload: { token: '12345678901234567890' },
+      url: '/admin/tenants/t_1/reactivate',
+      headers: {
+        authorization: `Bearer ${platformToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: { reason: 'Compliance review cleared' },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(acceptTenantInvite).toHaveBeenCalledWith(
-      'user_22',
-      'user_22@example.com',
-      { token: '12345678901234567890' },
+    expect(res.json()).toMatchObject({
+      success: true,
+      data: { id: 't_1', isActive: true },
+    });
+  });
+
+  it('a non-MFA-verified platform session is blocked from mutating', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/tenants/t_1/suspend',
+      headers: {
+        authorization: `Bearer ${platformToken({ mfaVerified: false })}`,
+        'content-type': 'application/json',
+      },
+      payload: { reason: 'Compliance review pending' },
+    });
+    expect(res.statusCode).toBe(403);
+    const body = res.json() as { error?: { code?: string } };
+    expect(body.error?.code).toBe('MFA_REQUIRED');
+  });
+
+  it('suspending a tenant fires sendTenantSuspendedEmail to each active Owner', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 't_1',
+      name: 'Acme Care',
+      isActive: true,
+    });
+    mockPrisma.tenant.update.mockResolvedValue({ id: 't_1', isActive: false });
+    mockPrisma.tenantSession.updateMany.mockResolvedValue({ count: 0 });
+    mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 0 });
+    mockPrisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        user: {
+          email: 'owner1@example.com',
+          firstName: 'Owen',
+          lastName: 'One',
+          isActive: true,
+        },
+      },
+      {
+        user: {
+          email: 'owner2@example.com',
+          firstName: 'Owa',
+          lastName: 'Two',
+          isActive: true,
+        },
+      },
+    ]);
+    mockPrisma.platformUser.findUnique.mockResolvedValue({ email: 'admin@zikelsolutions.com' });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/admin/tenants/t_1/suspend',
+      headers: {
+        authorization: `Bearer ${platformToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: { reason: 'Compliance review pending' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    // Email is fire-and-forget — wait one microtask tick.
+    await new Promise((r) => setImmediate(r));
+
+    expect(sendTenantSuspendedEmail).toHaveBeenCalledTimes(2);
+    expect(sendTenantSuspendedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerEmail: 'owner1@example.com',
+        tenantName: 'Acme Care',
+        reason: 'Compliance review pending',
+        platformUserEmail: 'admin@zikelsolutions.com',
+      }),
     );
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: {
-        membership: { tenantId: 'tenant_1' },
-        invite: { status: 'accepted' },
+  });
+
+  it('reactivating a tenant fires sendTenantReactivatedEmail to each active Owner', async () => {
+    mockPrisma.tenant.findUnique.mockResolvedValue({
+      id: 't_1',
+      name: 'Acme Care',
+      isActive: false,
+    });
+    mockPrisma.tenant.update.mockResolvedValue({ id: 't_1', isActive: true });
+    mockPrisma.tenantMembership.findMany.mockResolvedValue([
+      {
+        user: {
+          email: 'owner1@example.com',
+          firstName: 'Owen',
+          lastName: 'One',
+          isActive: true,
+        },
       },
-    });
-  });
-
-  it('lists tenant invites', async () => {
-    listTenantInvites.mockResolvedValueOnce({
-      data: [],
-      meta: { total: 0, page: 1, pageSize: 20, totalPages: 1 },
-    });
+    ]);
+    mockPrisma.platformUser.findUnique.mockResolvedValue({ email: 'admin@zikelsolutions.com' });
 
     const res = await app.inject({
-      method: 'GET',
-      url: '/api/v1/tenants/tenant_1/invites?page=1&pageSize=20',
-      headers: authHeader('super_1', 'super_admin'),
+      method: 'POST',
+      url: '/admin/tenants/t_1/reactivate',
+      headers: {
+        authorization: `Bearer ${platformToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: { reason: 'Compliance review cleared' },
     });
-
     expect(res.statusCode).toBe(200);
-    expect(listTenantInvites).toHaveBeenCalledWith('super_1', 'super_admin', 'tenant_1', {
-      page: 1,
-      pageSize: 20,
-    });
-  });
 
-  it('revokes invite', async () => {
-    revokeTenantInvite.mockResolvedValueOnce({
-      id: 'invite_1',
-      tenantId: 'tenant_1',
-      email: 'newstaff@example.com',
-      role: 'staff',
-      status: 'revoked',
-      invitedById: 'super_1',
-      acceptedByUserId: null,
-      expiresAt: '2026-03-19T10:00:00.000Z',
-      acceptedAt: null,
-      revokedAt: '2026-03-12T10:05:00.000Z',
-      createdAt: '2026-03-12T10:00:00.000Z',
-      updatedAt: '2026-03-12T10:05:00.000Z',
-    });
+    await new Promise((r) => setImmediate(r));
 
-    const res = await app.inject({
-      method: 'PATCH',
-      url: '/api/v1/tenants/tenant_1/invites/invite_1/revoke',
-      headers: authHeader('super_1', 'super_admin'),
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(revokeTenantInvite).toHaveBeenCalledWith('super_1', 'super_admin', 'tenant_1', 'invite_1');
-    expect(res.json()).toMatchObject({
-      success: true,
-      data: { status: 'revoked' },
-    });
+    expect(sendTenantReactivatedEmail).toHaveBeenCalledTimes(1);
+    expect(sendTenantReactivatedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerEmail: 'owner1@example.com',
+        tenantName: 'Acme Care',
+        reason: 'Compliance review cleared',
+      }),
+    );
   });
 });

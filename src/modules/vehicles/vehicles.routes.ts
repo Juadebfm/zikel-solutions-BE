@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import { generateExport, type ExportColumn } from '../../lib/export.js';
 import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as vehiclesService from './vehicles.service.js';
@@ -131,10 +132,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.VEHICLES_WRITE),
     ],
     schema: {
       tags: ['Vehicles'],
@@ -172,10 +170,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.patch('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.VEHICLES_WRITE),
     ],
     schema: {
       tags: ['Vehicles'],
@@ -216,10 +211,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.delete('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.VEHICLES_WRITE),
     ],
     schema: {
       tags: ['Vehicles'],

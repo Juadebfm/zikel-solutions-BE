@@ -11,28 +11,30 @@ const {
   process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
   process.env.JWT_SECRET = 'test_secret_that_is_at_least_32_characters_long';
 
-  return {
-    mockPrisma: {
-    tenant: {
-      findMany: vi.fn(),
-    },
-    tenantMembership: {
-      findMany: vi.fn(),
-      findFirst: vi.fn(),
-    },
-    user: {
-      findUnique: vi.fn(),
-      findMany: vi.fn(),
-    },
-    youngPerson: {
-      findFirst: vi.fn(),
-    },
-    task: {
-      findMany: vi.fn(),
-    },
-    homeEvent: {
-      findMany: vi.fn(),
-    },
+  const mp: {
+    tenant: { findMany: ReturnType<typeof vi.fn> };
+    tenantMembership: { findMany: ReturnType<typeof vi.fn>; findFirst: ReturnType<typeof vi.fn> };
+    tenantUser: { findUnique: ReturnType<typeof vi.fn>; findMany: ReturnType<typeof vi.fn> };
+    youngPerson: { findFirst: ReturnType<typeof vi.fn> };
+    task: { findMany: ReturnType<typeof vi.fn> };
+    homeEvent: { findMany: ReturnType<typeof vi.fn> };
+    safeguardingRiskAlert: {
+      findMany: ReturnType<typeof vi.fn>;
+      create: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+      findFirst: ReturnType<typeof vi.fn>;
+      count: ReturnType<typeof vi.fn>;
+    };
+    safeguardingRiskAlertNote: { create: ReturnType<typeof vi.fn> };
+    auditLog: { create: ReturnType<typeof vi.fn> };
+    $transaction: ReturnType<typeof vi.fn>;
+  } = {
+    tenant: { findMany: vi.fn() },
+    tenantMembership: { findMany: vi.fn(), findFirst: vi.fn() },
+    tenantUser: { findUnique: vi.fn(), findMany: vi.fn() },
+    youngPerson: { findFirst: vi.fn() },
+    task: { findMany: vi.fn() },
+    homeEvent: { findMany: vi.fn() },
     safeguardingRiskAlert: {
       findMany: vi.fn(),
       create: vi.fn(),
@@ -40,18 +42,19 @@ const {
       findFirst: vi.fn(),
       count: vi.fn(),
     },
-    safeguardingRiskAlertNote: {
-      create: vi.fn(),
-    },
-    auditLog: {
-      create: vi.fn(),
-    },
-    $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb({
-      safeguardingRiskAlert: mockPrisma.safeguardingRiskAlert,
-      safeguardingRiskAlertNote: mockPrisma.safeguardingRiskAlertNote,
-      auditLog: mockPrisma.auditLog,
-    })),
-    },
+    safeguardingRiskAlertNote: { create: vi.fn() },
+    auditLog: { create: vi.fn() },
+    $transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) =>
+      cb({
+        safeguardingRiskAlert: mp.safeguardingRiskAlert,
+        safeguardingRiskAlertNote: mp.safeguardingRiskAlertNote,
+        auditLog: mp.auditLog,
+      }),
+    ),
+  };
+
+  return {
+    mockPrisma: mp,
     emitNotification: vi.fn(),
     emitWebhookEvent: vi.fn(),
     sendSafeguardingRiskAlertEmail: vi.fn(),
@@ -70,6 +73,9 @@ import * as riskAlertService from '../src/modules/safeguarding/risk-alerts.servi
 const d = (iso: string) => new Date(iso);
 
 function makeTask(overrides: Record<string, unknown> = {}) {
+  // Rule 1 ("high_severity_incident") requires `createdAt >= now - 24h`.
+  // Use a recent timestamp so the test stays valid regardless of when it runs.
+  const recent = new Date(Date.now() - 60 * 60 * 1_000); // 1h ago
   return {
     id: 'task_1',
     title: 'Incident: medication refusal',
@@ -79,8 +85,8 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     approvalStatus: 'pending_approval',
     priority: 'high',
     dueDate: null,
-    createdAt: d('2026-04-03T09:00:00.000Z'),
-    updatedAt: d('2026-04-03T09:00:00.000Z'),
+    createdAt: recent,
+    updatedAt: recent,
     homeId: 'home_1',
     youngPersonId: 'yp_1',
     home: { id: 'home_1', name: 'Northbridge Home' },
@@ -129,15 +135,26 @@ beforeEach(() => {
   process.env.AI_CONTEXT_REDACTION_SENSITIVE_KEYS = 'name,email,phone,address';
 
   mockPrisma.tenant.findMany.mockResolvedValue([{ id: 'tenant_1' }]);
-  requireTenantContext.mockResolvedValue({ tenantId: 'tenant_1', tenantRole: 'tenant_admin' });
-  mockPrisma.user.findUnique.mockResolvedValue({ id: 'admin_1', role: 'admin' });
+  // Phase 1: requireTenantContext returns the new TenantContext shape with
+  // roleName + permissions[]; tenantRole is the legacy enum still present
+  // for back-compat consumers.
+  requireTenantContext.mockResolvedValue({
+    tenantId: 'tenant_1',
+    userRole: 'admin',
+    tenantRole: 'tenant_admin',
+    roleName: 'Owner',
+    permissions: ['safeguarding:read', 'safeguarding:write', 'safeguarding:escalate'],
+  });
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({ id: 'admin_1', role: 'admin' });
 
   mockPrisma.task.findMany.mockResolvedValue([makeTask()]);
   mockPrisma.homeEvent.findMany.mockResolvedValue([]);
   mockPrisma.youngPerson.findFirst.mockResolvedValue(null);
 
   mockPrisma.tenantMembership.findMany.mockResolvedValue([{ userId: 'admin_1' }]);
-  mockPrisma.user.findMany.mockResolvedValue([{ id: 'admin_1', email: 'admin@example.com', firstName: 'Admin' }]);
+  mockPrisma.tenantUser.findMany.mockResolvedValue([
+    { id: 'admin_1', email: 'admin@example.com', firstName: 'Admin' },
+  ]);
 
   mockPrisma.safeguardingRiskAlert.findMany.mockResolvedValue([]);
   mockPrisma.safeguardingRiskAlert.create.mockResolvedValue(makeCreatedAlert());
@@ -214,10 +231,7 @@ describe('safeguarding risk alerts service', () => {
   it('supports escalation workflow transitions with acknowledgement note', async () => {
     const now = d('2026-04-03T11:00:00.000Z');
     const currentAlert = {
-      ...makeCreatedAlert({
-        id: 'alert_chain',
-        status: 'new',
-      }),
+      ...makeCreatedAlert({ id: 'alert_chain', status: 'new' }),
       notes: [],
     };
     const updatedAlert = {

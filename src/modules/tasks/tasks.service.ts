@@ -188,7 +188,6 @@ const EXPLORER_CATEGORY_VALUES = new Set([
 ]);
 
 function isPrivilegedActor(actor: TaskActorContext) {
-  if (actor.userRole === UserRole.super_admin) return true;
   if (actor.userRole === UserRole.admin || actor.userRole === UserRole.manager) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
@@ -914,11 +913,11 @@ async function getUserIdentityMap(userIds: string[]) {
 
   // Some isolated tests mock a minimal prisma client and do not define user.findMany.
   // Runtime Prisma always provides it, so in tests we safely fall back to an empty map.
-  if (typeof (prisma.user as { findMany?: unknown } | undefined)?.findMany !== 'function') {
+  if (typeof (prisma.tenantUser as { findMany?: unknown } | undefined)?.findMany !== 'function') {
     return new Map<string, UserIdentity>();
   }
 
-  const users = await prisma.user.findMany({
+  const users = await prisma.tenantUser.findMany({
     where: { id: { in: deduped } },
     select: {
       id: true,
@@ -1035,7 +1034,7 @@ function toTaskExplorerItem(
 async function resolveActorContext(actorUserId: string): Promise<TaskActorContext> {
   const tenant = await requireTenantContext(actorUserId);
   const [user, employee] = await Promise.all([
-    prisma.user.findUnique({
+    prisma.tenantUser.findUnique({
       where: { id: actorUserId },
       select: { id: true, role: true, firstName: true, lastName: true },
     }),

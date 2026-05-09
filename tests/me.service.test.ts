@@ -2,12 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockPrisma } = vi.hoisted(() => ({
   mockPrisma: {
-    user: {
-      findUnique: vi.fn(),
-    },
-    tenantMembership: {
-      findFirst: vi.fn(),
-    },
+    tenantUser: { findUnique: vi.fn() },
+    tenantMembership: { findFirst: vi.fn() },
   },
 }));
 
@@ -20,14 +16,30 @@ beforeEach(() => {
   mockPrisma.tenantMembership.findFirst.mockResolvedValue(null);
 });
 
+// Permission strings mirror src/auth/permissions.ts. The service translates
+// them into legacy boolean flags for FE back-compat.
+const OWNER_PERMS = [
+  'employees:read', 'employees:write', 'employees:invite',
+  'homes:read', 'homes:write',
+  'young_people:read', 'young_people:write',
+  'tasks:read', 'tasks:write', 'tasks:approve',
+  'safeguarding:read', 'safeguarding:write',
+  'reports:read', 'reports:export',
+  'settings:read', 'settings:write',
+  'members:read', 'members:write',
+  'roles:read', 'roles:write',
+];
+
+const ADMIN_PERMS = OWNER_PERMS.filter((p) => p !== 'settings:write');
+
 describe('me.service getMyPermissions', () => {
-  it('returns tenant-admin permissions for a staff user in active tenant-admin context', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+  it('returns full Owner permissions when active membership grants all capabilities', async () => {
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       role: 'staff',
       activeTenantId: 'tenant_1',
     });
     mockPrisma.tenantMembership.findFirst.mockResolvedValueOnce({
-      role: 'tenant_admin',
+      role: { name: 'Owner', permissions: OWNER_PERMS },
     });
 
     const result = await meService.getMyPermissions('user_1');
@@ -49,35 +61,28 @@ describe('me.service getMyPermissions', () => {
         status: 'active',
         tenant: { isActive: true },
       },
-      select: { role: true },
+      select: { role: { select: { name: true, permissions: true } } },
     });
   });
 
-  it('returns sub-admin permissions for a staff user in active sub-admin context', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+  it('returns Admin permissions (no settings:write) when membership grants Admin role', async () => {
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       role: 'staff',
       activeTenantId: 'tenant_1',
     });
     mockPrisma.tenantMembership.findFirst.mockResolvedValueOnce({
-      role: 'sub_admin',
+      role: { name: 'Admin', permissions: ADMIN_PERMS },
     });
 
     const result = await meService.getMyPermissions('user_2');
 
-    expect(result).toEqual({
-      canViewAllHomes: true,
-      canViewAllYoungPeople: true,
-      canViewAllEmployees: true,
-      canApproveIOILogs: true,
-      canManageUsers: true,
-      canManageSettings: false,
-      canViewReports: true,
-      canExportData: true,
-    });
+    expect(result.canManageSettings).toBe(false);
+    expect(result.canManageUsers).toBe(true);
+    expect(result.canViewReports).toBe(true);
   });
 
-  it('falls back to global role when active tenant membership is missing', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
+  it('falls back to global UserRole permissions when no active membership exists', async () => {
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
       role: 'manager',
       activeTenantId: 'tenant_missing_membership',
     });
@@ -85,6 +90,7 @@ describe('me.service getMyPermissions', () => {
 
     const result = await meService.getMyPermissions('user_3');
 
+    // GLOBAL_ROLE_PERMISSIONS.manager: read/approve everything, no manage.
     expect(result).toEqual({
       canViewAllHomes: true,
       canViewAllYoungPeople: true,
@@ -97,29 +103,30 @@ describe('me.service getMyPermissions', () => {
     });
   });
 
-  it('uses global super-admin permissions without tenant lookup', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce({
-      role: 'super_admin',
+  it('returns staff defaults when user has no active tenant', async () => {
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
+      role: 'staff',
       activeTenantId: null,
     });
 
-    const result = await meService.getMyPermissions('user_super');
+    const result = await meService.getMyPermissions('user_no_tenant');
 
     expect(result).toEqual({
-      canViewAllHomes: true,
-      canViewAllYoungPeople: true,
-      canViewAllEmployees: true,
-      canApproveIOILogs: true,
-      canManageUsers: true,
-      canManageSettings: true,
-      canViewReports: true,
-      canExportData: true,
+      canViewAllHomes: false,
+      canViewAllYoungPeople: false,
+      canViewAllEmployees: false,
+      canApproveIOILogs: false,
+      canManageUsers: false,
+      canManageSettings: false,
+      canViewReports: false,
+      canExportData: false,
     });
+    // No membership lookup when there's no active tenant.
     expect(mockPrisma.tenantMembership.findFirst).not.toHaveBeenCalled();
   });
 
   it('throws USER_NOT_FOUND when user does not exist', async () => {
-    mockPrisma.user.findUnique.mockResolvedValueOnce(null);
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce(null);
 
     await expect(meService.getMyPermissions('missing_user')).rejects.toMatchObject({
       statusCode: 404,

@@ -127,7 +127,6 @@ function getTodayBounds() {
 }
 
 function canApprove(user: UserContext) {
-  if (user.role === UserRole.super_admin) return true;
   if (user.tenantRole === TenantRole.tenant_admin || user.tenantRole === TenantRole.sub_admin) {
     return true;
   }
@@ -137,7 +136,7 @@ function canApprove(user: UserContext) {
 async function getUserContext(userId: string): Promise<UserContext> {
   const tenant = await requireTenantContext(userId);
   const [user, employee] = await Promise.all([
-    prisma.user.findUnique({
+    prisma.tenantUser.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -647,7 +646,7 @@ type UserIdentity = {
 async function getUserIdentityMap(userIds: string[]) {
   if (userIds.length === 0) return new Map<string, UserIdentity>();
 
-  const users = await prisma.user.findMany({
+  const users = await prisma.tenantUser.findMany({
     where: { id: { in: userIds } },
     select: {
       id: true,

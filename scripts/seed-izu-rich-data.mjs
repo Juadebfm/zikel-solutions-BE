@@ -48,7 +48,7 @@ const CANONICAL_TASK_GROUP_LABELS = {
 };
 
 async function resolveTenantForUser(userId) {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { activeTenantId: true },
   });
@@ -120,7 +120,7 @@ async function upsertHomeByName(data) {
 }
 
 async function main() {
-  const target = await prisma.user.findUnique({
+  const target = await prisma.tenantUser.findUnique({
     where: { email: TARGET_EMAIL },
     select: {
       id: true,
@@ -142,11 +142,11 @@ async function main() {
 
   const reviewerName = fullName(target) || target.email;
 
-  await prisma.user.update({
+  await prisma.tenantUser.update({
     where: { id: target.id },
     data: {
       activeTenantId: tenant.id,
-      role: target.role === UserRole.super_admin ? UserRole.super_admin : UserRole.admin,
+      role: UserRole.admin,
     },
   });
 
@@ -321,7 +321,7 @@ async function main() {
 
   const seededUsers = [];
   for (const entry of staffUsers) {
-    const user = await prisma.user.upsert({
+    const user = await prisma.tenantUser.upsert({
       where: { email: entry.email },
       update: {
         firstName: entry.firstName,

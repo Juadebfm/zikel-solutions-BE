@@ -99,7 +99,11 @@ export const ChronologyQuerySchema = z
     source: ChronologySourceSchema.optional(),
     confidentialityScope: ConfidentialityScopeSchema.optional(),
     maxEvents: z.coerce.number().int().min(1).max(1000).default(200),
-    includeNarrative: BooleanFromQuerySchema.default(true),
+    // Phase 8.1 (2026-05-09): default flipped to false. Each chronology page
+    // load was firing one OpenAI call by default — silently expensive at scale.
+    // FE now opts in explicitly when the user wants the AI-generated narrative;
+    // the deterministic fallback narrative is still always available client-side.
+    includeNarrative: BooleanFromQuerySchema.default(false),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -130,7 +134,7 @@ export const chronologyQueryJson = {
     source: { type: 'string', enum: ['tasks', 'home_events', 'audit_logs'] },
     confidentialityScope: { type: 'string', enum: ['standard', 'restricted'] },
     maxEvents: { type: 'integer', minimum: 1, maximum: 1000, default: 200 },
-    includeNarrative: { type: 'boolean', default: true },
+    includeNarrative: { type: 'boolean', default: false },
   },
 } as const;
 

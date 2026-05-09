@@ -1,29 +1,23 @@
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import {
   RegisterBodySchema,
-  JoinViaInviteLinkBodySchema,
-  StaffActivateBodySchema,
   VerifyOtpBodySchema,
   ResendOtpBodySchema,
   LoginBodySchema,
   CheckEmailQuerySchema,
   LogoutBodySchema,
   SwitchTenantBodySchema,
-  VerifyMfaChallengeBodySchema,
   RefreshBodySchema,
   SessionExpiryQuerySchema,
   ForgotPasswordBodySchema,
   ResetPasswordBodySchema,
   registerBodyJson,
-  joinViaInviteLinkBodyJson,
-  staffActivateBodyJson,
   verifyOtpBodyJson,
   resendOtpBodyJson,
   loginBodyJson,
   checkEmailQueryJson,
   logoutBodyJson,
   switchTenantBodyJson,
-  verifyMfaChallengeBodyJson,
   refreshBodyJson,
   sessionExpiryQueryJson,
   forgotPasswordBodyJson,
@@ -42,6 +36,7 @@ function signAccessToken(
     activeTenantRole: JwtPayload['tenantRole'];
     mfaVerified: boolean;
   },
+  sessionId: string | null,
 ) {
   return fastify.jwt.sign({
     sub: user.id,
@@ -50,14 +45,21 @@ function signAccessToken(
     tenantId: session.activeTenantId,
     tenantRole: session.activeTenantRole ?? null,
     mfaVerified: session.mfaVerified,
+    ...(sessionId ? { sid: sessionId } : {}),
+    aud: 'tenant',
   });
 }
 
 const ACCESS_TOKEN_EXPIRY_MS = parseExpiryMs(env.JWT_ACCESS_EXPIRY);
 const SESSION_WARNING_WINDOW_SECONDS = env.SESSION_WARNING_WINDOW_SECONDS;
-const REFRESH_COOKIE_NAME = env.AUTH_REFRESH_COOKIE_NAME;
 const LEGACY_REFRESH_TOKEN_IN_BODY = env.AUTH_LEGACY_REFRESH_TOKEN_IN_BODY;
 const REFRESH_COOKIE_SECURE = env.NODE_ENV === 'staging' || env.NODE_ENV === 'production';
+// `__Host-` prefix REQUIRES Secure=true per RFC 6265bis; without it browsers
+// (and curl) refuse to save the cookie. In dev/test (Secure=false), strip the
+// prefix so the cookie is acceptable. Production keeps the prefix.
+const REFRESH_COOKIE_NAME = REFRESH_COOKIE_SECURE
+  ? env.AUTH_REFRESH_COOKIE_NAME
+  : env.AUTH_REFRESH_COOKIE_NAME.replace(/^__Host-/, '');
 const REFRESH_COOKIE_DOMAIN = env.AUTH_REFRESH_COOKIE_DOMAIN;
 const REFRESH_COOKIE_PATH = env.AUTH_REFRESH_COOKIE_PATH;
 const REFRESH_COOKIE_SAME_SITE = env.AUTH_REFRESH_COOKIE_SAME_SITE;
@@ -226,158 +228,10 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
   });
 
-  // ── GET /auth/join/:inviteCode — Validate invite link (public) ──────────────
-  fastify.get('/join/:inviteCode', {
-    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
-    schema: {
-      tags: ['Auth'],
-      summary: 'Validate an invite link (public)',
-      description: 'Returns the organization name and default role for a valid invite link code.',
-      security: [],
-      params: {
-        type: 'object',
-        required: ['inviteCode'],
-        properties: {
-          inviteCode: { type: 'string' },
-        },
-      },
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['tenantName', 'defaultRole'],
-              properties: {
-                tenantName: { type: 'string' },
-                tenantSlug: { type: 'string' },
-                defaultRole: { type: 'string' },
-              },
-            },
-          },
-        },
-        404: { $ref: 'ApiError#' },
-        410: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const { inviteCode } = request.params as { inviteCode: string };
-      const data = await authService.validateInviteLink(inviteCode);
-      return reply.send({ success: true, data });
-    },
-  });
-
-  // ── POST /auth/join/:inviteCode ──────────────────────────────────────────────
-  fastify.post('/join/:inviteCode', {
-    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
-
-    schema: {
-      tags: ['Auth'],
-      summary: 'Self-register via org invite link',
-      description:
-        'Staff registers using a shared invite link. Creates account with pending_approval membership. ' +
-        'Admin must approve before the staff member can fully access the organization. ' +
-        'An OTP is sent for email verification.',
-      security: [],
-      params: {
-        type: 'object',
-        required: ['inviteCode'],
-        properties: {
-          inviteCode: { type: 'string', description: 'The invite link code from the URL' },
-        },
-      },
-      body: joinViaInviteLinkBodyJson,
-      response: {
-        201: {
-          description: 'Account created with pending approval — OTP sent for email verification.',
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['userId', 'message', 'otpDeliveryStatus', 'resendAvailableAt', 'tenantName', 'pendingApproval'],
-              properties: {
-                userId: { type: 'string' },
-                message: { type: 'string' },
-                otpDeliveryStatus: { type: 'string', enum: ['sent', 'queued', 'failed'] },
-                resendAvailableAt: { type: 'string', format: 'date-time' },
-                tenantName: { type: 'string' },
-                pendingApproval: { type: 'boolean', enum: [true] },
-              },
-            },
-          },
-        },
-        404: { description: 'Invalid invite link.', $ref: 'ApiError#' },
-        409: { description: 'Email already registered.', $ref: 'ApiError#' },
-        410: { description: 'Invite link expired or revoked.', $ref: 'ApiError#' },
-        422: { description: 'Validation error.', $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = JoinViaInviteLinkBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
-      const { inviteCode } = request.params as { inviteCode: string };
-      const data = await authService.joinViaInviteLink(inviteCode, parse.data);
-      return reply.status(201).send({ success: true, data });
-    },
-  });
-
-  // ── POST /auth/staff-activate ────────────────────────────────────────────────
-  fastify.post('/staff-activate', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-
-    schema: {
-      tags: ['Auth'],
-      summary: 'Activate a pre-provisioned staff account',
-      description:
-        'Staff enters email, 6-digit activation code (from email), and sets their password. ' +
-        'On success, account is activated and tokens are issued for automatic login.',
-      security: [],
-      body: staffActivateBodyJson,
-      response: {
-        200: {
-          description: 'Account activated — tokens issued.',
-          $ref: 'AuthResponse#',
-        },
-        400: { description: 'Invalid email or activation code.', $ref: 'ApiError#' },
-        409: { description: 'Account already activated.', $ref: 'ApiError#' },
-        422: { description: 'Validation error.', $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = StaffActivateBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
-      const { user, refreshToken, session, sessionExpiry } = await authService.staffActivate(parse.data);
-      const accessToken = signAccessToken(fastify, user, session);
-      setNoStoreHeaders(reply);
-      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
-      return reply.send({
-        success: true,
-        data: buildTimedAuthResponse({
-          user,
-          session,
-          sessionExpiry,
-          accessToken,
-          refreshToken,
-        }),
-      });
-    },
-  });
+  // Phase 5: legacy /auth/join/:inviteCode and /auth/staff-activate routes
+  // removed. Staff onboarding is handled by the unified Invitation flow:
+  //   - admin: POST /api/v1/invitations
+  //   - recipient: POST /api/v1/auth/invitations/:token/accept
 
   // ── GET /auth/check-email ─────────────────────────────────────────────────
   fastify.get('/check-email', {
@@ -440,8 +294,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = VerifyOtpBodySchema.parse(request.body);
-      const { user, refreshToken, session, sessionExpiry } = await authService.verifyOtp(body);
-      const accessToken = signAccessToken(fastify, user, session);
+      const { user, refreshToken, session, sessionId, sessionExpiry } = await authService.verifyOtp(body);
+      const accessToken = signAccessToken(fastify, user, session, sessionId);
       setNoStoreHeaders(reply);
       setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
@@ -528,21 +382,64 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       body: loginBodyJson,
       response: {
         200: {
-          description: 'Login successful.',
-          $ref: 'AuthResponse#',
+          description:
+            'Login successful — body is either an `AuthResponse` (kind: completed) or ' +
+            '`{ success, data: { mfaRequired, challengeToken, challengeExpiresInSeconds } }` (kind: mfa-required). ' +
+            'The handler discriminates which to return based on whether TOTP is enrolled. ' +
+            'Schema deliberately permissive: fast-json-stringify cannot reliably serialize a ' +
+            'discriminated union via `oneOf` when the shapes share `success`/`data` keys.',
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'object', additionalProperties: true },
+          },
+          additionalProperties: true,
         },
         401: { description: 'Invalid credentials.', $ref: 'ApiError#' },
         403: {
           description: 'Account locked or email not verified.',
           $ref: 'ApiError#',
         },
-
       },
     },
     handler: async (request, reply) => {
       const body = LoginBodySchema.parse(request.body);
-      const { user, refreshToken, session, sessionExpiry } = await authService.login(body);
-      const accessToken = signAccessToken(fastify, user, session);
+      const result = await authService.login(body);
+
+      // MFA gate: password OK, but the user has TOTP enabled. Issue a short-
+      // lived challenge token instead of a session. Client posts the 6-digit
+      // code (or a backup code) to /auth/mfa/totp/verify or .../backup/verify.
+      if (result.kind === 'mfa-required') {
+        setNoStoreHeaders(reply);
+        return reply.send({
+          success: true,
+          data: {
+            mfaRequired: true,
+            challengeToken: result.challengeToken,
+            challengeExpiresInSeconds: result.challengeExpiresInSeconds,
+          },
+        });
+      }
+
+      // Hard-block: privileged user (Owner) without TOTP enrolled. We do not
+      // mint a session — instead we hand back an enrollment token that drives
+      // the FE through the same single-flow setup that mints a session on
+      // successful confirmation at /auth/mfa/totp/enroll/confirm.
+      if (result.kind === 'mfa-enrollment-required') {
+        setNoStoreHeaders(reply);
+        return reply.send({
+          success: true,
+          data: {
+            mfaEnrollmentRequired: true,
+            enrollmentToken: result.enrollmentToken,
+            enrollmentExpiresInSeconds: result.enrollmentExpiresInSeconds,
+          },
+        });
+      }
+
+      const { user, refreshToken, session, sessionId, sessionExpiry } = result;
+      const accessToken = signAccessToken(fastify, user, session, sessionId);
       setNoStoreHeaders(reply);
       setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
@@ -554,110 +451,6 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           accessToken,
           refreshToken,
         }),
-      });
-    },
-  });
-
-  // ── POST /auth/mfa/challenge ───────────────────────────────────────────────
-  fastify.post('/mfa/challenge', {
-    config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
-    schema: {
-      tags: ['Auth'],
-      summary: 'Request MFA code for privileged session',
-      description:
-        'Sends a one-time MFA code to the authenticated user when the active session is privileged.',
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['message', 'cooldownSeconds', 'otpDeliveryStatus', 'resendAvailableAt'],
-              properties: {
-                message: { type: 'string' },
-                cooldownSeconds: { type: 'integer' },
-                otpDeliveryStatus: { type: 'string', enum: ['sent', 'queued', 'failed'] },
-                resendAvailableAt: { type: 'string', format: 'date-time' },
-              },
-            },
-          },
-        },
-        400: { $ref: 'ApiError#' },
-        401: { $ref: 'ApiError#' },
-        403: { $ref: 'ApiError#' },
-        429: { $ref: 'ApiError#' },
-      },
-    },
-    preHandler: [fastify.authenticate],
-    handler: async (request, reply) => {
-      const actorUserId = (request.user as JwtPayload).sub;
-      const data = await authService.requestMfaChallenge(actorUserId);
-      return reply.send({ success: true, data });
-    },
-  });
-
-  // ── POST /auth/mfa/verify ──────────────────────────────────────────────────
-  fastify.post('/mfa/verify', {
-    config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
-    schema: {
-      tags: ['Auth'],
-      summary: 'Verify MFA code for privileged session',
-      description:
-        'Validates the MFA one-time code and returns a new access token with `mfaVerified=true`.',
-      body: verifyMfaChallengeBodyJson,
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['user', 'session', 'tokens'],
-              properties: {
-                user: { $ref: 'User#' },
-                session: { $ref: 'AuthSession#' },
-                tokens: {
-                  type: 'object',
-                  required: ['accessToken'],
-                  properties: {
-                    accessToken: { type: 'string' },
-                  },
-                },
-              },
-            },
-          },
-        },
-        400: { $ref: 'ApiError#' },
-        401: { $ref: 'ApiError#' },
-        403: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    preHandler: [fastify.authenticate],
-    handler: async (request, reply) => {
-      const parse = VerifyMfaChallengeBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
-
-      const actorUserId = (request.user as JwtPayload).sub;
-      const { user, session } = await authService.verifyMfaChallenge(actorUserId, parse.data);
-      const accessToken = signAccessToken(fastify, user, session);
-      setNoStoreHeaders(reply);
-      return reply.send({
-        success: true,
-        data: {
-          user,
-          session,
-          tokens: { accessToken },
-        },
       });
     },
   });
@@ -707,8 +500,8 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       try {
-        const { user, newRefreshToken, session, sessionExpiry } = await authService.refreshAccessToken(providedRefreshToken);
-        const accessToken = signAccessToken(fastify, user, session);
+        const { user, newRefreshToken, session, sessionId, sessionExpiry } = await authService.refreshAccessToken(providedRefreshToken);
+        const accessToken = signAccessToken(fastify, user, session, sessionId);
         setNoStoreHeaders(reply);
         setRefreshTokenCookie(reply, newRefreshToken, sessionExpiry.absoluteExpiresAt);
         return reply.send({
@@ -844,7 +637,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       const body = SwitchTenantBodySchema.parse(request.body);
       const actorUserId = (request.user as JwtPayload).sub;
       const { user, session } = await authService.switchTenant(actorUserId, body.tenantId);
-      const accessToken = signAccessToken(fastify, user, session);
+      const accessToken = signAccessToken(fastify, user, session, (request.user as JwtPayload).sid ?? null);
       setNoStoreHeaders(reply);
       return reply.send({
         success: true,
@@ -886,14 +679,109 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     preHandler: [fastify.authenticate],
     handler: async (request, reply) => {
       const body = LogoutBodySchema.parse(request.body ?? {});
-      const userId = (request.user as JwtPayload).sub;
+      const jwt = request.user as JwtPayload;
       const refreshToken = resolveRefreshToken(request, body.refreshToken);
-      if (refreshToken) {
-        await authService.logout(refreshToken, userId);
-      }
+      await authService.logout({
+        actorUserId: jwt.sub,
+        sessionId: jwt.sid ?? null,
+        refreshToken: refreshToken ?? null,
+      });
       setNoStoreHeaders(reply);
       clearRefreshTokenCookie(reply);
       return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
+    },
+  });
+
+  // ── GET /auth/sessions ───────────────────────────────────────────────────
+  fastify.get('/sessions', {
+    preHandler: [fastify.authenticate],
+    schema: {
+      tags: ['Auth'],
+      summary: 'List active sessions for current user',
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const jwt = request.user as JwtPayload;
+      const sessions = await authService.listTenantSessions(jwt.sub);
+      return reply.send({
+        success: true,
+        data: sessions.map((s) => ({ ...s, isCurrent: s.id === jwt.sid })),
+      });
+    },
+  });
+
+  // ── DELETE /auth/sessions/:id — revoke one ───────────────────────────────
+  fastify.delete<{ Params: { id: string } }>('/sessions/:id', {
+    preHandler: [fastify.authenticate],
+    schema: {
+      tags: ['Auth'],
+      summary: 'Revoke a specific session',
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: { id: { type: 'string', minLength: 1 } },
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'object', properties: { revoked: { type: 'integer' } } },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        404: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const jwt = request.user as JwtPayload;
+      const result = await authService.revokeTenantSession({
+        userId: jwt.sub,
+        sessionId: request.params.id,
+      });
+      if (request.params.id === jwt.sid) {
+        clearRefreshTokenCookie(reply);
+        setNoStoreHeaders(reply);
+      }
+      return reply.send({ success: true, data: result });
+    },
+  });
+
+  // ── DELETE /auth/sessions — revoke all (logout-all) ──────────────────────
+  fastify.delete('/sessions', {
+    preHandler: [fastify.authenticate],
+    schema: {
+      tags: ['Auth'],
+      summary: 'Revoke ALL sessions for current user (logout everywhere)',
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: { type: 'object', properties: { revoked: { type: 'integer' } } },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const jwt = request.user as JwtPayload;
+      const result = await authService.revokeAllTenantSessions(jwt.sub);
+      clearRefreshTokenCookie(reply);
+      setNoStoreHeaders(reply);
+      return reply.send({ success: true, data: result });
     },
   });
 

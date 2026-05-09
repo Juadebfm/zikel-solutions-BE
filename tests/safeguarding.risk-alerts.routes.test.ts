@@ -63,15 +63,17 @@ beforeEach(() => {
 
 function authHeader(
   userId = 'user_1',
-  role: 'staff' | 'manager' | 'admin' | 'super_admin' = 'manager',
+  role: 'staff' | 'manager' | 'admin' = 'manager',
   tenantRole: 'tenant_admin' | 'sub_admin' | 'staff' | null = 'tenant_admin',
 ) {
   const token = app.jwt.sign({
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
     tenantRole,
     mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }

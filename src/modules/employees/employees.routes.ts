@@ -1,17 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import { generateExport, type ExportColumn } from '../../lib/export.js';
 import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as employeesService from './employees.service.js';
 import {
   CreateEmployeeBodySchema,
-  CreateEmployeeWithUserBodySchema,
   ListEmployeesQuerySchema,
   UpdateEmployeeBodySchema,
   createEmployeeBodyJson,
-  createEmployeeWithUserBodyJson,
   listEmployeesQueryJson,
   updateEmployeeBodyJson,
 } from './employees.schema.js';
@@ -132,10 +131,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.EMPLOYEES_WRITE),
     ],
     schema: {
       tags: ['Employees'],
@@ -174,10 +170,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.patch('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.EMPLOYEES_WRITE),
     ],
     schema: {
       tags: ['Employees'],
@@ -217,10 +210,7 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.delete('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin', 'manager'],
-        tenantRoles: ['tenant_admin', 'sub_admin'],
-      }),
+      requirePermission(P.EMPLOYEES_DEACTIVATE),
     ],
     schema: {
       tags: ['Employees'],
@@ -252,32 +242,10 @@ const employeeRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.send({ success: true, data });
     },
   });
-  // ─── Create employee with user (multi-step) ────────────────────────────────
-
-  fastify.post('/create-with-user', {
-    preHandler: [requireScopedRole({ globalRoles: ['admin', 'super_admin'], tenantRoles: ['tenant_admin'] })],
-    schema: {
-      tags: ['Employees'],
-      summary: 'Create employee with new user account (multi-step)',
-      body: createEmployeeWithUserBodyJson,
-      response: {
-        201: { type: 'object', required: ['success', 'data'], properties: { success: { type: 'boolean', enum: [true] }, data: { type: 'object', additionalProperties: true } } },
-        403: { $ref: 'ApiError#' },
-        409: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = CreateEmployeeWithUserBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message } });
-      }
-      const actorId = (request.user as JwtPayload).sub;
-      const data = await employeesService.createEmployeeWithUser(actorId, parse.data);
-      return reply.status(201).send({ success: true, data });
-    },
-  });
+  // Phase 5: removed POST /employees/create-with-user. Admins now invite new
+  // staff via POST /api/v1/invitations — the recipient sets their own password
+  // when accepting, and an Employee record is auto-provisioned if a homeId is
+  // attached to the invitation.
 };
 
 export default employeeRoutes;

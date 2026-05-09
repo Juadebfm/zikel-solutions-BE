@@ -1,13 +1,20 @@
 import { AuditAction, MembershipStatus, TenantRole, UserRole } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { httpError } from './errors.js';
-import { reconcileExpiredBreakGlassAccess } from './break-glass.js';
 import { getRequestCache, setRequestCache } from './request-context.js';
 
 export interface TenantContext {
   tenantId: string;
   userRole: UserRole;
-  tenantRole: TenantRole | null;
+  tenantRole: TenantRole | null; // Legacy; use roleName/permissions instead.
+  roleName: string | null;
+  permissions: string[];
+}
+
+function legacyTenantRoleFromName(name: string): TenantRole {
+  if (name === 'Owner') return TenantRole.tenant_admin;
+  if (name === 'Admin') return TenantRole.sub_admin;
+  return TenantRole.staff;
 }
 
 function logCrossTenantBlock(args: {
@@ -31,7 +38,7 @@ function logCrossTenantBlock(args: {
 
 /**
  * Resolves and validates the active tenant context for an authenticated user.
- * Non-super-admin users must have an active membership in the active tenant.
+ * Every tenant user must have an active membership in the active tenant.
  *
  * Optimised path: fetches user with tenant + membership in a single query to
  * avoid sequential DB round-trips (saves ~200-600 ms on Neon).
@@ -43,7 +50,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
   if (cached) return cached;
 
   // Single query: fetch user together with active tenant and membership.
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: {
       id: true,
@@ -52,7 +59,11 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
       activeTenant: { select: { id: true, isActive: true } },
       tenantMemberships: {
         where: { userId },
-        select: { tenantId: true, role: true, status: true },
+        select: {
+          tenantId: true,
+          status: true,
+          role: { select: { name: true, permissions: true } },
+        },
       },
     },
   });
@@ -61,16 +72,7 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
     throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
   }
 
-  // Break-glass reconciliation only applies to super_admin users.
-  // For all other users we skip it entirely — no extra DB query.
-  let activeTenantId = user.activeTenantId;
-  if (user.role === UserRole.super_admin) {
-    activeTenantId = await reconcileExpiredBreakGlassAccess({
-      userId: user.id,
-      userRole: user.role,
-      activeTenantId: user.activeTenantId,
-    });
-  }
+  const activeTenantId = user.activeTenantId;
 
   if (!activeTenantId) {
     logCrossTenantBlock({ userId, tenantId: null, reason: 'missing_active_tenant' });
@@ -81,25 +83,11 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
     );
   }
 
-  // Use the already-fetched tenant if the activeTenantId hasn't changed
-  // (i.e. break-glass didn't revert it). Otherwise fall back to a lookup.
-  let tenant = user.activeTenant;
-  if (tenant && tenant.id !== activeTenantId) {
-    tenant = await prisma.tenant.findUnique({
-      where: { id: activeTenantId },
-      select: { id: true, isActive: true },
-    });
-  }
+  const tenant = user.activeTenant;
 
   if (!tenant || !tenant.isActive) {
     logCrossTenantBlock({ userId, tenantId: activeTenantId, reason: 'inactive_or_missing_tenant' });
     throw httpError(403, 'TENANT_INACTIVE', 'Active tenant is not available.');
-  }
-
-  if (user.role === UserRole.super_admin) {
-    const ctx: TenantContext = { tenantId: activeTenantId, userRole: user.role, tenantRole: null };
-    setRequestCache(cacheKey, ctx);
-    return ctx;
   }
 
   // Use the already-fetched membership instead of a second query.
@@ -114,7 +102,13 @@ export async function requireTenantContext(userId: string): Promise<TenantContex
     );
   }
 
-  const ctx: TenantContext = { tenantId: activeTenantId, userRole: user.role, tenantRole: membership.role };
+  const ctx: TenantContext = {
+    tenantId: activeTenantId,
+    userRole: user.role,
+    tenantRole: legacyTenantRoleFromName(membership.role.name),
+    roleName: membership.role.name,
+    permissions: membership.role.permissions,
+  };
   setRequestCache(cacheKey, ctx);
   return ctx;
 }

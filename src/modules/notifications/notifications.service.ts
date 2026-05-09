@@ -170,7 +170,7 @@ export async function broadcastPlatformNotification(
     recipientUserIds = [...new Set(members.map((m) => m.userId))];
   } else {
     // Send to all active users
-    const users = await prisma.user.findMany({
+    const users = await prisma.tenantUser.findMany({
       where: { isActive: true },
       select: { id: true },
     });

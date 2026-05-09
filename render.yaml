@@ -28,9 +28,35 @@ services:
         sync: false
       - key: AUTH_HINT_COOKIE_DOMAIN
         sync: false
+      - key: AUTH_PLATFORM_COOKIE_DOMAIN
+        sync: false
+      # Phase 4 (MFA) — required in production. Generate with:
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # and paste the result into the Render dashboard for this service.
+      - key: MFA_SECRET_KEY_BASE64
+        sync: false
+      - key: MFA_TOTP_ISSUER_TENANT
+        value: "Zikel Solutions"
+      - key: MFA_TOTP_ISSUER_PLATFORM
+        value: "Zikel Admin"
       - key: SECURITY_ALERT_PIPELINE_ENABLED
         value: "false"
       - key: RESEND_API_KEY
         sync: false
       - key: RESEND_FROM_EMAIL
+        sync: false
+      # AI / OpenAI-compatible provider (Phase 8.1).
+      # Values are set in the Render dashboard for this service; declared here
+      # for documentation hygiene so future engineers see what must be present.
+      # AI_ENABLED defaults to "false" — set to "true" in production.
+      # If AI_ENABLED=true, AI_API_KEY MUST be set (env validator enforces).
+      - key: AI_ENABLED
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        sync: false
+      - key: AI_MODEL
+        sync: false
+      - key: AI_TIMEOUT_MS
         sync: false

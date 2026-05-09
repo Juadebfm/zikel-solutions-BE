@@ -1,28 +1,23 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireRole } from '../../middleware/rbac.js';
 import * as tenantsService from './tenants.service.js';
 import {
   AcceptTenantInviteBodySchema,
   AddTenantMemberBodySchema,
   CreateInviteLinkBodySchema,
   CreateTenantInviteBodySchema,
-  CreateTenantBodySchema,
   ProvisionStaffBodySchema,
   ListTenantMembershipsQuerySchema,
   ListTenantInvitesQuerySchema,
-  ListTenantsQuerySchema,
   UpdateTenantMemberBodySchema,
   acceptTenantInviteBodyJson,
   addTenantMemberBodyJson,
   createInviteLinkBodyJson,
   createTenantInviteBodyJson,
-  createTenantBodyJson,
   provisionStaffBodyJson,
   listTenantMembershipsQueryJson,
   listTenantInvitesQueryJson,
-  listTenantsQueryJson,
   updateTenantMemberBodyJson,
 } from './tenants.schema.js';
 
@@ -48,129 +43,16 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
 
-  fastify.get('/', {
-    preHandler: [requireRole('super_admin')],
-    schema: {
-      tags: ['Tenants'],
-      summary: 'List tenants (super-admin only)',
-      querystring: listTenantsQueryJson,
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data', 'meta'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: { type: 'array', items: { $ref: 'Tenant#' } },
-            meta: { $ref: 'PaginationMeta#' },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = ListTenantsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
-
-      const { data, meta } = await tenantsService.listTenants(parse.data);
-      return reply.send({ success: true, data, meta });
-    },
-  });
-
-  fastify.get('/:id', {
-    preHandler: [requireRole('super_admin')],
-    schema: {
-      tags: ['Tenants'],
-      summary: 'Get tenant details (super-admin only)',
-      params: { $ref: 'CuidParam#' },
-      response: {
-        200: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              allOf: [
-                { $ref: 'Tenant#' },
-                {
-                  type: 'object',
-                  required: ['memberships'],
-                  properties: {
-                    memberships: {
-                      type: 'array',
-                      items: { $ref: 'TenantMembership#' },
-                    },
-                  },
-                },
-              ],
-            },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        404: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const data = await tenantsService.getTenantById(id);
-      return reply.send({ success: true, data });
-    },
-  });
-
-  fastify.post('/', {
-    preHandler: [requireRole('super_admin')],
-    schema: {
-      tags: ['Tenants'],
-      summary: 'Provision tenant (super-admin only)',
-      description:
-        'Creates a tenant and optionally assigns an initial tenant admin from an existing user.',
-      body: createTenantBodyJson,
-      response: {
-        201: {
-          type: 'object',
-          required: ['success', 'data'],
-          properties: {
-            success: { type: 'boolean', enum: [true] },
-            data: {
-              type: 'object',
-              required: ['tenant', 'adminMembership'],
-              properties: {
-                tenant: { $ref: 'Tenant#' },
-                adminMembership: {
-                  anyOf: [{ $ref: 'TenantMembership#' }, { type: 'null' }],
-                },
-              },
-            },
-          },
-        },
-        403: { $ref: 'ApiError#' },
-        404: { $ref: 'ApiError#' },
-        409: { $ref: 'ApiError#' },
-        422: { $ref: 'ApiError#' },
-      },
-    },
-    handler: async (request, reply) => {
-      const parse = CreateTenantBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
-
-      const actorUserId = (request.user as JwtPayload).sub;
-      const data = await tenantsService.createTenant(actorUserId, parse.data);
-      return reply.status(201).send({ success: true, data });
-    },
-  });
+  // Phase 6 (2026-05-08): the previous super_admin cross-tenant management
+  // routes — `GET /api/v1/tenants`, `GET /api/v1/tenants/:id`, `POST /api/v1/tenants`
+  // — were removed. They previously returned 403 PLATFORM_ONLY as placeholders.
+  // The platform-side equivalents now live at:
+  //   - GET    /admin/tenants                       (list tenants)
+  //   - GET    /admin/tenants/:id                   (tenant detail)
+  //   - POST   /admin/tenants/:id/suspend           (platform_admin only)
+  //   - POST   /admin/tenants/:id/reactivate        (platform_admin only)
+  // Tenant creation is intentionally not exposed: tenants self-create via
+  // `POST /api/v1/auth/register` (the registrant becomes the Owner).
 
   fastify.get('/:id/memberships', {
     schema: {

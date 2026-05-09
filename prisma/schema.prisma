@@ -24,10 +24,16 @@ enum Gender {
 }
 
 enum UserRole {
-  super_admin
   staff
   manager
   admin
+}
+
+enum PlatformRole {
+  platform_admin
+  support
+  engineer
+  billing
 }
 
 enum TenantRole {
@@ -41,7 +47,6 @@ enum MembershipStatus {
   active
   suspended
   revoked
-  pending_approval
 }
 
 enum OtpPurpose {
@@ -49,6 +54,18 @@ enum OtpPurpose {
   password_reset
   mfa_challenge
   staff_activation
+}
+
+enum MfaType {
+  totp
+}
+
+enum InvitationStatus {
+  pending
+  accepted
+  revoked
+  // Note: `expired` is derived at read time from expiresAt < now while status=pending.
+  // No background job flips pending→expired; queries treat the two as equivalent.
 }
 
 enum AuditAction {
@@ -285,32 +302,32 @@ enum ServiceOfInterest {
 }
 
 model DemoRequest {
-  id                     String            @id @default(cuid())
-  fullName               String
-  organisationName       String?
-  rolePosition           String?
-  email                  String
-  phoneNumber            String?
-  numberOfStaffChildren  String?
-  serviceOfInterest      ServiceOfInterest
-  keyChallenges          String?
-  message                String?
-  source                 String?
-  createdAt              DateTime          @default(now())
+  id                    String            @id @default(cuid())
+  fullName              String
+  organisationName      String?
+  rolePosition          String?
+  email                 String
+  phoneNumber           String?
+  numberOfStaffChildren String?
+  serviceOfInterest     ServiceOfInterest
+  keyChallenges         String?
+  message               String?
+  source                String?
+  createdAt             DateTime          @default(now())
 
   @@index([email])
   @@index([createdAt])
 }
 
 model ContactMessage {
-  id                String             @id @default(cuid())
+  id                String            @id @default(cuid())
   fullName          String
   email             String
   phoneNumber       String
   serviceOfInterest ServiceOfInterest
   message           String?
   source            String?
-  createdAt         DateTime           @default(now())
+  createdAt         DateTime          @default(now())
 
   @@index([email])
   @@index([createdAt])
@@ -331,132 +348,273 @@ model WaitlistEntry {
 
 // ─── Auth / Users ─────────────────────────────────────────────────────────────
 
-model User {
-  id             String    @id @default(cuid())
-  email          String    @unique
-  passwordHash   String
-  role           UserRole  @default(staff)
-  firstName      String
-  middleName     String?
-  lastName       String
-  gender         Gender?
-  country        Country   @default(UK)
-  phoneNumber    String?
-  avatarUrl      String?
-  language       String    @default("en")
-  timezone       String    @default("Europe/London")
-  emailVerified  Boolean   @default(false)
-  acceptedTerms  Boolean   @default(false)
-  isActive       Boolean   @default(true)
-  aiAccessEnabled Boolean  @default(false)
-  userType       String    @default("internal")
-  dateOfBirth    DateTime?
-  otherNames     String?
-  landingPage    String?
-  hideFutureTasks Boolean  @default(false)
-  enableIpRestriction Boolean @default(false)
-  passwordExpiresInstantly Boolean @default(false)
-  disableLoginAt DateTime?
-  passwordExpiresAt DateTime?
-  activeTenantId String?
-  lastLoginAt    DateTime?
-  failedAttempts Int       @default(0)
-  lockedUntil    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+model TenantUser {
+  id                       String    @id @default(cuid())
+  email                    String    @unique
+  passwordHash             String
+  role                     UserRole  @default(staff)
+  firstName                String
+  middleName               String?
+  lastName                 String
+  gender                   Gender?
+  country                  Country   @default(UK)
+  phoneNumber              String?
+  avatarUrl                String?
+  language                 String    @default("en")
+  timezone                 String    @default("Europe/London")
+  emailVerified            Boolean   @default(false)
+  acceptedTerms            Boolean   @default(false)
+  isActive                 Boolean   @default(true)
+  // Phase 8.1 (2026-05-09): default flipped to true. Tenant-paid AI access is
+  // now the default; this flag remains as a per-user *deny-list* override that
+  // a tenant Owner can set to revoke AI access from a specific staff member.
+  aiAccessEnabled          Boolean   @default(true)
+  userType                 String    @default("internal")
+  dateOfBirth              DateTime?
+  otherNames               String?
+  landingPage              String?
+  hideFutureTasks          Boolean   @default(false)
+  enableIpRestriction      Boolean   @default(false)
+  passwordExpiresInstantly Boolean   @default(false)
+  disableLoginAt           DateTime?
+  passwordExpiresAt        DateTime?
+  activeTenantId           String?
+  lastLoginAt              DateTime?
+  failedAttempts           Int       @default(0)
+  lockedUntil              DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  activeTenant   Tenant?   @relation("UserActiveTenant", fields: [activeTenantId], references: [id], onDelete: SetNull)
-  refreshTokens  RefreshToken[]
-  otpCodes       OtpCode[]
-  auditLogs      AuditLog[]
-  securityAlertDeliveries SecurityAlertDelivery[]
-  tenantMemberships TenantMembership[] @relation("UserTenantMemberships")
-  sentTenantInvites TenantMembership[] @relation("UserTenantInvites")
-  tenantInvitationsSent TenantInvite[] @relation("UserSentTenantInvites")
-  tenantInvitationsAccepted TenantInvite[] @relation("UserAcceptedTenantInvites")
-  tenantInviteLinksCreated TenantInviteLink[] @relation("UserCreatedTenantInviteLinks")
-  employees      Employee[]
-  widgets        Widget[]
-  announcementReads AnnouncementRead[]
-  taskReviewEvents TaskReviewEvent[]
-  uploadedFiles  UploadedFile[] @relation("UserUploadedFiles")
-  uploadedDocuments DocumentRecord[] @relation("DocumentUploadedBy")
-  homesAsAdmin   Home[] @relation("HomeAdmin")
-  homesAsPersonInCharge Home[] @relation("HomePersonInCharge")
-  homesAsResponsibleIndividual Home[] @relation("HomeResponsibleIndividual")
-  youngPeopleAsAdmin YoungPerson[] @relation("YoungPersonAdmin")
-  youngPeopleAsPracticeManager YoungPerson[] @relation("YoungPersonPracticeManager")
-  faqArticles        FaqArticle[] @relation("UserFaqArticles")
-  supportTickets     SupportTicket[] @relation("UserSupportTickets")
-  ticketComments     TicketComment[] @relation("UserTicketComments")
-  createdNotifications Notification[] @relation("UserCreatedNotifications")
-  notificationRecipients NotificationRecipient[] @relation("UserNotificationRecipients")
-  notificationPreferences NotificationPreference[] @relation("UserNotificationPreferences")
-  exportJobsCreated ExportJob[]
-  createdRotas Rota[] @relation("RotaCreatedBy")
-  updatedRotas Rota[] @relation("RotaUpdatedBy")
-  createdRotaTemplates RotaTemplate[] @relation("RotaTemplateCreatedBy")
-  createdGroupings Grouping[] @relation("GroupingCreatedBy")
-  createdSensitiveDataRecords SensitiveDataRecord[] @relation("SensitiveDataCreatedBy")
-  updatedSensitiveDataRecords SensitiveDataRecord[] @relation("SensitiveDataUpdatedBy")
-  sensitiveDataAccessLogs SensitiveDataAccessLog[]
-  webhookEndpoints   WebhookEndpoint[] @relation("UserWebhookEndpoints")
-  ownedSafeguardingRiskAlerts SafeguardingRiskAlert[] @relation("SafeguardingRiskAlertOwner")
-  acknowledgedSafeguardingRiskAlerts SafeguardingRiskAlert[] @relation("SafeguardingRiskAlertAcknowledgedBy")
-  resolvedSafeguardingRiskAlerts SafeguardingRiskAlert[] @relation("SafeguardingRiskAlertResolvedBy")
-  safeguardingRiskAlertNotes SafeguardingRiskAlertNote[]
+  activeTenant                       Tenant?                     @relation("UserActiveTenant", fields: [activeTenantId], references: [id], onDelete: SetNull)
+  sessions                           TenantSession[]
+  refreshTokens                      RefreshToken[]
+  otpCodes                           OtpCode[]
+  mfaCredential                      TenantMfaCredential?
+  mfaBackupCodes                     TenantMfaBackupCode[]
+  invitationsSent                    Invitation[]                @relation("InvitationInviter")
+  invitationsAccepted                Invitation[]                @relation("InvitationAccepter")
+  impersonationGrantsAsTarget        ImpersonationGrant[]        @relation("ImpersonationGrantTargetUser")
+  auditLogs                          AuditLog[]
+  securityAlertDeliveries            SecurityAlertDelivery[]
+  tenantMemberships                  TenantMembership[]          @relation("UserTenantMemberships")
+  sentTenantInvites                  TenantMembership[]          @relation("UserTenantInvites")
+  tenantInvitationsSent              TenantInvite[]              @relation("UserSentTenantInvites")
+  tenantInvitationsAccepted          TenantInvite[]              @relation("UserAcceptedTenantInvites")
+  tenantInviteLinksCreated           TenantInviteLink[]          @relation("UserCreatedTenantInviteLinks")
+  employees                          Employee[]
+  widgets                            Widget[]
+  announcementReads                  AnnouncementRead[]
+  taskReviewEvents                   TaskReviewEvent[]
+  uploadedFiles                      UploadedFile[]              @relation("UserUploadedFiles")
+  uploadedDocuments                  DocumentRecord[]            @relation("DocumentUploadedBy")
+  homesAsAdmin                       Home[]                      @relation("HomeAdmin")
+  homesAsPersonInCharge              Home[]                      @relation("HomePersonInCharge")
+  homesAsResponsibleIndividual       Home[]                      @relation("HomeResponsibleIndividual")
+  youngPeopleAsAdmin                 YoungPerson[]               @relation("YoungPersonAdmin")
+  youngPeopleAsPracticeManager       YoungPerson[]               @relation("YoungPersonPracticeManager")
+  faqArticles                        FaqArticle[]                @relation("UserFaqArticles")
+  supportTickets                     SupportTicket[]             @relation("UserSupportTickets")
+  ticketComments                     TicketComment[]             @relation("UserTicketComments")
+  createdNotifications               Notification[]              @relation("UserCreatedNotifications")
+  notificationRecipients             NotificationRecipient[]     @relation("UserNotificationRecipients")
+  notificationPreferences            NotificationPreference[]    @relation("UserNotificationPreferences")
+  exportJobsCreated                  ExportJob[]
+  createdRotas                       Rota[]                      @relation("RotaCreatedBy")
+  updatedRotas                       Rota[]                      @relation("RotaUpdatedBy")
+  createdRotaTemplates               RotaTemplate[]              @relation("RotaTemplateCreatedBy")
+  createdGroupings                   Grouping[]                  @relation("GroupingCreatedBy")
+  createdSensitiveDataRecords        SensitiveDataRecord[]       @relation("SensitiveDataCreatedBy")
+  updatedSensitiveDataRecords        SensitiveDataRecord[]       @relation("SensitiveDataUpdatedBy")
+  sensitiveDataAccessLogs            SensitiveDataAccessLog[]
+  webhookEndpoints                   WebhookEndpoint[]           @relation("UserWebhookEndpoints")
+  ownedSafeguardingRiskAlerts        SafeguardingRiskAlert[]     @relation("SafeguardingRiskAlertOwner")
+  acknowledgedSafeguardingRiskAlerts SafeguardingRiskAlert[]     @relation("SafeguardingRiskAlertAcknowledgedBy")
+  resolvedSafeguardingRiskAlerts     SafeguardingRiskAlert[]     @relation("SafeguardingRiskAlertResolvedBy")
+  safeguardingRiskAlertNotes         SafeguardingRiskAlertNote[]
+  aiCallEvents                       AiCallEvent[]
+  aiConversations                    AiConversation[]
 
   @@index([email])
   @@index([role])
   @@index([activeTenantId])
 }
 
-model Tenant {
-  id          String   @id @default(cuid())
-  name        String
-  slug        String   @unique
-  country     Country  @default(UK)
-  isActive    Boolean  @default(true)
-  mfaSetupCompletedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+// ─── Platform identity (Zikel internal staff) ────────────────────────────────
+// Strictly separated from TenantUser. Platform users authenticate via /admin/auth/*,
+// receive JWTs with aud='platform', and never appear in tenant-scoped data.
 
-  activeUsers User[]   @relation("UserActiveTenant")
-  memberships TenantMembership[]
-  invites     TenantInvite[]
-  inviteLinks TenantInviteLink[]
-  careGroups  CareGroup[]
-  homes       Home[]
-  employees   Employee[]
-  homeEvents  HomeEvent[]
-  employeeShifts EmployeeShift[]
-  youngPeople YoungPerson[]
-  vehicles    Vehicle[]
-  tasks       Task[]
-  taskReferences TaskReference[]
-  announcements Announcement[]
-  widgets     Widget[]
-  auditLogs   AuditLog[]
-  securityAlertDeliveries SecurityAlertDelivery[]
-  taskReviewEvents TaskReviewEvent[]
-  uploadedFiles UploadedFile[]
-  documents DocumentRecord[]
-  exportJobs ExportJob[]
-  settings TenantSettings?
-  rotas Rota[]
-  rotaTemplates RotaTemplate[]
-  regions Region[]
-  regionHomes RegionHome[]
-  groupings Grouping[]
-  groupingMembers GroupingMember[]
-  sensitiveDataRecords SensitiveDataRecord[]
-  sensitiveDataAccessLogs SensitiveDataAccessLog[]
-  roles              Role[]
-  supportTickets     SupportTicket[]
-  notifications      Notification[]
-  webhookEndpoints   WebhookEndpoint[]
-  safeguardingRiskAlerts SafeguardingRiskAlert[]
+model PlatformUser {
+  id             String       @id @default(cuid())
+  email          String       @unique
+  passwordHash   String
+  role           PlatformRole
+  firstName      String
+  lastName       String
+  isActive       Boolean      @default(true)
+  lastLoginAt    DateTime?
+  failedAttempts Int          @default(0)
+  lockedUntil    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  sessions                    PlatformSession[]
+  refreshTokens               PlatformRefreshToken[]
+  auditLogs                   PlatformAuditLog[]
+  mfaCredential               PlatformMfaCredential?
+  mfaBackupCodes              PlatformMfaBackupCode[]
+  impersonationGrants         ImpersonationGrant[]
+  impersonationGrantsApproved ImpersonationGrant[]    @relation("ImpersonationGrantApprover")
+  impersonatedAuditLogs       AuditLog[]              @relation("AuditLogImpersonator")
+
+  @@index([email])
+  @@index([role])
+}
+
+model PlatformSession {
+  id                String    @id @default(cuid())
+  platformUserId    String
+  deviceLabel       String?
+  userAgent         String?
+  ipAddress         String?
+  createdAt         DateTime  @default(now())
+  lastActiveAt      DateTime  @default(now())
+  revokedAt         DateTime?
+  mfaVerifiedAt     DateTime?
+  absoluteExpiresAt DateTime
+
+  platformUser  PlatformUser           @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+  refreshTokens PlatformRefreshToken[]
+
+  @@index([platformUserId])
+  @@index([revokedAt])
+  @@index([absoluteExpiresAt])
+}
+
+model PlatformRefreshToken {
+  id                String    @id @default(cuid())
+  sessionId         String
+  platformUserId    String
+  token             String    @unique
+  idleExpiresAt     DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?
+  createdAt         DateTime  @default(now())
+
+  session      PlatformSession        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  platformUser PlatformUser           @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+  replacedBy   PlatformRefreshToken?  @relation("PlatformRefreshTokenChain", fields: [replacedByTokenId], references: [id])
+  replaces     PlatformRefreshToken[] @relation("PlatformRefreshTokenChain")
+
+  @@index([sessionId])
+  @@index([platformUserId])
+  @@index([token])
+  @@index([idleExpiresAt])
+}
+
+model PlatformAuditLog {
+  id             String      @id @default(cuid())
+  platformUserId String?
+  action         AuditAction
+  entityType     String?
+  entityId       String?
+  targetTenantId String?
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
+
+  platformUser PlatformUser? @relation(fields: [platformUserId], references: [id], onDelete: SetNull)
+
+  @@index([platformUserId])
+  @@index([createdAt])
+  @@index([targetTenantId])
+}
+
+// ─── Platform MFA ────────────────────────────────────────────────────────────
+
+model PlatformMfaCredential {
+  id              String    @id @default(cuid())
+  platformUserId  String    @unique
+  type            MfaType   @default(totp)
+  // TOTP secret encrypted at rest with AES-256-GCM. See src/lib/secret-crypto.ts.
+  // Format: <ivBase64>:<authTagBase64>:<ciphertextBase64>
+  secretEncrypted String
+  label           String?
+  createdAt       DateTime  @default(now())
+  // Null until the user proves possession by entering the first TOTP code at
+  // setup-verify. Login MFA gating only fires when confirmedAt is not null.
+  confirmedAt     DateTime?
+  lastUsedAt      DateTime?
+
+  platformUser PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+}
+
+model PlatformMfaBackupCode {
+  id             String    @id @default(cuid())
+  platformUserId String
+  // bcrypt hash of the original 8-char backup code; cannot be reversed.
+  codeHash       String
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  platformUser PlatformUser @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+
+  @@index([platformUserId])
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  country   Country  @default(UK)
+  isActive  Boolean  @default(true)
+  // Phase 8.1 (2026-05-09): tenant-level AI master switch. Flipped to false
+  // automatically when subscriptionStatus enters past_due_readonly / suspended;
+  // also editable by the Owner via /api/v1/billing/ai-restrictions.
+  aiEnabled Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activeUsers                TenantUser[]                @relation("UserActiveTenant")
+  memberships                TenantMembership[]
+  invites                    TenantInvite[]
+  inviteLinks                TenantInviteLink[]
+  invitations                Invitation[]
+  impersonationGrants        ImpersonationGrant[]        @relation("ImpersonationGrantTenant")
+  careGroups                 CareGroup[]
+  homes                      Home[]
+  employees                  Employee[]
+  homeEvents                 HomeEvent[]
+  employeeShifts             EmployeeShift[]
+  youngPeople                YoungPerson[]
+  vehicles                   Vehicle[]
+  tasks                      Task[]
+  taskReferences             TaskReference[]
+  announcements              Announcement[]
+  widgets                    Widget[]
+  auditLogs                  AuditLog[]
+  securityAlertDeliveries    SecurityAlertDelivery[]
+  taskReviewEvents           TaskReviewEvent[]
+  uploadedFiles              UploadedFile[]
+  documents                  DocumentRecord[]
+  exportJobs                 ExportJob[]
+  settings                   TenantSettings?
+  rotas                      Rota[]
+  rotaTemplates              RotaTemplate[]
+  regions                    Region[]
+  regionHomes                RegionHome[]
+  groupings                  Grouping[]
+  groupingMembers            GroupingMember[]
+  sensitiveDataRecords       SensitiveDataRecord[]
+  sensitiveDataAccessLogs    SensitiveDataAccessLog[]
+  roles                      Role[]
+  supportTickets             SupportTicket[]
+  notifications              Notification[]
+  webhookEndpoints           WebhookEndpoint[]
+  safeguardingRiskAlerts     SafeguardingRiskAlert[]
   safeguardingRiskAlertNotes SafeguardingRiskAlertNote[]
+  aiCallEvents               AiCallEvent[]
+  aiConversations            AiConversation[]
 
   @@index([name])
   @@index([isActive])
@@ -466,39 +624,40 @@ model TenantMembership {
   id          String           @id @default(cuid())
   tenantId    String
   userId      String
-  role        TenantRole       @default(staff)
+  roleId      String
   status      MembershipStatus @default(active)
   invitedById String?
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User             @relation("UserTenantMemberships", fields: [userId], references: [id], onDelete: Cascade)
-  invitedBy   User?            @relation("UserTenantInvites", fields: [invitedById], references: [id], onDelete: SetNull)
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      TenantUser  @relation("UserTenantMemberships", fields: [userId], references: [id], onDelete: Cascade)
+  role      Role        @relation(fields: [roleId], references: [id])
+  invitedBy TenantUser? @relation("UserTenantInvites", fields: [invitedById], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, userId])
   @@index([userId])
-  @@index([tenantId, role])
+  @@index([tenantId, roleId])
   @@index([status])
 }
 
 model TenantInvite {
-  id               String    @id @default(cuid())
+  id               String     @id @default(cuid())
   tenantId         String
   email            String
   role             TenantRole
-  tokenHash        String    @unique
+  tokenHash        String     @unique
   invitedById      String
   acceptedByUserId String?
   expiresAt        DateTime
   acceptedAt       DateTime?
   revokedAt        DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
-  tenant           Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  invitedBy        User      @relation("UserSentTenantInvites", fields: [invitedById], references: [id], onDelete: Cascade)
-  acceptedByUser   User?     @relation("UserAcceptedTenantInvites", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy      TenantUser  @relation("UserSentTenantInvites", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedByUser TenantUser? @relation("UserAcceptedTenantInvites", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, email])
   @@index([tenantId, role])
@@ -518,25 +677,114 @@ model TenantInviteLink {
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 
-  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User       @relation("UserCreatedTenantInviteLinks", fields: [createdById], references: [id], onDelete: Cascade)
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy TenantUser @relation("UserCreatedTenantInviteLinks", fields: [createdById], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([code])
   @@index([createdById])
 }
 
+// ─── Invitations (Phase 5 — supersedes TenantInvite/TenantInviteLink) ───────
+
+model Invitation {
+  id               String           @id @default(cuid())
+  tenantId         String
+  email            String
+  invitedById      String
+  // Pre-assigned permission bundle on accept.
+  roleId           String
+  // Optional: pre-assign the new staff member to a specific home.
+  homeId           String?
+  // SHA-256 hash of the random plaintext token. The plaintext is sent in the
+  // email link only — it is never stored. On accept we hash the presented
+  // value and look up by tokenHash.
+  tokenHash        String           @unique
+  status           InvitationStatus @default(pending)
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invitedBy      TenantUser  @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Cascade)
+  role           Role        @relation(fields: [roleId], references: [id])
+  home           Home?       @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  acceptedByUser TenantUser? @relation("InvitationAccepter", fields: [acceptedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, status])
+  @@index([tenantId, email])
+  @@index([expiresAt])
+}
+
+// ─── Impersonation (Phase 5 — platform → tenant access with audit) ──────────
+
+model ImpersonationGrant {
+  id              String    @id @default(cuid())
+  platformUserId  String
+  targetTenantId  String
+  // Optional: limit impersonation to a specific tenant user. If null, the
+  // platform user impersonates the tenant Owner.
+  targetUserId    String?
+  // Optional: a separate platform user who approved this grant (four-eyes /
+  // separation-of-duties workflow). Null if the grant was self-issued.
+  grantedByUserId String?
+  ticketReference String
+  reason          String
+  grantedAt       DateTime  @default(now())
+  expiresAt       DateTime
+  revokedAt       DateTime?
+
+  platformUser PlatformUser  @relation(fields: [platformUserId], references: [id], onDelete: Cascade)
+  grantedBy    PlatformUser? @relation("ImpersonationGrantApprover", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  targetTenant Tenant        @relation("ImpersonationGrantTenant", fields: [targetTenantId], references: [id], onDelete: Cascade)
+  targetUser   TenantUser?   @relation("ImpersonationGrantTargetUser", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([platformUserId])
+  @@index([targetTenantId])
+  @@index([revokedAt])
+  @@index([ticketReference])
+  @@index([grantedAt])
+  @@index([grantedByUserId])
+}
+
+model TenantSession {
+  id                String    @id @default(cuid())
+  userId            String
+  deviceLabel       String?
+  userAgent         String?
+  ipAddress         String?
+  createdAt         DateTime  @default(now())
+  lastActiveAt      DateTime  @default(now())
+  revokedAt         DateTime?
+  mfaVerifiedAt     DateTime?
+  absoluteExpiresAt DateTime
+
+  user          TenantUser     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId])
+  @@index([revokedAt])
+  @@index([absoluteExpiresAt])
+}
+
 model RefreshToken {
-  id        String    @id @default(cuid())
-  userId    String
-  token     String    @unique
-  expiresAt DateTime
-  idleExpiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
+  id                String    @id @default(cuid())
+  sessionId         String
+  userId            String
+  token             String    @unique
+  idleExpiresAt     DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?
+  createdAt         DateTime  @default(now())
 
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session    TenantSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user       TenantUser     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken?  @relation("RefreshTokenChain", fields: [replacedByTokenId], references: [id])
+  replaces   RefreshToken[] @relation("RefreshTokenChain")
 
+  @@index([sessionId])
   @@index([userId])
   @@index([token])
   @@index([idleExpiresAt])
@@ -551,37 +799,69 @@ model OtpCode {
   usedAt    DateTime?
   createdAt DateTime   @default(now())
 
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, purpose])
+}
+
+// ─── Tenant MFA ──────────────────────────────────────────────────────────────
+
+model TenantMfaCredential {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  type            MfaType   @default(totp)
+  // TOTP secret encrypted at rest with AES-256-GCM. See src/lib/secret-crypto.ts.
+  // Format: <ivBase64>:<authTagBase64>:<ciphertextBase64>
+  secretEncrypted String
+  label           String?
+  createdAt       DateTime  @default(now())
+  // Null until the user proves possession by entering the first TOTP code at
+  // setup-verify. Login MFA gating only fires when confirmedAt is not null.
+  confirmedAt     DateTime?
+  lastUsedAt      DateTime?
+
+  user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model TenantMfaBackupCode {
+  id        String    @id @default(cuid())
+  userId    String
+  // bcrypt hash of the original 8-char backup code; cannot be reversed.
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // ─── Care Groups & Homes ──────────────────────────────────────────────────────
 
 model CareGroup {
-  id             String   @id @default(cuid())
-  tenantId       String
-  name           String
-  description    String?
-  type           String?
-  managerName    String?
-  contactName    String?
-  phoneNumber    String?
-  email          String?
-  fax            String?
-  website        String?
-  addressLine1   String?
-  addressLine2   String?
-  city           String?
-  county         String?
-  postcode       String?
-  country        String?
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String
+  name         String
+  description  String?
+  type         String?
+  managerName  String?
+  contactName  String?
+  phoneNumber  String?
+  email        String?
+  fax          String?
+  website      String?
+  addressLine1 String?
+  addressLine2 String?
+  city         String?
+  county       String?
+  postcode     String?
+  country      String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  homes          Home[]
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  homes  Home[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
@@ -589,55 +869,56 @@ model CareGroup {
 }
 
 model Home {
-  id                       String    @id @default(cuid())
-  tenantId                 String
-  careGroupId              String
-  name                     String
-  description              String?
-  address                  String?
-  postCode                 String?
-  capacity                 Int?
-  category                 String?
-  region                   String?
-  status                   String    @default("current")
-  phoneNumber              String?
-  email                    String?
-  avatarFileId             String?
-  avatarUrl                String?
-  adminUserId              String?
-  personInChargeId         String?
-  responsibleIndividualId  String?
-  startDate                DateTime?
-  endDate                  DateTime?
-  isSecure                 Boolean   @default(false)
-  shortTermStays           Boolean   @default(false)
-  minAgeGroup              Int?
-  maxAgeGroup              Int?
-  ofstedUrn                String?
-  compliance               Json?
-  details                  Json?
-  isActive                 Boolean   @default(true)
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  id                      String    @id @default(cuid())
+  tenantId                String
+  careGroupId             String
+  name                    String
+  description             String?
+  address                 String?
+  postCode                String?
+  capacity                Int?
+  category                String?
+  region                  String?
+  status                  String    @default("current")
+  phoneNumber             String?
+  email                   String?
+  avatarFileId            String?
+  avatarUrl               String?
+  adminUserId             String?
+  personInChargeId        String?
+  responsibleIndividualId String?
+  startDate               DateTime?
+  endDate                 DateTime?
+  isSecure                Boolean   @default(false)
+  shortTermStays          Boolean   @default(false)
+  minAgeGroup             Int?
+  maxAgeGroup             Int?
+  ofstedUrn               String?
+  compliance              Json?
+  details                 Json?
+  isActive                Boolean   @default(true)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
-  tenant                   Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  careGroup                CareGroup      @relation(fields: [careGroupId], references: [id])
-  avatarFile               UploadedFile?  @relation("HomeAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
-  admin                    User?          @relation("HomeAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
-  personInCharge           User?          @relation("HomePersonInCharge", fields: [personInChargeId], references: [id], onDelete: SetNull)
-  responsibleIndividual    User?          @relation("HomeResponsibleIndividual", fields: [responsibleIndividualId], references: [id], onDelete: SetNull)
-  employees                Employee[]
-  youngPeople              YoungPerson[]
-  vehicles                 Vehicle[]
-  tasks                    Task[]
-  events                   HomeEvent[]
-  shifts                   EmployeeShift[]
-  rotas                    Rota[]
-  documents                DocumentRecord[]
-  regionLinks              RegionHome[]
-  rotaTemplates            RotaTemplate[]
-  sensitiveDataRecords     SensitiveDataRecord[]
-  safeguardingRiskAlerts   SafeguardingRiskAlert[]
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  careGroup              CareGroup               @relation(fields: [careGroupId], references: [id])
+  avatarFile             UploadedFile?           @relation("HomeAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  admin                  TenantUser?             @relation("HomeAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  personInCharge         TenantUser?             @relation("HomePersonInCharge", fields: [personInChargeId], references: [id], onDelete: SetNull)
+  responsibleIndividual  TenantUser?             @relation("HomeResponsibleIndividual", fields: [responsibleIndividualId], references: [id], onDelete: SetNull)
+  employees              Employee[]
+  youngPeople            YoungPerson[]
+  vehicles               Vehicle[]
+  tasks                  Task[]
+  events                 HomeEvent[]
+  shifts                 EmployeeShift[]
+  rotas                  Rota[]
+  documents              DocumentRecord[]
+  regionLinks            RegionHome[]
+  rotaTemplates          RotaTemplate[]
+  sensitiveDataRecords   SensitiveDataRecord[]
+  safeguardingRiskAlerts SafeguardingRiskAlert[]
+  invitations            Invitation[]
 
   @@index([tenantId])
   @@index([careGroupId])
@@ -648,57 +929,57 @@ model Home {
 // ─── Employees ────────────────────────────────────────────────────────────────
 
 model Employee {
-  id              String    @id @default(cuid())
-  tenantId        String
-  userId          String
-  homeId          String?
-  roleId          String?
-  jobTitle        String?
-  startDate       DateTime?
-  endDate         DateTime?
-  status          String    @default("current")
-  contractType    String?
-  dbsNumber       String?
-  dbsDate         DateTime?
-  qualifications  Json?
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  tenantId       String
+  userId         String
+  homeId         String?
+  jobTitle       String?
+  startDate      DateTime?
+  endDate        DateTime?
+  status         String    @default("current")
+  contractType   String?
+  dbsNumber      String?
+  dbsDate        DateTime?
+  qualifications Json?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
-  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user            User      @relation(fields: [userId], references: [id])
-  home            Home?     @relation(fields: [homeId], references: [id])
-  role            Role?     @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  tasks           Task[]    @relation("TaskAssignee")
-  approvedTasks   Task[]    @relation("TaskApprover")
-  shifts          EmployeeShift[]
-  youngPeopleAsKeyWorker YoungPerson[] @relation("YoungPersonKeyWorker")
+  tenant                 Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                   TenantUser      @relation(fields: [userId], references: [id])
+  home                   Home?           @relation(fields: [homeId], references: [id])
+  tasks                  Task[]          @relation("TaskAssignee")
+  approvedTasks          Task[]          @relation("TaskApprover")
+  shifts                 EmployeeShift[]
+  youngPeopleAsKeyWorker YoungPerson[]   @relation("YoungPersonKeyWorker")
 
   @@unique([tenantId, userId])
   @@index([tenantId])
   @@index([homeId])
-  @@index([roleId])
   @@index([status])
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
 
 model Role {
-  id                String    @id @default(cuid())
-  tenantId          String
-  name              String
-  description       String?
-  isActive          Boolean   @default(true)
-  isSystemGenerated Boolean   @default(false)
-  permissions       Json      @default("{}")
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String? // null = system role (shared template across all tenants)
+  name         String
+  description  String?
+  permissions  String[] // Array of Permission strings — see src/auth/permissions.ts
+  isActive     Boolean  @default(true)
+  isSystemRole Boolean  @default(false)
+  isAssignable Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  employees         Employee[]
+  tenant      Tenant?            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberships TenantMembership[]
+  invitations Invitation[]
 
   @@unique([tenantId, name])
   @@index([tenantId])
+  @@index([isSystemRole])
 }
 
 // ─── Home Events & Shifts ────────────────────────────────────────────────────
@@ -718,8 +999,8 @@ model HomeEvent {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home   Home   @relation(fields: [homeId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, startsAt])
   @@index([tenantId, type, startsAt])
@@ -727,18 +1008,18 @@ model HomeEvent {
 }
 
 model EmployeeShift {
-  id          String    @id @default(cuid())
-  tenantId    String
-  homeId      String
-  employeeId  String
-  startTime   DateTime
-  endTime     DateTime
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id         String   @id @default(cuid())
+  tenantId   String
+  homeId     String
+  employeeId String
+  startTime  DateTime
+  endTime    DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home      @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home     Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, startTime])
   @@index([homeId, startTime])
@@ -785,15 +1066,15 @@ model YoungPerson {
   createdAt                   DateTime  @default(now())
   updatedAt                   DateTime  @updatedAt
 
-  tenant                      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home                        Home          @relation(fields: [homeId], references: [id])
-  avatarFile                  UploadedFile? @relation("YoungPersonAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
-  keyWorker                   Employee?     @relation("YoungPersonKeyWorker", fields: [keyWorkerId], references: [id], onDelete: SetNull)
-  practiceManager             User?         @relation("YoungPersonPracticeManager", fields: [practiceManagerId], references: [id], onDelete: SetNull)
-  admin                       User?         @relation("YoungPersonAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
-  tasks                       Task[]
-  safeguardingRiskAlerts      SafeguardingRiskAlert[]
-  sensitiveDataRecords        SensitiveDataRecord[]
+  tenant                 Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home                   Home                    @relation(fields: [homeId], references: [id])
+  avatarFile             UploadedFile?           @relation("YoungPersonAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  keyWorker              Employee?               @relation("YoungPersonKeyWorker", fields: [keyWorkerId], references: [id], onDelete: SetNull)
+  practiceManager        TenantUser?             @relation("YoungPersonPracticeManager", fields: [practiceManagerId], references: [id], onDelete: SetNull)
+  admin                  TenantUser?             @relation("YoungPersonAdmin", fields: [adminUserId], references: [id], onDelete: SetNull)
+  tasks                  Task[]
+  safeguardingRiskAlerts SafeguardingRiskAlert[]
+  sensitiveDataRecords   SensitiveDataRecord[]
 
   @@unique([tenantId, referenceNo])
   @@index([tenantId])
@@ -839,10 +1120,10 @@ model Vehicle {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home             Home?         @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  avatarFile       UploadedFile? @relation("VehicleAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
-  tasks            Task[]
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home       Home?         @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  avatarFile UploadedFile? @relation("VehicleAvatarFile", fields: [avatarFileId], references: [id], onDelete: SetNull)
+  tasks      Task[]
 
   @@index([tenantId])
   @@index([registration])
@@ -854,17 +1135,17 @@ model Vehicle {
 // ─── Form Templates ───────────────────────────────────────────────────────────
 
 model FormTemplate {
-  id          String    @id @default(cuid())
-  key         String    @unique
+  id          String   @id @default(cuid())
+  key         String   @unique
   name        String
   description String?
   group       String
   schemaJson  Json
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tasks       Task[]
+  tasks Task[]
 
   @@index([name])
   @@index([group])
@@ -874,46 +1155,46 @@ model FormTemplate {
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 
 model Task {
-  id               String             @id @default(cuid())
-  tenantId         String
-  category         TaskCategory       @default(task_log)
-  formTemplateKey  String?
-  formName         String?
-  formGroup        String?
+  id                String             @id @default(cuid())
+  tenantId          String
+  category          TaskCategory       @default(task_log)
+  formTemplateKey   String?
+  formName          String?
+  formGroup         String?
   submissionPayload Json?
-  signatureFileId  String?
-  submittedAt      DateTime?
-  submittedById    String?
-  updatedById      String?
-  title            String
-  description      String?
-  status           TaskStatus         @default(pending)
-  approvalStatus   TaskApprovalStatus @default(not_required)
-  priority         TaskPriority       @default(medium)
-  dueDate          DateTime?
-  completedAt      DateTime?
-  rejectionReason  String?
-  approvedAt       DateTime?
-  assigneeId       String?
-  approvedById     String?
-  homeId           String?
-  vehicleId        String?
-  youngPersonId    String?
-  createdById      String?
-  deletedAt        DateTime?
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
+  signatureFileId   String?
+  submittedAt       DateTime?
+  submittedById     String?
+  updatedById       String?
+  title             String
+  description       String?
+  status            TaskStatus         @default(pending)
+  approvalStatus    TaskApprovalStatus @default(not_required)
+  priority          TaskPriority       @default(medium)
+  dueDate           DateTime?
+  completedAt       DateTime?
+  rejectionReason   String?
+  approvedAt        DateTime?
+  assigneeId        String?
+  approvedById      String?
+  homeId            String?
+  vehicleId         String?
+  youngPersonId     String?
+  createdById       String?
+  deletedAt         DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
-  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  formTemplate     FormTemplate?      @relation(fields: [formTemplateKey], references: [key], onDelete: SetNull)
-  assignee         Employee?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
-  approvedBy       Employee?          @relation("TaskApprover", fields: [approvedById], references: [id])
-  home             Home?              @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  vehicle          Vehicle?           @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
-  youngPerson      YoungPerson?       @relation(fields: [youngPersonId], references: [id])
-  signatureFile    UploadedFile?      @relation("TaskSignatureFile", fields: [signatureFileId], references: [id], onDelete: SetNull)
-  references       TaskReference[]
-  reviewEvents     TaskReviewEvent[]
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  formTemplate  FormTemplate?     @relation(fields: [formTemplateKey], references: [key], onDelete: SetNull)
+  assignee      Employee?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  approvedBy    Employee?         @relation("TaskApprover", fields: [approvedById], references: [id])
+  home          Home?             @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  vehicle       Vehicle?          @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  youngPerson   YoungPerson?      @relation(fields: [youngPersonId], references: [id])
+  signatureFile UploadedFile?     @relation("TaskSignatureFile", fields: [signatureFileId], references: [id], onDelete: SetNull)
+  references    TaskReference[]
+  reviewEvents  TaskReviewEvent[]
 
   @@index([tenantId])
   @@index([formTemplateKey])
@@ -942,9 +1223,9 @@ model TaskReviewEvent {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task   Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user   TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, userId])
   @@index([tenantId, userId, reviewedAt])
@@ -952,7 +1233,7 @@ model TaskReviewEvent {
 }
 
 model TaskReference {
-  id         String                  @id @default(cuid())
+  id         String                   @id @default(cuid())
   tenantId   String
   taskId     String
   type       TaskReferenceType
@@ -962,12 +1243,12 @@ model TaskReference {
   url        String?
   label      String?
   metadata   Json?
-  createdAt  DateTime                @default(now())
-  updatedAt  DateTime                @updatedAt
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
 
-  tenant     Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  task       Task                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  file       UploadedFile?           @relation("TaskReferenceFile", fields: [fileId], references: [id], onDelete: SetNull)
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  task   Task          @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  file   UploadedFile? @relation("TaskReferenceFile", fields: [fileId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, taskId])
   @@index([tenantId, type])
@@ -976,10 +1257,10 @@ model TaskReference {
 }
 
 model UploadedFile {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   tenantId       String
   uploadedById   String?
-  storageKey     String       @unique
+  storageKey     String        @unique
   originalName   String
   contentType    String
   sizeBytes      Int
@@ -993,14 +1274,14 @@ model UploadedFile {
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
 
-  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  uploadedBy     User?        @relation("UserUploadedFiles", fields: [uploadedById], references: [id], onDelete: SetNull)
-  homeAvatars    Home[]        @relation("HomeAvatarFile")
-  vehicleAvatars Vehicle[]    @relation("VehicleAvatarFile")
-  youngPersonAvatars YoungPerson[] @relation("YoungPersonAvatarFile")
-  taskSignatures Task[]       @relation("TaskSignatureFile")
-  taskReferences TaskReference[] @relation("TaskReferenceFile")
-  documents DocumentRecord[] @relation("DocumentFile")
+  tenant             Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy         TenantUser?      @relation("UserUploadedFiles", fields: [uploadedById], references: [id], onDelete: SetNull)
+  homeAvatars        Home[]           @relation("HomeAvatarFile")
+  vehicleAvatars     Vehicle[]        @relation("VehicleAvatarFile")
+  youngPersonAvatars YoungPerson[]    @relation("YoungPersonAvatarFile")
+  taskSignatures     Task[]           @relation("TaskSignatureFile")
+  taskReferences     TaskReference[]  @relation("TaskReferenceFile")
+  documents          DocumentRecord[] @relation("DocumentFile")
 
   @@index([tenantId, purpose, status])
   @@index([tenantId, createdAt])
@@ -1023,10 +1304,10 @@ model DocumentRecord {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  tenant       Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  file         UploadedFile       @relation("DocumentFile", fields: [fileId], references: [id], onDelete: Cascade)
-  home         Home?              @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  uploadedBy   User?              @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  tenant     Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  file       UploadedFile @relation("DocumentFile", fields: [fileId], references: [id], onDelete: Cascade)
+  home       Home?        @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  uploadedBy TenantUser?  @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@index([tenantId, category])
   @@index([tenantId, createdAt])
@@ -1037,7 +1318,7 @@ model DocumentRecord {
 }
 
 model ExportJob {
-  id           String         @id @default(cuid())
+  id           String          @id @default(cuid())
   tenantId     String
   createdById  String
   entity       ExportJobEntity
@@ -1046,11 +1327,11 @@ model ExportJob {
   status       ExportJobStatus @default(pending)
   errorMessage String?
   completedAt  DateTime?
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
 
-  tenant       Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy    User           @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy TenantUser @relation(fields: [createdById], references: [id], onDelete: Cascade)
 
   @@index([tenantId, status, createdAt])
   @@index([tenantId, entity, createdAt])
@@ -1058,44 +1339,44 @@ model ExportJob {
 }
 
 model TenantSettings {
-  id                        String   @id @default(cuid())
-  tenantId                  String   @unique
-  timezone                  String   @default("Europe/London")
-  locale                    String   @default("en-GB")
-  dateFormat                String   @default("DD/MM/YYYY")
-  logoUrl                   String?
-  notificationDefaults      Json?
-  passwordPolicy            Json?
-  sessionTimeout            Int?
-  mfaRequired               Boolean  @default(false)
-  ipRestriction             Json?
-  dataRetentionDays         Int?
-  emailNotifications        Boolean  @default(true)
-  pushNotifications         Boolean  @default(true)
-  digestFrequency           String   @default("daily")
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  id                   String   @id @default(cuid())
+  tenantId             String   @unique
+  timezone             String   @default("Europe/London")
+  locale               String   @default("en-GB")
+  dateFormat           String   @default("DD/MM/YYYY")
+  logoUrl              String?
+  notificationDefaults Json?
+  passwordPolicy       Json?
+  sessionTimeout       Int?
+  mfaRequired          Boolean  @default(false)
+  ipRestriction        Json?
+  dataRetentionDays    Int?
+  emailNotifications   Boolean  @default(true)
+  pushNotifications    Boolean  @default(true)
+  digestFrequency      String   @default("daily")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  tenant                    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
 }
 
 model Rota {
-  id          String   @id @default(cuid())
-  tenantId    String
-  homeId      String
+  id           String   @id @default(cuid())
+  tenantId     String
+  homeId       String
   weekStarting DateTime
-  shifts      Json
-  createdById String?
-  updatedById String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  shifts       Json
+  createdById  String?
+  updatedById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
-  createdBy   User?    @relation("RotaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  updatedBy   User?    @relation("RotaUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home        @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  createdBy TenantUser? @relation("RotaCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy TenantUser? @relation("RotaUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, homeId, weekStarting])
   @@index([tenantId, weekStarting])
@@ -1115,9 +1396,9 @@ model RotaTemplate {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home        Home?    @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  createdBy   User?    @relation("RotaTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home      Home?       @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  createdBy TenantUser? @relation("RotaTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([tenantId, homeId, createdAt])
   @@index([createdById])
@@ -1132,23 +1413,23 @@ model Region {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  homeLinks   RegionHome[]
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  homeLinks RegionHome[]
 
   @@unique([tenantId, name])
   @@index([tenantId, isActive, createdAt])
 }
 
 model RegionHome {
-  id         String   @id @default(cuid())
-  tenantId   String
-  regionId   String
-  homeId     String
-  createdAt  DateTime @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  regionId  String
+  homeId    String
+  createdAt DateTime @default(now())
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  region     Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
-  home       Home     @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  region Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+  home   Home   @relation(fields: [homeId], references: [id], onDelete: Cascade)
 
   @@unique([regionId, homeId])
   @@index([tenantId, homeId])
@@ -1156,20 +1437,20 @@ model RegionHome {
 }
 
 model Grouping {
-  id          String            @id @default(cuid())
+  id          String             @id @default(cuid())
   tenantId    String
   name        String
   description String?
-  type        GroupingType      @default(custom)
+  type        GroupingType       @default(custom)
   entityType  GroupingEntityType
-  isActive    Boolean           @default(true)
+  isActive    Boolean            @default(true)
   createdById String?
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
 
-  tenant      Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?             @relation("GroupingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  members     GroupingMember[]
+  tenant    Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy TenantUser?      @relation("GroupingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members   GroupingMember[]
 
   @@unique([tenantId, name, entityType])
   @@index([tenantId, type, isActive, createdAt])
@@ -1177,21 +1458,21 @@ model Grouping {
 }
 
 model GroupingMember {
-  id         String    @id @default(cuid())
+  id         String   @id @default(cuid())
   tenantId   String
   groupingId String
   entityId   String
-  createdAt  DateTime  @default(now())
+  createdAt  DateTime @default(now())
 
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  grouping   Grouping  @relation(fields: [groupingId], references: [id], onDelete: Cascade)
+  tenant   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  grouping Grouping @relation(fields: [groupingId], references: [id], onDelete: Cascade)
 
   @@unique([groupingId, entityId])
   @@index([tenantId, entityId])
 }
 
 model SensitiveDataRecord {
-  id                   String                             @id @default(cuid())
+  id                   String                            @id @default(cuid())
   tenantId             String
   title                String
   category             String
@@ -1200,19 +1481,19 @@ model SensitiveDataRecord {
   homeId               String?
   confidentialityScope SensitiveDataConfidentialityScope @default(confidential)
   retentionDate        DateTime?
-  attachmentFileIds    String[]                           @default([])
+  attachmentFileIds    String[]                          @default([])
   createdById          String
   updatedById          String?
   deletedAt            DateTime?
-  createdAt            DateTime                           @default(now())
-  updatedAt            DateTime                           @updatedAt
+  createdAt            DateTime                          @default(now())
+  updatedAt            DateTime                          @updatedAt
 
-  tenant               Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  youngPerson          YoungPerson?                       @relation(fields: [youngPersonId], references: [id], onDelete: SetNull)
-  home                 Home?                              @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  createdBy            User                               @relation("SensitiveDataCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
-  updatedBy            User?                              @relation("SensitiveDataUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
-  accessLogs           SensitiveDataAccessLog[]
+  tenant      Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  youngPerson YoungPerson?             @relation(fields: [youngPersonId], references: [id], onDelete: SetNull)
+  home        Home?                    @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  createdBy   TenantUser               @relation("SensitiveDataCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedBy   TenantUser?              @relation("SensitiveDataUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  accessLogs  SensitiveDataAccessLog[]
 
   @@index([tenantId, category, createdAt])
   @@index([tenantId, confidentialityScope, createdAt])
@@ -1223,16 +1504,16 @@ model SensitiveDataRecord {
 }
 
 model SensitiveDataAccessLog {
-  id         String              @id @default(cuid())
-  tenantId   String
-  recordId   String
-  userId     String
-  action     String              @default("view")
-  createdAt  DateTime            @default(now())
+  id        String   @id @default(cuid())
+  tenantId  String
+  recordId  String
+  userId    String
+  action    String   @default("view")
+  createdAt DateTime @default(now())
 
-  tenant     Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  record     SensitiveDataRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
-  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  record SensitiveDataRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  user   TenantUser          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, recordId, createdAt])
   @@index([userId, createdAt])
@@ -1241,19 +1522,19 @@ model SensitiveDataAccessLog {
 // ─── Announcements ────────────────────────────────────────────────────────────
 
 model Announcement {
-  id          String    @id @default(cuid())
+  id          String             @id @default(cuid())
   tenantId    String
   title       String
   body        String
-  images      String[]  @default([])
-  publishedAt DateTime  @default(now())
+  images      String[]           @default([])
+  publishedAt DateTime           @default(now())
   expiresAt   DateTime?
   authorId    String?
-  isPinned    Boolean   @default(false)
+  isPinned    Boolean            @default(false)
   deletedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   reads       AnnouncementRead[]
 
   @@index([tenantId])
@@ -1263,14 +1544,14 @@ model Announcement {
 }
 
 model AnnouncementRead {
-  id             String        @id @default(cuid())
+  id             String   @id @default(cuid())
   announcementId String
   userId         String
-  readAt         DateTime      @default(now())
-  createdAt      DateTime      @default(now())
+  readAt         DateTime @default(now())
+  createdAt      DateTime @default(now())
 
-  announcement   Announcement  @relation(fields: [announcementId], references: [id], onDelete: Cascade)
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         TenantUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([announcementId, userId])
   @@index([announcementId])
@@ -1281,17 +1562,17 @@ model AnnouncementRead {
 // ─── Dashboard Widgets ────────────────────────────────────────────────────────
 
 model Widget {
-  id         String   @id @default(cuid())
-  tenantId   String
-  userId     String
-  title      String
-  period     String   // e.g. "last_7_days", "last_30_days", "this_month", "this_year"
-  reportsOn  String   // e.g. "tasks", "approvals", "young_people"
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String
+  title     String
+  period    String // e.g. "last_7_days", "last_30_days", "this_month", "this_year"
+  reportsOn String // e.g. "tasks", "approvals", "young_people"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   TenantUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
   @@index([userId])
@@ -1300,47 +1581,54 @@ model Widget {
 // ─── Audit Logs ───────────────────────────────────────────────────────────────
 
 model AuditLog {
-  id         String      @id @default(cuid())
-  tenantId   String?
-  userId     String?
-  action     AuditAction
-  entityType String?
-  entityId   String?
-  metadata   Json?
-  ipAddress  String?
-  userAgent  String?
-  createdAt  DateTime    @default(now())
+  id             String      @id @default(cuid())
+  tenantId       String?
+  userId         String?
+  // Phase 5: when an action was performed by a Zikel platform user via an
+  // active ImpersonationGrant, this is set to the platform user's id. The
+  // audit-log Prisma extension auto-stamps it from request context, so the
+  // trail is "what looked like userId X actually came from platform Y".
+  impersonatorId String?
+  action         AuditAction
+  entityType     String?
+  entityId       String?
+  metadata       Json?
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime    @default(now())
 
-  tenant     Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  user       User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  tenant                Tenant?                @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user                  TenantUser?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+  impersonator          PlatformUser?          @relation("AuditLogImpersonator", fields: [impersonatorId], references: [id], onDelete: SetNull)
   securityAlertDelivery SecurityAlertDelivery?
 
   @@index([tenantId])
   @@index([userId])
+  @@index([impersonatorId])
   @@index([action])
   @@index([entityType, entityId])
   @@index([createdAt])
 }
 
 model SecurityAlertDelivery {
-  id          String                      @id @default(cuid())
-  auditLogId  String                      @unique
-  tenantId    String?
-  userId      String?
-  type        SecurityAlertType
-  severity    SecurityAlertSeverity
-  status      SecurityAlertDeliveryStatus @default(pending)
-  attemptCount Int                        @default(0)
-  lastError   String?
-  payload     Json
-  webhookUrl  String?
+  id           String                      @id @default(cuid())
+  auditLogId   String                      @unique
+  tenantId     String?
+  userId       String?
+  type         SecurityAlertType
+  severity     SecurityAlertSeverity
+  status       SecurityAlertDeliveryStatus @default(pending)
+  attemptCount Int                         @default(0)
+  lastError    String?
+  payload      Json
+  webhookUrl   String?
   dispatchedAt DateTime?
-  createdAt   DateTime                    @default(now())
-  updatedAt   DateTime                    @updatedAt
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime                    @updatedAt
 
-  auditLog    AuditLog                    @relation(fields: [auditLogId], references: [id], onDelete: Cascade)
-  tenant      Tenant?                     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
-  user        User?                       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  auditLog AuditLog    @relation(fields: [auditLogId], references: [id], onDelete: Cascade)
+  tenant   Tenant?     @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+  user     TenantUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
   @@index([tenantId, type, createdAt])
@@ -1352,7 +1640,7 @@ model SafeguardingRiskAlert {
   tenantId         String
   type             SafeguardingRiskAlertType
   severity         SafeguardingRiskAlertSeverity
-  status           SafeguardingRiskAlertStatus    @default(new)
+  status           SafeguardingRiskAlertStatus     @default(new)
   targetType       SafeguardingRiskAlertTargetType
   targetId         String
   homeId           String?
@@ -1376,13 +1664,13 @@ model SafeguardingRiskAlert {
   createdAt        DateTime                        @default(now())
   updatedAt        DateTime                        @updatedAt
 
-  tenant           Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  home             Home?                           @relation(fields: [homeId], references: [id], onDelete: SetNull)
-  youngPerson      YoungPerson?                    @relation(fields: [youngPersonId], references: [id], onDelete: SetNull)
-  ownerUser        User?                           @relation("SafeguardingRiskAlertOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  acknowledgedBy   User?                           @relation("SafeguardingRiskAlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
-  resolvedBy       User?                           @relation("SafeguardingRiskAlertResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
-  notes            SafeguardingRiskAlertNote[]
+  tenant         Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home           Home?                       @relation(fields: [homeId], references: [id], onDelete: SetNull)
+  youngPerson    YoungPerson?                @relation(fields: [youngPersonId], references: [id], onDelete: SetNull)
+  ownerUser      TenantUser?                 @relation("SafeguardingRiskAlertOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  acknowledgedBy TenantUser?                 @relation("SafeguardingRiskAlertAcknowledgedBy", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  resolvedBy     TenantUser?                 @relation("SafeguardingRiskAlertResolvedBy", fields: [resolvedById], references: [id], onDelete: SetNull)
+  notes          SafeguardingRiskAlertNote[]
 
   @@unique([tenantId, dedupeKey])
   @@index([tenantId, status, severity, updatedAt])
@@ -1393,18 +1681,18 @@ model SafeguardingRiskAlert {
 }
 
 model SafeguardingRiskAlertNote {
-  id           String                 @id @default(cuid())
+  id           String   @id @default(cuid())
   alertId      String
   tenantId     String
   userId       String
   note         String
-  isEscalation Boolean                @default(false)
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
+  isEscalation Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  alert        SafeguardingRiskAlert  @relation(fields: [alertId], references: [id], onDelete: Cascade)
-  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  alert  SafeguardingRiskAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  tenant Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   TenantUser            @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([alertId, createdAt])
   @@index([tenantId, createdAt])
@@ -1426,7 +1714,7 @@ model FaqArticle {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  createdBy   User?     @relation("UserFaqArticles", fields: [createdById], references: [id], onDelete: SetNull)
+  createdBy TenantUser? @relation("UserFaqArticles", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([category])
   @@index([isPublished])
@@ -1436,23 +1724,23 @@ model FaqArticle {
 // ─── Help Center: Support Tickets ────────────────────────────────────────────
 
 model SupportTicket {
-  id          String          @id @default(cuid())
+  id          String         @id @default(cuid())
   tenantId    String
   userId      String
   title       String
   description String
-  status      TicketStatus    @default(open)
-  priority    TicketPriority  @default(medium)
-  category    TicketCategory  @default(general_question)
+  status      TicketStatus   @default(open)
+  priority    TicketPriority @default(medium)
+  category    TicketCategory @default(general_question)
   externalId  String?
   resolvedAt  DateTime?
   closedAt    DateTime?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user        User            @relation("UserSupportTickets", fields: [userId], references: [id], onDelete: Cascade)
-  comments    TicketComment[]
+  tenant   Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     TenantUser      @relation("UserSupportTickets", fields: [userId], references: [id], onDelete: Cascade)
+  comments TicketComment[]
 
   @@index([tenantId, status])
   @@index([userId])
@@ -1462,16 +1750,16 @@ model SupportTicket {
 }
 
 model TicketComment {
-  id         String        @id @default(cuid())
+  id         String   @id @default(cuid())
   ticketId   String
   userId     String
   body       String
-  isInternal Boolean       @default(false)
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  isInternal Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  user       User          @relation("UserTicketComments", fields: [userId], references: [id], onDelete: Cascade)
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   TenantUser    @relation("UserTicketComments", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([ticketId, createdAt])
   @@index([userId])
@@ -1491,9 +1779,9 @@ model Notification {
   expiresAt   DateTime?
   createdAt   DateTime             @default(now())
 
-  tenant      Tenant?              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?                @relation("UserCreatedNotifications", fields: [createdById], references: [id], onDelete: SetNull)
-  recipients  NotificationRecipient[]
+  tenant     Tenant?                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  TenantUser?             @relation("UserCreatedNotifications", fields: [createdById], references: [id], onDelete: SetNull)
+  recipients NotificationRecipient[]
 
   @@index([level, createdAt])
   @@index([tenantId, createdAt])
@@ -1502,14 +1790,14 @@ model Notification {
 }
 
 model NotificationRecipient {
-  id             String       @id @default(cuid())
+  id             String    @id @default(cuid())
   notificationId String
   userId         String
   readAt         DateTime?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime  @default(now())
 
-  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  user           User         @relation("UserNotificationRecipients", fields: [userId], references: [id], onDelete: Cascade)
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         TenantUser   @relation("UserNotificationRecipients", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([notificationId, userId])
   @@index([userId, readAt])
@@ -1524,7 +1812,7 @@ model NotificationPreference {
   createdAt DateTime             @default(now())
   updatedAt DateTime             @updatedAt
 
-  user      User                 @relation("UserNotificationPreferences", fields: [userId], references: [id], onDelete: Cascade)
+  user TenantUser @relation("UserNotificationPreferences", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, category])
   @@index([userId])
@@ -1533,38 +1821,130 @@ model NotificationPreference {
 // ─── Webhook Configuration ───────────────────────────────────────────────────
 
 model WebhookEndpoint {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   tenantId    String
   url         String
   secret      String
   events      String[]
-  isActive    Boolean   @default(true)
+  isActive    Boolean  @default(true)
   description String?
   createdById String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  createdBy   User?     @relation("UserWebhookEndpoints", fields: [createdById], references: [id], onDelete: SetNull)
-  deliveries  WebhookDelivery[]
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy  TenantUser?       @relation("UserWebhookEndpoints", fields: [createdById], references: [id], onDelete: SetNull)
+  deliveries WebhookDelivery[]
 
   @@index([tenantId, isActive])
 }
 
 model WebhookDelivery {
-  id           String          @id @default(cuid())
+  id           String    @id @default(cuid())
   endpointId   String
   eventType    String
-  status       String          @default("pending")
+  status       String    @default("pending")
   payload      Json
-  attemptCount Int             @default(0)
+  attemptCount Int       @default(0)
   lastError    String?
   dispatchedAt DateTime?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  endpoint     WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
 
   @@index([endpointId, status])
   @@index([status, createdAt])
+}
+
+// ─── AI usage tracking (Phase 8.1) ───────────────────────────────────────────
+//
+// One row per AI invocation across every surface (chat, dashboard cards,
+// chronology narrative). Captures token counts when the provider returns them
+// so we can attribute spend, build the metering ledger (Phase 7.4), and have
+// the data needed to set sensible quota numbers.
+//
+// Always written, regardless of outcome — including fallback / error / quota
+// blocked — so spend monitoring is comprehensive.
+
+enum AiCallSurface {
+  chat
+  chat_title
+  dashboard_card
+  chronology_narrative
+}
+
+enum AiCallStatus {
+  success
+  fallback
+  error
+  quota_blocked
+}
+
+model AiCallEvent {
+  id          String        @id @default(cuid())
+  tenantId    String
+  userId      String?
+  surface     AiCallSurface
+  model       String?
+  status      AiCallStatus
+  tokensIn    Int?
+  tokensOut   Int?
+  latencyMs   Int?
+  errorReason String?
+  createdAt   DateTime      @default(now())
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   TenantUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, userId, createdAt])
+  @@index([surface, createdAt])
+}
+
+// ─── Conversational AI (Phase 8.2) ───────────────────────────────────────────
+//
+// Multi-turn chat surface. Each conversation belongs to one TenantUser; many
+// conversations per user (ChatGPT-sidebar style). Pure free-form — NO page
+// binding. History is sent to the model on each turn so the user can redirect
+// the discussion to anything within the platform's scope.
+
+enum AiMessageRole {
+  user
+  assistant
+  system
+}
+
+model AiConversation {
+  id         String    @id @default(cuid())
+  tenantId   String
+  userId     String
+  title      String?
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     TenantUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages AiMessage[]
+
+  @@index([tenantId, userId, updatedAt])
+  @@index([tenantId, archivedAt])
+}
+
+model AiMessage {
+  id             String        @id @default(cuid())
+  conversationId String
+  role           AiMessageRole
+  content        String
+  tokensIn       Int?
+  tokensOut      Int?
+  model          String?
+  fallbackUsed   Boolean       @default(false)
+  errorReason    String?
+  createdAt      DateTime      @default(now())
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
 }

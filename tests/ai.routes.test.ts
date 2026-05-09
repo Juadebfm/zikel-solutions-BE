@@ -1,12 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 
-const { askAi, setUserAiAccess } = vi.hoisted(() => ({
+const { askAi, setUserAiAccess, mockPrisma } = vi.hoisted(() => ({
   askAi: vi.fn(),
   setUserAiAccess: vi.fn(),
+  mockPrisma: {
+    tenantUser: { findUnique: vi.fn() },
+    auditLog: { create: vi.fn(async () => ({ id: 'audit_1' })) },
+    $transaction: vi.fn(),
+    $disconnect: vi.fn(async () => undefined),
+    $on: vi.fn(),
+  },
 }));
 
 vi.mock('../src/modules/ai/ai.service.js', () => ({ askAi, setUserAiAccess }));
+vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
@@ -24,8 +32,30 @@ afterAll(async () => {
   await app.close();
 });
 
+// Owner permissions cover ai:admin so requirePermission(AI_ADMIN) passes.
+const OWNER_PERMS = [
+  'ai:use', 'ai:admin',
+  'employees:read', 'homes:read', 'young_people:read', 'tasks:read',
+  'safeguarding:read', 'reports:read', 'settings:read',
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default tenant context: an Owner with all permissions. Any test that
+  // wants a denied path can override this mockResolvedValueOnce.
+  mockPrisma.tenantUser.findUnique.mockResolvedValue({
+    id: 'user_default',
+    role: 'admin',
+    activeTenantId: 'tenant_1',
+    activeTenant: { id: 'tenant_1', isActive: true },
+    tenantMemberships: [
+      {
+        tenantId: 'tenant_1',
+        status: 'active',
+        role: { name: 'Owner', permissions: OWNER_PERMS },
+      },
+    ],
+  });
 });
 
 function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'manager') {
@@ -33,6 +63,10 @@ function authHeader(userId = 'user_1', role: 'staff' | 'manager' | 'admin' = 'ma
     sub: userId,
     email: `${userId}@example.com`,
     role,
+    tenantId: 'tenant_1',
+    tenantRole: 'tenant_admin',
+    mfaVerified: true,
+    aud: 'tenant',
   });
   return { authorization: `Bearer ${token}` };
 }
@@ -65,42 +99,24 @@ describe('AI routes', () => {
 
   it('returns ask-ai payload on success', async () => {
     askAi.mockResolvedValueOnce({
-      answer: 'Focus on overdue tasks first.',
-      suggestions: [{ label: 'Review overdue tasks', action: 'open_summary_todos_overdue' }],
+      message: 'Focus on overdue tasks first.',
+      highlights: [{
+        title: 'Review overdue tasks',
+        reason: 'Three tasks are past due',
+        urgency: 'high',
+        action: 'open_summary_todos_overdue',
+      }],
+      tip: 'Take one step at a time.',
+      actions: [{ label: 'Review overdue tasks', action: 'open_summary_todos_overdue' }],
       source: 'fallback',
-      model: null,
-      statsSource: 'server',
       generatedAt: '2026-03-12T07:00:00.000Z',
-      minimalResponse: {
-        enabled: true,
-        headline: 'Start with overdue tasks.',
-        focusNow: ['Review overdue tasks'],
-        nextLook: 'Review overdue tasks',
-        reassurance: 'Take one step at a time.',
-      },
-      languageSafety: {
-        nonBlamingGuardrailsApplied: false,
-        flaggedTerms: [],
-        rubric: {
-          version: 'pace-language-v1',
-          passed: true,
-          checks: {
-            nonBlamingLanguage: true,
-            avoidsDiagnosisOrLegalConclusion: true,
-            evidenceGrounded: true,
-          },
-          notes: [],
-        },
-      },
-      promptQa: {
-        version: 'pace-language-v1',
-        passed: true,
-        checks: {
-          nonBlamingLanguage: true,
-          avoidsDiagnosisOrLegalConclusion: true,
-          evidenceGrounded: true,
-        },
-        notes: [],
+      meta: {
+        model: null,
+        page: 'summary',
+        strengthProfile: 'staff',
+        responseMode: 'focused',
+        statsSource: 'server',
+        languageSafetyPassed: true,
       },
     });
 
@@ -121,49 +137,27 @@ describe('AI routes', () => {
       success: true,
       data: {
         source: 'fallback',
-        model: null,
+        message: 'Focus on overdue tasks first.',
+        meta: { model: null, statsSource: 'server' },
       },
     });
   });
 
   it('accepts daily_logs page payload', async () => {
     askAi.mockResolvedValueOnce({
-      answer: 'Daily logs summary.',
-      suggestions: [{ label: 'Show submitted logs', action: 'filter_daily_logs_submitted' }],
+      message: 'Daily logs summary.',
+      highlights: [],
+      tip: null,
+      actions: [{ label: 'Show submitted logs', action: 'filter_daily_logs_submitted' }],
       source: 'fallback',
-      model: null,
-      statsSource: 'none',
       generatedAt: '2026-03-12T07:00:00.000Z',
-      minimalResponse: {
-        enabled: true,
-        headline: 'Review submitted logs first.',
-        focusNow: ['Review submitted logs'],
-        nextLook: 'Show submitted logs',
-        reassurance: 'Keep updates concise and factual.',
-      },
-      languageSafety: {
-        nonBlamingGuardrailsApplied: false,
-        flaggedTerms: [],
-        rubric: {
-          version: 'pace-language-v1',
-          passed: true,
-          checks: {
-            nonBlamingLanguage: true,
-            avoidsDiagnosisOrLegalConclusion: true,
-            evidenceGrounded: true,
-          },
-          notes: [],
-        },
-      },
-      promptQa: {
-        version: 'pace-language-v1',
-        passed: true,
-        checks: {
-          nonBlamingLanguage: true,
-          avoidsDiagnosisOrLegalConclusion: true,
-          evidenceGrounded: true,
-        },
-        notes: [],
+      meta: {
+        model: null,
+        page: 'daily_logs',
+        strengthProfile: 'staff',
+        responseMode: 'focused',
+        statsSource: 'none',
+        languageSafetyPassed: true,
       },
     });
 
@@ -206,6 +200,21 @@ describe('AI routes', () => {
   });
 
   it('forbids non-admin users from toggling AI access', async () => {
+    // Override default Owner mock — Care Worker role lacks `ai:admin` permission.
+    mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
+      id: 'manager_1',
+      role: 'manager',
+      activeTenantId: 'tenant_1',
+      activeTenant: { id: 'tenant_1', isActive: true },
+      tenantMemberships: [
+        {
+          tenantId: 'tenant_1',
+          status: 'active',
+          role: { name: 'Care Worker', permissions: ['ai:use'] },
+        },
+      ],
+    });
+
     const res = await app.inject({
       method: 'PATCH',
       url: '/api/v1/ai/access/user_24',

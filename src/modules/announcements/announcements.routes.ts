@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
-import { requireScopedRole } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { Permissions as P } from '../../auth/permissions.js';
 import * as announcementsService from './announcements.service.js';
 import {
   CreateAnnouncementBodySchema,
@@ -131,10 +132,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin'],
-        tenantRoles: ['tenant_admin'],
-      }),
+      requirePermission(P.ANNOUNCEMENTS_WRITE),
     ],
     schema: {
       tags: ['Announcements'],
@@ -172,10 +170,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.patch('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin'],
-        tenantRoles: ['tenant_admin'],
-      }),
+      requirePermission(P.ANNOUNCEMENTS_WRITE),
     ],
     schema: {
       tags: ['Announcements'],
@@ -216,10 +211,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.delete('/:id', {
     preHandler: [
-      requireScopedRole({
-        globalRoles: ['super_admin', 'admin'],
-        tenantRoles: ['tenant_admin'],
-      }),
+      requirePermission(P.ANNOUNCEMENTS_WRITE),
     ],
     schema: {
       tags: ['Announcements'],

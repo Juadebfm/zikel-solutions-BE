@@ -115,7 +115,6 @@ async function buildExportPayload(tenantId: string, entity: ExportJobEntity, fil
       include: {
         user: { select: { firstName: true, lastName: true, email: true } },
         home: { select: { name: true } },
-        role: { select: { name: true } },
       },
     });
 
@@ -126,7 +125,6 @@ async function buildExportPayload(tenantId: string, entity: ExportJobEntity, fil
         { header: 'Name', key: 'name', width: 140 },
         { header: 'Email', key: 'email', width: 160 },
         { header: 'Home', key: 'home', width: 120 },
-        { header: 'Role', key: 'role', width: 120 },
         { header: 'Job Title', key: 'jobTitle', width: 120 },
         { header: 'Status', key: 'status', width: 80 },
       ],
@@ -134,7 +132,6 @@ async function buildExportPayload(tenantId: string, entity: ExportJobEntity, fil
         name: `${row.user.firstName ?? ''} ${row.user.lastName ?? ''}`.trim(),
         email: row.user.email,
         home: row.home?.name ?? null,
-        role: row.role?.name ?? null,
         jobTitle: row.jobTitle,
         status: row.status,
       })),

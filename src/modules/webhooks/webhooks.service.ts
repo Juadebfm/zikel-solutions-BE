@@ -14,7 +14,7 @@ type WebhookActorContext = {
 
 async function resolveWebhookActor(userId: string): Promise<WebhookActorContext> {
   const tenant = await requireTenantContext(userId);
-  const user = await prisma.user.findUnique({
+  const user = await prisma.tenantUser.findUnique({
     where: { id: userId },
     select: { id: true, role: true },
   });
@@ -30,7 +30,7 @@ async function resolveWebhookActor(userId: string): Promise<WebhookActorContext>
 }
 
 function isWebhookAdmin(actor: WebhookActorContext) {
-  if (actor.userRole === UserRole.super_admin || actor.userRole === UserRole.admin) return true;
+  if (actor.userRole === UserRole.admin) return true;
   return actor.tenantRole === TenantRole.tenant_admin || actor.tenantRole === TenantRole.sub_admin;
 }
 
