@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import {
   CreateCalendarEventBodySchema,
   ListCalendarEventsQuerySchema,
@@ -14,6 +15,7 @@ import * as calendarService from './calendar.service.js';
 const calendarRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   fastify.get('/events', {
     schema: {

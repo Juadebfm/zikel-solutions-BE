@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as uploadsService from './uploads.service.js';
 import {
   CompleteUploadBodySchema,
@@ -12,6 +13,7 @@ import {
 const uploadsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   fastify.post('/sessions', {
     schema: {

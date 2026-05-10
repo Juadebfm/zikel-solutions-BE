@@ -7,6 +7,7 @@ import {
   readTherapeuticRouteConfig,
 } from '../../lib/therapeutic-rollout.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as reportsService from './reports.service.js';
@@ -22,6 +23,7 @@ import {
 const reportsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
   fastify.addHook('preHandler', async (request) => {
     const config = readTherapeuticRouteConfig(request);
     if (!config) return;

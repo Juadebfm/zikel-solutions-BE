@@ -21,6 +21,7 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertAiEnabledForRequest, recordAiCall } from '../../lib/ai-access.js';
+import { debitQuota, requireAvailableQuota } from '../../lib/quota.js';
 import type {
   ChronologyEventType,
   ChronologyQuery,
@@ -659,6 +660,21 @@ async function buildNarrative(args: {
     return fallback;
   }
 
+  // Phase 7.4: quota check. Same silent-fallback pattern as the access gate
+  // above — chronology narrative is optional, so a quota miss returns the
+  // deterministic fallback rather than 402-ing the whole chronology read.
+  let allocationId: string | null = null;
+  try {
+    const quota = await requireAvailableQuota({
+      tenantId: args.tenantId,
+      userId: args.actorUserId,
+      surface: AiCallSurface.chronology_narrative,
+    });
+    allocationId = quota.allocationId;
+  } catch {
+    return fallback;
+  }
+
   const callStartedAt = Date.now();
   const result = await generateModelNarrative({
     targetType: args.targetType,
@@ -667,6 +683,16 @@ async function buildNarrative(args: {
     fallback,
   });
   const latencyMs = Date.now() - callStartedAt;
+
+  // Phase 7.4: debit the pool. Always debit, even on fallback — the model
+  // call still happened and consumed our budget. Per the risk register in
+  // payment.md.
+  await debitQuota({
+    tenantId: args.tenantId,
+    userId: args.actorUserId,
+    allocationId,
+    surface: AiCallSurface.chronology_narrative,
+  });
 
   // Fire-and-forget AiCallEvent.
   void recordAiCall({

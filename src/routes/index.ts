@@ -5,6 +5,7 @@ import meRoutes from '../modules/me/me.routes.js';
 import publicRoutes from '../modules/public/public.routes.js';
 import aiRoutes from '../modules/ai/ai.routes.js';
 import aiConversationsRoutes from '../modules/ai/conversations.routes.js';
+import billingRoutes from '../modules/billing/billing.routes.js';
 import announcementsRoutes from '../modules/announcements/announcements.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
 import dashboardRoutes from '../modules/dashboard/dashboard.routes.js';
@@ -22,6 +23,7 @@ import documentsRoutes from '../modules/documents/documents.routes.js';
 import roleRoutes from '../modules/roles/roles.routes.js';
 import auditRoutes from '../modules/audit/audit.routes.js';
 import integrationsRoutes from '../modules/integrations/integrations.routes.js';
+import billingWebhookRoutes from '../modules/billing/webhook.routes.js';
 import helpCenterRoutes from '../modules/help-center/help-center.routes.js';
 import notificationsRoutes from '../modules/notifications/notifications.routes.js';
 import webhooksRoutes from '../modules/webhooks/webhooks.routes.js';
@@ -39,6 +41,7 @@ import adminMfaRoutes from '../modules/admin/admin-mfa.routes.js';
 import adminTenantRoutes from '../modules/admin/admin-tenants.routes.js';
 import adminAuditRoutes from '../modules/admin/admin-audit.routes.js';
 import adminNotificationsRoutes from '../modules/admin/admin-notifications.routes.js';
+import adminBillingRoutes from '../modules/admin/admin-billing.routes.js';
 import impersonationRoutes from '../modules/admin/impersonation.routes.js';
 import mfaRoutes from '../modules/auth/mfa.routes.js';
 import invitationRoutes, { publicInvitationRoutes } from '../modules/auth/invitations.routes.js';
@@ -56,6 +59,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await admin.register(adminTenantRoutes, { prefix: '/tenants' });
       await admin.register(adminAuditRoutes, { prefix: '/audit' });
       await admin.register(adminNotificationsRoutes, { prefix: '/notifications' });
+      await admin.register(adminBillingRoutes, { prefix: '/billing' });
       await admin.register(impersonationRoutes);
     },
     { prefix: '/admin' },
@@ -72,6 +76,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(publicRoutes, { prefix: '/public' });
       await v1.register(aiRoutes, { prefix: '/ai' });
       await v1.register(aiConversationsRoutes, { prefix: '/ai/conversations' });
+      await v1.register(billingRoutes, { prefix: '/billing' });
       await v1.register(announcementsRoutes, { prefix: '/announcements' });
       await v1.register(summaryRoutes, { prefix: '/summary' });
       await v1.register(dashboardRoutes, { prefix: '/dashboard' });
@@ -89,6 +94,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(roleRoutes, { prefix: '/roles' });
       await v1.register(auditRoutes, { prefix: '/audit' });
       await v1.register(integrationsRoutes, { prefix: '/integrations' });
+      await v1.register(billingWebhookRoutes, { prefix: '/integrations/billing' });
       await v1.register(helpCenterRoutes, { prefix: '/help-center' });
       await v1.register(notificationsRoutes, { prefix: '/notifications' });
       await v1.register(webhooksRoutes, { prefix: '/webhooks' });

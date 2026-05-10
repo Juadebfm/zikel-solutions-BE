@@ -113,6 +113,30 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().min(1).optional(),
   RESEND_FROM_EMAIL: z.email({ error: 'RESEND_FROM_EMAIL must be a valid email address' }).optional(),
 
+  // Stripe (Phase 7) — billing & subscriptions.
+  // Optional in dev (billing routes return 503 if unset). Required in prod.
+  // Pin Stripe API version explicitly — Stripe ships breaking changes; do
+  // NOT auto-upgrade by leaving the SDK to pick the default.
+  STRIPE_SECRET_KEY: z.string().min(1).optional(),
+  STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  STRIPE_API_VERSION: z.string().min(1).default('2025-08-27.basil'),
+  STRIPE_PRICE_ID_MONTHLY: z.string().min(1).optional(),
+  STRIPE_PRICE_ID_ANNUAL: z.string().min(1).optional(),
+  STRIPE_PRICE_ID_TOPUP_SMALL: z.string().min(1).optional(),
+  STRIPE_PRICE_ID_TOPUP_MEDIUM: z.string().min(1).optional(),
+  STRIPE_PRICE_ID_TOPUP_LARGE: z.string().min(1).optional(),
+  // FE return URLs after Stripe-hosted checkout / portal.
+  BILLING_CHECKOUT_SUCCESS_URL: z
+    .url({ error: 'BILLING_CHECKOUT_SUCCESS_URL must be a valid URL' })
+    .optional(),
+  BILLING_CHECKOUT_CANCEL_URL: z
+    .url({ error: 'BILLING_CHECKOUT_CANCEL_URL must be a valid URL' })
+    .optional(),
+  BILLING_PORTAL_RETURN_URL: z
+    .url({ error: 'BILLING_PORTAL_RETURN_URL must be a valid URL' })
+    .optional(),
+
   // Security alert pipeline
   SECURITY_ALERT_PIPELINE_ENABLED: z
     .enum(['true', 'false'])
@@ -346,6 +370,34 @@ function parseEnv(): Env {
 
   if (parsed.AI_ENABLED && !parsed.AI_API_KEY) {
     throw new Error('AI_API_KEY is required when AI_ENABLED=true.');
+  }
+
+  // Phase 7: Stripe is optional in dev (billing routes return 503 if unset)
+  // but in staging/prod we want to fail fast if billing is partially wired.
+  if (parsed.NODE_ENV === 'staging' || parsed.NODE_ENV === 'production') {
+    const stripePartial =
+      parsed.STRIPE_SECRET_KEY ||
+      parsed.STRIPE_WEBHOOK_SECRET ||
+      parsed.STRIPE_PRICE_ID_MONTHLY ||
+      parsed.STRIPE_PRICE_ID_ANNUAL;
+    if (stripePartial) {
+      const missing: string[] = [];
+      if (!parsed.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
+      if (!parsed.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
+      if (!parsed.STRIPE_PRICE_ID_MONTHLY) missing.push('STRIPE_PRICE_ID_MONTHLY');
+      if (!parsed.STRIPE_PRICE_ID_ANNUAL) missing.push('STRIPE_PRICE_ID_ANNUAL');
+      if (!parsed.STRIPE_PRICE_ID_TOPUP_SMALL) missing.push('STRIPE_PRICE_ID_TOPUP_SMALL');
+      if (!parsed.STRIPE_PRICE_ID_TOPUP_MEDIUM) missing.push('STRIPE_PRICE_ID_TOPUP_MEDIUM');
+      if (!parsed.STRIPE_PRICE_ID_TOPUP_LARGE) missing.push('STRIPE_PRICE_ID_TOPUP_LARGE');
+      if (!parsed.BILLING_CHECKOUT_SUCCESS_URL) missing.push('BILLING_CHECKOUT_SUCCESS_URL');
+      if (!parsed.BILLING_CHECKOUT_CANCEL_URL) missing.push('BILLING_CHECKOUT_CANCEL_URL');
+      if (!parsed.BILLING_PORTAL_RETURN_URL) missing.push('BILLING_PORTAL_RETURN_URL');
+      if (missing.length > 0) {
+        throw new Error(
+          `Stripe billing is partially configured but missing: ${missing.join(', ')}. Set all Stripe env vars or none.`,
+        );
+      }
+    }
   }
 
   if (parsed.THERAPEUTIC_PILOT_MODE_ENABLED) {

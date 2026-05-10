@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import { generateExport, type ExportColumn } from '../../lib/export.js';
@@ -18,6 +19,7 @@ import {
 const employeeRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   fastify.get('/', {
     schema: {
