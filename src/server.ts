@@ -16,6 +16,8 @@ import authPlugin from './plugins/auth.js';
 import rootRouter from './routes/index.js';
 import { startSafeguardingRiskBackfillScheduler } from './modules/safeguarding/risk-alerts.scheduler.js';
 import { startOtpRetentionScheduler } from './lib/otp-retention.js';
+import { seedBillingProducts } from './modules/billing/billing.seed.js';
+import { startPastDueScheduler } from './modules/billing/past-due.scheduler.js';
 
 function buildAuditSource(request: FastifyRequest) {
   const routePath = request.routeOptions?.url ?? request.url.split('?')[0];
@@ -112,6 +114,18 @@ export async function buildApp() {
 
   const stopSafeguardingRiskBackfillScheduler = startSafeguardingRiskBackfillScheduler();
   const stopOtpRetentionScheduler = startOtpRetentionScheduler();
+  const stopPastDueScheduler = startPastDueScheduler();
+
+  // Phase 7.5: idempotent seed of Plan + TopUpPack rows. Reads Stripe price
+  // ids from env. No-op if env is unset (engineers see info logs telling
+  // them billing isn't wired). Fire-and-forget — boot continues even if
+  // seeding hits a transient DB error.
+  void seedBillingProducts().catch((err: unknown) => {
+    logger.warn({
+      msg: 'Billing product seed failed at boot',
+      err: err instanceof Error ? err.message : 'unknown',
+    });
+  });
 
   let clearDbKeepAliveTimer = () => {};
   if (env.DB_KEEPALIVE_ENABLED) {
@@ -127,6 +141,7 @@ export async function buildApp() {
     clearDbKeepAliveTimer();
     stopSafeguardingRiskBackfillScheduler();
     stopOtpRetentionScheduler();
+    stopPastDueScheduler();
   });
 
   return fastify;

@@ -31,6 +31,7 @@ import {
   assertAiEnabledForRequest,
   recordAiCall,
 } from '../../lib/ai-access.js';
+import { debitQuota, requireAvailableQuota } from '../../lib/quota.js';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -310,6 +311,15 @@ export async function postMessage(args: {
     throw httpError(409, 'CONVERSATION_ARCHIVED', 'Cannot post to an archived conversation. Unarchive it first.');
   }
 
+  // Phase 7.4: quota check BEFORE we persist anything. Fails fast with 402
+  // if pool is exhausted or per-user/per-role cap hit. We use the snapshot's
+  // allocationId on the debit below to keep both halves in lockstep.
+  const quota = await requireAvailableQuota({
+    tenantId: access.tenantId,
+    userId: args.userId,
+    surface: AiCallSurface.chat,
+  });
+
   // Persist the user message before the model call so it's never lost on a
   // model failure / network glitch. The assistant reply is appended after.
   await prisma.aiMessage.create({
@@ -383,6 +393,17 @@ export async function postMessage(args: {
     data: { updatedAt: new Date() },
   });
 
+  // Phase 7.4: debit the pool. Always debit, even on fallback — prevents
+  // free-retry abuse where a user spams a known-bad prompt to drain the
+  // model. Per the risk register in payment.md.
+  await debitQuota({
+    tenantId: access.tenantId,
+    userId: args.userId,
+    allocationId: quota.allocationId,
+    surface: AiCallSurface.chat,
+    reasonRef: assistantMessage.id,
+  });
+
   // Fire-and-forget audit/usage event.
   void recordAiCall({
     tenantId: access.tenantId,
@@ -423,6 +444,21 @@ async function generateTitleForConversation(args: {
   const config = aiConfig();
   if (!config.enabled || !config.apiKey) return;
 
+  // Title generation is best-effort. Skip it silently if the user has hit
+  // their quota — the user already got their reply; we don't want to surface
+  // a 402 from a background task.
+  let allocationId: string;
+  try {
+    const quota = await requireAvailableQuota({
+      tenantId: args.tenantId,
+      userId: args.userId,
+      surface: AiCallSurface.chat_title,
+    });
+    allocationId = quota.allocationId;
+  } catch {
+    return;
+  }
+
   const callStartedAt = Date.now();
   const result = await callChatModel({
     messages: [
@@ -450,6 +486,19 @@ async function generateTitleForConversation(args: {
         err: err instanceof Error ? err.message : 'unknown',
       });
     }
+  }
+
+  // Debit only when the model actually ran successfully — title generation
+  // is unique among AI surfaces in NOT debiting on fallback (because it
+  // already cost a debit on the parent message; titles are a free side-effect).
+  if (result.answer) {
+    await debitQuota({
+      tenantId: args.tenantId,
+      userId: args.userId,
+      allocationId,
+      surface: AiCallSurface.chat_title,
+      reasonRef: `conversation:${args.conversationId}:title`,
+    });
   }
 
   void recordAiCall({

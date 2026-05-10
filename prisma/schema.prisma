@@ -433,6 +433,9 @@ model TenantUser {
   safeguardingRiskAlertNotes         SafeguardingRiskAlertNote[]
   aiCallEvents                       AiCallEvent[]
   aiConversations                    AiConversation[]
+  // Phase 7.2 (Day 2) — token-ledger debits attribute calls back to a user
+  tokenLedgerEntries                 TokenLedgerEntry[]
+  aiRestrictionsUpdated              TenantAiRestriction[]       @relation("AiRestrictionUpdatedBy")
 
   @@index([email])
   @@index([role])
@@ -572,6 +575,11 @@ model Tenant {
   // automatically when subscriptionStatus enters past_due_readonly / suspended;
   // also editable by the Owner via /api/v1/billing/ai-restrictions.
   aiEnabled Boolean  @default(true)
+  // Phase 7.1 (Day 2): denormalised cache of `Subscription.status` so the
+  // enforcement middleware can read it on every request without a join.
+  // Default `trialing` so new tenants start in a trial automatically; the
+  // grandfather migration (Phase 7.9) backfills existing tenants the same way.
+  subscriptionStatus SubscriptionStatus @default(trialing)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -615,6 +623,15 @@ model Tenant {
   safeguardingRiskAlertNotes SafeguardingRiskAlertNote[]
   aiCallEvents               AiCallEvent[]
   aiConversations            AiConversation[]
+  // Phase 7.1 (Day 2) — billing
+  subscription               Subscription?
+  invoices                   Invoice[]
+  paymentMethods             PaymentMethod[]
+  billingEvents              BillingEvent[]
+  // Phase 7.2 (Day 2) — token metering
+  tokenAllocations           TokenAllocation[]
+  tokenLedgerEntries         TokenLedgerEntry[]
+  aiRestriction              TenantAiRestriction?
 
   @@index([name])
   @@index([isActive])
@@ -1947,4 +1964,242 @@ model AiMessage {
   conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@index([conversationId, createdAt])
+}
+
+// ─── Billing — subscriptions & invoices (Phase 7.1) ──────────────────────────
+
+enum SubscriptionStatus {
+  trialing            // in trial — full access, no payment yet
+  active              // paid up — full access
+  past_due_grace      // < 3 days since first failed charge — full access
+  past_due_readonly   // 3–14 days past due — read-only enforcement
+  suspended           // > 14 days past due OR Stripe `unpaid` — Tenant.isActive=false
+  cancelled           // Owner cancelled, period ended
+  incomplete          // Stripe Checkout started but not yet completed
+}
+
+enum PlanInterval {
+  month
+  year
+}
+
+enum BillingEventKind {
+  subscription_created
+  subscription_updated
+  subscription_deleted
+  invoice_paid
+  invoice_payment_failed
+  payment_method_updated
+  topup_purchased
+  tenant_grandfathered
+  manual_admin_override
+  quota_reset
+  webhook_received
+}
+
+model Plan {
+  id                    String       @id @default(cuid())
+  code                  String       @unique  // 'standard_monthly' | 'standard_annual'
+  name                  String
+  interval              PlanInterval
+  unitAmountMinor       Int          // pence: 3000 (£30) for monthly, 30000 (£300) for annual
+  currency              String       @default("gbp")
+  bundledCallsPerPeriod Int          // 1000 for the Standard plan
+  stripeProductId       String?
+  stripePriceId         String?      @unique
+  isActive              Boolean      @default(true)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  subscriptions Subscription[]
+
+  @@index([isActive])
+}
+
+model TopUpPack {
+  id              String   @id @default(cuid())
+  code            String   @unique  // 'topup_small' | 'topup_medium' | 'topup_large'
+  name            String
+  unitAmountMinor Int      // pence: 500 / 1500 / 4000
+  currency        String   @default("gbp")
+  calls           Int      // 250 / 1000 / 5000
+  stripeProductId String?
+  stripePriceId   String?  @unique
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+model Subscription {
+  id                       String             @id @default(cuid())
+  tenantId                 String             @unique
+  planId                   String
+  status                   SubscriptionStatus
+  // Stripe identifiers — populated on first checkout completion. customerId is
+  // unique; subscriptionId is nullable until the customer actually subscribes.
+  stripeCustomerId         String             @unique
+  stripeSubscriptionId     String?            @unique
+  trialEndsAt              DateTime?
+  currentPeriodStart       DateTime
+  currentPeriodEnd         DateTime
+  cancelAtPeriodEnd        Boolean            @default(false)
+  // Set when the FIRST past-due invoice arrives. Drives the past-due day
+  // counter in our cron — Stripe doesn't tell us how many days have elapsed,
+  // we compute it. Cleared when payment recovers.
+  pastDueSince             DateTime?
+  // Support escalation: a platform_admin can grant full access until this
+  // timestamp regardless of Stripe state.
+  manuallyOverriddenUntil  DateTime?
+  createdAt                DateTime           @default(now())
+  updatedAt                DateTime           @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan   Plan   @relation(fields: [planId], references: [id])
+
+  @@index([status])
+  @@index([pastDueSince])
+  @@index([currentPeriodEnd])
+}
+
+model Invoice {
+  id               String    @id @default(cuid())
+  tenantId         String
+  subscriptionId   String?
+  stripeInvoiceId  String    @unique
+  amountDueMinor   Int
+  amountPaidMinor  Int       @default(0)
+  currency         String
+  // Stripe enum string: 'draft' | 'open' | 'paid' | 'void' | 'uncollectible' | etc.
+  // Not modeled as a Prisma enum because Stripe occasionally adds new values.
+  status           String
+  hostedInvoiceUrl String?
+  pdfUrl           String?
+  periodStart      DateTime?
+  periodEnd        DateTime?
+  paidAt           DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([status])
+}
+
+model PaymentMethod {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  stripePaymentMethodId  String   @unique
+  brand                  String?  // 'visa' | 'mastercard' | 'amex' | …
+  last4                  String?
+  expMonth               Int?
+  expYear                Int?
+  isDefault              Boolean  @default(false)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isDefault])
+}
+
+model BillingEvent {
+  id              String           @id @default(cuid())
+  tenantId        String?          // nullable: some events (e.g. webhook_received) have no tenant context yet
+  kind            BillingEventKind
+  // Unique on stripeEventId is the idempotency guard for webhook handlers —
+  // a duplicate event.id arriving from Stripe causes the .create() to throw,
+  // which the handler treats as "already processed".
+  stripeEventId   String?          @unique
+  payload         Json?
+  receivedAt      DateTime         @default(now())
+  processedAt     DateTime?
+  processingError String?
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, kind, receivedAt])
+  @@index([kind, receivedAt])
+}
+
+// ─── Token metering (Phase 7.2) ──────────────────────────────────────────────
+
+enum TokenLedgerEntryKind {
+  debit_chat
+  debit_chat_title
+  debit_dashboard_card
+  debit_chronology_narrative
+  credit_topup
+  credit_period_reset
+  credit_grandfather
+  credit_admin_override
+  credit_refund
+}
+
+// One row per tenant per billing period. `usedCalls` is a denormalised
+// counter kept in sync with TokenLedgerEntry — sum of negative-delta entries
+// in this allocation should equal `usedCalls`.
+model TokenAllocation {
+  id            String   @id @default(cuid())
+  tenantId      String
+  periodStart   DateTime
+  periodEnd     DateTime
+  bundledCalls  Int      // from Plan.bundledCallsPerPeriod at period start
+  topUpCalls    Int      @default(0)  // sum of all top-ups credited in this period
+  usedCalls     Int      @default(0)
+  resetAt       DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  ledger TokenLedgerEntry[]
+
+  @@unique([tenantId, periodStart])
+  @@index([tenantId, resetAt])
+  @@index([resetAt])
+}
+
+// Append-only audit ledger of every quota change. Immutable.
+// `userId` set on debits, null on credits (top-ups, period resets, etc).
+// `reasonRef` typically holds an AiCallEvent ID (debit) or Stripe Invoice ID
+// (top-up) for traceability.
+model TokenLedgerEntry {
+  id            String               @id @default(cuid())
+  tenantId      String
+  allocationId  String
+  userId        String?
+  kind          TokenLedgerEntryKind
+  delta         Int                  // negative for debits, positive for credits
+  reasonRef     String?
+  createdAt     DateTime             @default(now())
+
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  allocation TokenAllocation @relation(fields: [allocationId], references: [id], onDelete: Cascade)
+  user       TenantUser?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([allocationId, createdAt])
+  @@index([tenantId, userId, createdAt])
+}
+
+// Per-tenant config for the hybrid quota.
+//   perRoleCaps:  { Owner: null, Admin: null, "Care Worker": 50, "Read-Only": 0 }
+//   perUserCaps:  { "userIdX": 200, "userIdY": 0 }
+// All caps are MONTHLY limits drawn from the shared pool.
+//   null  = no cap (free-for-all from pool)
+//   0     = blocked entirely
+//   N>0   = max N calls per period for that role/user
+model TenantAiRestriction {
+  id              String   @id @default(cuid())
+  tenantId        String   @unique
+  perRoleCaps     Json     @default("{}")
+  perUserCaps     Json     @default("{}")
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy   TenantUser? @relation("AiRestrictionUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 }

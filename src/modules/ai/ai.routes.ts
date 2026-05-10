@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as aiService from './ai.service.js';
 import {
@@ -14,6 +15,10 @@ import {
 const aiRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  // Phase 7.7: AI is a paid-for compute cost; gate it behind an allowing
+  // subscription state. Read paths inside this plugin don't exist (everything
+  // is a POST/PATCH that consumes quota), so the gate applies plugin-wide.
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   fastify.post('/ask', {
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },

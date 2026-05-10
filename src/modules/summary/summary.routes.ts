@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as summaryService from './summary.service.js';
 import {
   ApproveTaskBodySchema,
@@ -23,6 +24,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
   // All summary routes require authentication
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   // ── GET /summary/stats ─────────────────────────────────────────────────────
   fastify.get('/stats', {

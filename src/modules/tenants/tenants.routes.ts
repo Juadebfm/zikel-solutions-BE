@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as tenantsService from './tenants.service.js';
 import {
   AcceptTenantInviteBodySchema,
@@ -42,6 +43,7 @@ const inviteParamsJson = {
 const tenantRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   // Phase 6 (2026-05-08): the previous super_admin cross-tenant management
   // routes — `GET /api/v1/tenants`, `GET /api/v1/tenants/:id`, `POST /api/v1/tenants`

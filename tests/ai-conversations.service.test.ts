@@ -30,8 +30,8 @@ vi.hoisted(() => {
   process.env.AI_BASE_URL = 'https://example.test/v1';
 });
 
-const { mockPrisma } = vi.hoisted(() => ({
-  mockPrisma: {
+const { mockPrisma } = vi.hoisted(() => {
+  const mp = {
     tenantUser: { findUnique: vi.fn() },
     aiConversation: {
       create: vi.fn(),
@@ -46,10 +46,39 @@ const { mockPrisma } = vi.hoisted(() => ({
       findMany: vi.fn(),
     },
     aiCallEvent: { create: vi.fn(async () => ({ id: 'evt_1' })) },
+    // Phase 7.4 — token-metering tables
+    subscription: { findUnique: vi.fn(async () => null) },
+    tenant: { findUnique: vi.fn(async () => ({ createdAt: new Date('2026-04-01') })) },
+    tokenAllocation: {
+      upsert: vi.fn(async () => ({
+        id: 'alloc_1',
+        bundledCalls: 1000,
+        topUpCalls: 0,
+        usedCalls: 0,
+        periodStart: new Date('2026-05-01'),
+        periodEnd: new Date('2026-06-01'),
+        resetAt: new Date('2026-06-01'),
+      })),
+      update: vi.fn(async () => ({})),
+    },
+    tokenLedgerEntry: {
+      create: vi.fn(async () => ({})),
+      aggregate: vi.fn(async () => ({ _sum: { delta: 0 } })),
+    },
+    tenantAiRestriction: { findUnique: vi.fn(async () => null) },
+    tenantMembership: { findFirst: vi.fn(async () => ({ role: { name: 'Owner' } })) },
+    $transaction: vi.fn(async (ops: unknown) => {
+      if (typeof ops === 'function') {
+        return (ops as (tx: typeof mp) => Promise<unknown>)(mp);
+      }
+      if (Array.isArray(ops)) return Promise.all(ops);
+      return ops;
+    }),
     $disconnect: vi.fn(async () => undefined),
     $on: vi.fn(),
-  },
-}));
+  };
+  return { mockPrisma: mp };
+});
 
 vi.mock('../src/lib/prisma.js', () => ({ prisma: mockPrisma }));
 

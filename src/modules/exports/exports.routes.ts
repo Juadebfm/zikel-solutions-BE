@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import {
   CreateExportJobBodySchema,
   ListExportJobsQuerySchema,
@@ -12,6 +13,9 @@ import * as exportsService from './exports.service.js';
 const exportsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  // Phase 7.7: exports are paid-for compute. GETs (list/get jobs) pass
+  // through; POST (create new job) is blocked in past_due_readonly.
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   fastify.post('/', {
     schema: {

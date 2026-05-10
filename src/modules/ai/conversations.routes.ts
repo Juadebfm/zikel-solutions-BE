@@ -15,6 +15,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as conversationsService from './conversations.service.js';
 
 const PostMessageBodySchema = z.object({
@@ -49,6 +50,10 @@ const conversationParamsJson = {
 const conversationsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
+  // Phase 7.7: gate mutations behind an allowing subscription state. GETs
+  // (list / get conversations) pass through automatically — viewing past
+  // chats during past-due is harmless.
+  fastify.addHook('preHandler', requireActiveSubscription);
 
   // ── POST /api/v1/ai/conversations — create new conversation ────────────
   fastify.post('/', {

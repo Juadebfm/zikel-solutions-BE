@@ -18,6 +18,7 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext, type TenantContext } from '../../lib/tenant-context.js';
 import { assertAiEnabledForRequest, recordAiCall } from '../../lib/ai-access.js';
+import { debitQuota, requireAvailableQuota } from '../../lib/quota.js';
 import { getSummaryStats } from '../summary/summary.service.js';
 import type { AskAiBody, SetAiAccessBody, AiPage } from './ai.schema.js';
 
@@ -1285,6 +1286,14 @@ export async function askAi(userId: string, body: AskAiBody) {
   // Throws 403 if user/tenant disabled AI; returns globallyEnabled=false when
   // env AI_ENABLED is off (drives the silent fallback path further down).
   await assertAiEnabledForRequest({ userId, surface: AiCallSurface.dashboard_card });
+  // Phase 7.4: quota check. Throws 402 if pool exhausted or per-user/per-role
+  // cap hit. The dashboard-card endpoint is sometimes called multiple times
+  // per page render — the per-user cap protects against pathological FE retries.
+  const quota = await requireAvailableQuota({
+    tenantId: tenant.tenantId,
+    userId,
+    surface: AiCallSurface.dashboard_card,
+  });
   const strengthProfile = resolveStrengthProfile(tenant);
   const responseMode = resolveResponseMode(strengthProfile);
   const displayMode = resolveDisplayMode(body.displayMode, strengthProfile);
@@ -1348,6 +1357,16 @@ export async function askAi(userId: string, body: AskAiBody) {
     errorReason = err instanceof Error ? err.message : 'unknown';
   }
   const latencyMs = Date.now() - callStartedAt;
+
+  // Phase 7.4: debit the pool. Always debit, even on fallback — prevents
+  // free-retry abuse where a user spams a known-bad prompt to drain the
+  // model. Per the risk register in payment.md.
+  await debitQuota({
+    tenantId: tenant.tenantId,
+    userId,
+    allocationId: quota.allocationId,
+    surface: AiCallSurface.dashboard_card,
+  });
 
   // Fire-and-forget AiCallEvent — never blocks the response.
   void recordAiCall({
