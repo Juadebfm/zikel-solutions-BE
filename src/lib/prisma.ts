@@ -17,7 +17,9 @@ function createPrismaClient() {
     // Node runtime here is effectively single-process; 10 concurrent DB connections is ample.
     max: 10,
     idleTimeoutMillis: 30_000,   // release idle connections after 30 s
-    connectionTimeoutMillis: 5_000, // fail fast rather than queue indefinitely
+    // Generous timeout to absorb Neon serverless cold starts on first
+    // connection after deploy / scale-from-zero. Subsequent calls are fast.
+    connectionTimeoutMillis: 30_000,
   });
   const adapter = new PrismaPg(pool);
 
