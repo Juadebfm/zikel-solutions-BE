@@ -19,6 +19,17 @@ const NullableDateTimeSchema = z
 
 // ─── Query ───────────────────────────────────────────────────────────────────
 
+// Service-side allowlist enforced via `parseSort` so unknown fields emit
+// 400 INVALID_SORT_FIELD instead of a Zod validation error.
+export const YOUNG_PERSON_SORTABLE_FIELDS = [
+  'createdAt',
+  'updatedAt',
+  'lastName',
+  'firstName',
+  'status',
+  'admissionDate',
+] as const;
+
 export const ListYoungPeopleQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -28,6 +39,9 @@ export const ListYoungPeopleQuerySchema = z.object({
   gender: z.string().max(20).optional(),
   type: z.string().max(50).optional(),
   isActive: BoolishSchema.optional(),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 // ─── Create ──────────────────────────────────────────────────────────────────
@@ -121,6 +135,13 @@ export const listYoungPeopleQueryJson = {
     gender: { type: 'string', maxLength: 20 },
     type: { type: 'string', maxLength: 50 },
     isActive: { type: 'boolean' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: createdAt, updatedAt, lastName, firstName, status, admissionDate.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

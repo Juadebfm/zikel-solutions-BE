@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
+import { ROTA_MANAGEMENT, requireScopedRole } from '../../middleware/rbac.js';
 import {
   CreateRotaBodySchema,
   CreateRotaTemplateBodySchema,
@@ -15,6 +16,12 @@ import {
   updateRotaBodyJson,
 } from './rotas.schema.js';
 import * as rotasService from './rotas.service.js';
+
+const requireRotaMutation = requireScopedRole({
+  ...ROTA_MANAGEMENT,
+  errorCode: 'ROTA_MUTATION_FORBIDDEN',
+  errorMessage: 'Only admins or managers can create, update, or delete rotas.',
+});
 
 const rotasRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -81,6 +88,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
+    preHandler: [requireRotaMutation],
     schema: {
       tags: ['Rotas'],
       summary: 'Create rota',
@@ -94,6 +102,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         409: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
@@ -115,6 +124,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
+    preHandler: [requireRotaMutation],
     schema: {
       tags: ['Rotas'],
       summary: 'Update rota',
@@ -129,6 +139,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         404: { $ref: 'ApiError#' },
         409: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
@@ -152,6 +163,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
+    preHandler: [requireRotaMutation],
     schema: {
       tags: ['Rotas'],
       summary: 'Delete rota',
@@ -171,6 +183,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
+        403: { $ref: 'ApiError#' },
         404: { $ref: 'ApiError#' },
       },
     },
@@ -217,6 +230,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/templates', {
+    preHandler: [requireRotaMutation],
     schema: {
       tags: ['Rotas'],
       summary: 'Create rota template',
@@ -230,6 +244,7 @@ const rotasRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
     },

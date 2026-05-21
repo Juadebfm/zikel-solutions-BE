@@ -3,11 +3,24 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import type {
-  CreateYoungPersonBody,
-  ListYoungPeopleQuery,
-  UpdateYoungPersonBody,
+import { parseSort } from '../../lib/sort.js';
+import {
+  YOUNG_PERSON_SORTABLE_FIELDS,
+  type CreateYoungPersonBody,
+  type ListYoungPeopleQuery,
+  type UpdateYoungPersonBody,
 } from './young-people.schema.js';
+
+function buildYoungPersonOrderBy(spec: {
+  by: (typeof YOUNG_PERSON_SORTABLE_FIELDS)[number];
+  dir: 'asc' | 'desc';
+}): Prisma.YoungPersonOrderByWithRelationInput[] {
+  // Active residents always float to the top regardless of caller's sort.
+  if (spec.by === 'lastName') {
+    return [{ isActive: 'desc' }, { lastName: spec.dir }, { firstName: spec.dir }];
+  }
+  return [{ isActive: 'desc' }, { [spec.by]: spec.dir } as Prisma.YoungPersonOrderByWithRelationInput];
+}
 
 const YP_INCLUDE = {
   home: { select: { id: true, name: true } },
@@ -86,6 +99,14 @@ async function ensureHomeExists(homeId: string, tenantId: string) {
 export async function listYoungPeople(actorId: string, query: ListYoungPeopleQuery) {
   const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: YOUNG_PERSON_SORTABLE_FIELDS,
+    defaultBy: 'lastName',
+    defaultDir: 'asc',
+  });
   const where: Prisma.YoungPersonWhereInput = {
     tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
@@ -111,7 +132,7 @@ export async function listYoungPeople(actorId: string, query: ListYoungPeopleQue
     prisma.youngPerson.findMany({
       where,
       include: YP_INCLUDE,
-      orderBy: [{ isActive: 'desc' }, { lastName: 'asc' }, { firstName: 'asc' }],
+      orderBy: buildYoungPersonOrderBy(sort),
       skip,
       take: query.pageSize,
     }),

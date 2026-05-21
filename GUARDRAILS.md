@@ -251,3 +251,30 @@ Removed `src/middleware/captcha.ts`, `src/lib/captcha.ts`, `tests/auth.captcha.r
 | `src/plugins/rate-limit.ts`, `src/plugins/helmet.ts`, `src/plugins/swagger.ts`, `src/plugins/auth.ts` | Infrastructure plugins are unrelated |
 | `src/types/index.ts` | JwtPayload must NOT change |
 | All other module routes/services | employees, homes, tasks, etc. are unrelated |
+
+---
+
+## Free-Text Field Sanitisation Policy (2026-05-21)
+
+**All free-text fields stored by the API are treated as PLAINTEXT.** This includes (but is not limited to):
+
+- `Task.description`
+- Daily-log `note` (which becomes `Task.description`)
+- `TicketComment.body`
+- `Announcement.body`
+- Any `notes`, `description`, `content` field on tenant-scoped models
+
+The frontend renders these as plain text — no `dangerouslySetInnerHTML`, no Markdown parsing, no HTML interpretation.
+
+### Why
+We do not currently expose a rich-text editor for any of these fields. Keeping them plaintext keeps the data model simple and side-steps stored-XSS entirely.
+
+### What this means for future work
+If a rich-text editor (or any input that produces HTML) is later added to one of these fields, the BE **MUST** sanitise the input server-side **before persisting** — typically via DOMPurify or `sanitize-html`. The frontend will NOT sanitise — it will trust the BE.
+
+Do not add a rich-text editor to any free-text field without:
+1. Adding a server-side sanitiser at the write boundary (service layer, not the route).
+2. Documenting the allowlist (tags, attributes, URL schemes) in this section.
+3. Updating the FE to render with `dangerouslySetInnerHTML` only after BE sanitisation is in place.
+
+This pairs with the SEC-1 FE work that switched task/daily-log descriptions from `dangerouslySetInnerHTML` to plain-text rendering.

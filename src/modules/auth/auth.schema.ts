@@ -161,6 +161,10 @@ export const CheckEmailQuerySchema = z.object({
   email: z.email(),
 });
 
+export const CheckOrgSlugQuerySchema = z.object({
+  slug: z.string().min(1).max(120),
+});
+
 export const LogoutBodySchema = z.object({
   refreshToken: z.string().min(1).optional(),
   token: z.string().min(1).optional(),
@@ -306,6 +310,20 @@ export const checkEmailQueryJson = {
   },
 } as const;
 
+export const checkOrgSlugQueryJson = {
+  type: 'object',
+  required: ['slug'],
+  additionalProperties: false,
+  properties: {
+    slug: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 120,
+      description: 'Raw input — backend normalises via slugify before lookup.',
+    },
+  },
+} as const;
+
 export const logoutBodyJson = {
   anyOf: [
     {
@@ -410,6 +428,7 @@ export type VerifyOtpBody = z.infer<typeof VerifyOtpBodySchema>;
 export type ResendOtpBody = z.infer<typeof ResendOtpBodySchema>;
 export type LoginBody = z.infer<typeof LoginBodySchema>;
 export type CheckEmailQuery = z.infer<typeof CheckEmailQuerySchema>;
+export type CheckOrgSlugQuery = z.infer<typeof CheckOrgSlugQuerySchema>;
 export type LogoutBody = z.infer<typeof LogoutBodySchema>;
 export type SwitchTenantBody = z.infer<typeof SwitchTenantBodySchema>;
 export type VerifyMfaChallengeBody = z.infer<typeof VerifyMfaChallengeBodySchema>;

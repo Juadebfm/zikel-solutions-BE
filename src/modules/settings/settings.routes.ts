@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
+import { OWNER_ONLY, requireScopedRole } from '../../middleware/rbac.js';
 import {
   UpdateOrganisationSettingsBodySchema,
   UpdateSettingsNotificationsBodySchema,
@@ -9,6 +10,16 @@ import {
   updateSettingsNotificationsBodyJson,
 } from './settings.schema.js';
 import * as settingsService from './settings.service.js';
+
+// Org-level mutations affect every member; restricted to the tenant Owner.
+// Reads stay open because members need org name/timezone for display.
+// User-scoped notification preferences (GET/PATCH /settings/notifications)
+// remain open — each call only ever touches the caller's own preferences.
+const requireOrgSettingsWrite = requireScopedRole({
+  ...OWNER_ONLY,
+  errorCode: 'ORG_SETTINGS_FORBIDDEN',
+  errorMessage: 'Only the organisation owner can modify these settings.',
+});
 
 const settingsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -38,6 +49,7 @@ const settingsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/organisation', {
+    preHandler: [requireOrgSettingsWrite],
     schema: {
       tags: ['Settings'],
       summary: 'Update organisation settings',
@@ -51,6 +63,7 @@ const settingsRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
     },

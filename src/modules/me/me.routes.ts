@@ -1,6 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
+import { requireNotImpersonating } from '../../middleware/impersonation.js';
+import { sendValidationError } from '../../lib/errors.js';
 import * as meService from './me.service.js';
 import {
   ChangePasswordBodySchema,
@@ -80,13 +82,7 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateMeBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await meService.updateMyProfile(userId, parse.data);
@@ -96,11 +92,12 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.post('/change-password', {
     config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+    preHandler: [requireNotImpersonating],
     schema: {
       tags: ['Auth'],
       summary: 'Change my password',
       description:
-        'Changes the authenticated user password after validating the current password. Revokes active refresh tokens.',
+        'Changes the authenticated user password after validating the current password. Revokes active refresh tokens. Blocked while impersonating.',
       body: changePasswordBodyJson,
       response: {
         200: {
@@ -118,18 +115,13 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
           },
         },
         401: { $ref: 'ApiError#' },
+        409: { description: 'Impersonation grant active.', $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
     },
     handler: async (request, reply) => {
       const parse = ChangePasswordBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await meService.changeMyPassword(userId, parse.data);
@@ -240,13 +232,7 @@ const meRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdatePreferencesBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await meService.updateMyPreferences(userId, parse.data);

@@ -3,12 +3,27 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { emitNotification, getTenantAdminUserIds } from '../../lib/notification-emitter.js';
-import type {
-  CreateEmployeeBody,
-  ListEmployeesQuery,
-  UpdateEmployeeBody,
+import {
+  EMPLOYEE_SORTABLE_FIELDS,
+  type CreateEmployeeBody,
+  type ListEmployeesQuery,
+  type UpdateEmployeeBody,
 } from './employees.schema.js';
+
+function buildEmployeeOrderBy(spec: { by: (typeof EMPLOYEE_SORTABLE_FIELDS)[number]; dir: 'asc' | 'desc' }): Prisma.EmployeeOrderByWithRelationInput[] {
+  // `lastName` sorts by the linked user; everything else is a direct column.
+  // Active employees always float to the top regardless of caller's sort.
+  if (spec.by === 'lastName') {
+    return [
+      { isActive: 'desc' },
+      { user: { lastName: spec.dir } },
+      { user: { firstName: spec.dir } },
+    ];
+  }
+  return [{ isActive: 'desc' }, { [spec.by]: spec.dir } as Prisma.EmployeeOrderByWithRelationInput];
+}
 
 const EMP_INCLUDE = {
   user: {
@@ -87,6 +102,13 @@ async function ensureHomeExists(homeId: string, tenantId: string) {
 export async function listEmployees(actorId: string, query: ListEmployeesQuery) {
   const tenant = await requireTenantContext(actorId);
   const skip = (query.page - 1) * query.pageSize;
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: EMPLOYEE_SORTABLE_FIELDS,
+    defaultBy: 'createdAt',
+  });
   const where: Prisma.EmployeeWhereInput = {
     tenantId: tenant.tenantId,
     ...(query.homeId ? { homeId: query.homeId } : {}),
@@ -110,7 +132,7 @@ export async function listEmployees(actorId: string, query: ListEmployeesQuery) 
     prisma.employee.findMany({
       where,
       include: EMP_INCLUDE,
-      orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+      orderBy: buildEmployeeOrderBy(sort),
       skip,
       take: query.pageSize,
     }),
