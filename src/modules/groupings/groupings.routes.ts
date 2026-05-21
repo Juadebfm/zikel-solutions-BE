@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
+import { ADMIN_AND_OWNER, requireScopedRole } from '../../middleware/rbac.js';
 import {
   CreateGroupingBodySchema,
   ListGroupingsQuerySchema,
@@ -11,6 +12,12 @@ import {
   updateGroupingBodyJson,
 } from './groupings.schema.js';
 import * as groupingsService from './groupings.service.js';
+
+const requireGroupingMutation = requireScopedRole({
+  ...ADMIN_AND_OWNER,
+  errorCode: 'GROUPING_MUTATION_FORBIDDEN',
+  errorMessage: 'Only admins can create, update, or delete groupings.',
+});
 
 const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -77,6 +84,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.post('/', {
+    preHandler: [requireGroupingMutation],
     schema: {
       tags: ['Groupings'],
       summary: 'Create grouping',
@@ -90,6 +98,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         409: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
       },
@@ -111,6 +120,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.patch('/:id', {
+    preHandler: [requireGroupingMutation],
     schema: {
       tags: ['Groupings'],
       summary: 'Update grouping',
@@ -125,6 +135,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
             data: { type: 'object', additionalProperties: true },
           },
         },
+        403: { $ref: 'ApiError#' },
         404: { $ref: 'ApiError#' },
         409: { $ref: 'ApiError#' },
         422: { $ref: 'ApiError#' },
@@ -148,6 +159,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   fastify.delete('/:id', {
+    preHandler: [requireGroupingMutation],
     schema: {
       tags: ['Groupings'],
       summary: 'Delete grouping',
@@ -167,6 +179,7 @@ const groupingsRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
+        403: { $ref: 'ApiError#' },
         404: { $ref: 'ApiError#' },
       },
     },

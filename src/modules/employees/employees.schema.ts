@@ -15,6 +15,18 @@ const NullableDateTimeSchema = z
 
 // ─── Query ───────────────────────────────────────────────────────────────────
 
+// Allowlist for /employees sort is enforced in the service via `parseSort` so
+// unknown fields yield 400 `INVALID_SORT_FIELD` instead of Zod 422 — keep the
+// schema permissive so the helper owns the error code.
+export const EMPLOYEE_SORTABLE_FIELDS = [
+  'createdAt',
+  'updatedAt',
+  'jobTitle',
+  'status',
+  'startDate',
+  'lastName',
+] as const;
+
 export const ListEmployeesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -23,6 +35,10 @@ export const ListEmployeesQuerySchema = z.object({
   status: z.enum(['current', 'past', 'planned', 'all']).default('all'),
   roleId: z.string().min(1).optional(),
   isActive: BoolishSchema.optional(),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  // Legacy alias kept for callers still passing `sortOrder`.
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 // ─── Create ──────────────────────────────────────────────────────────────────
@@ -75,6 +91,13 @@ export const listEmployeesQueryJson = {
     status: { type: 'string', enum: ['current', 'past', 'planned', 'all'], default: 'all' },
     roleId: { type: 'string' },
     isActive: { type: 'boolean' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: createdAt, updatedAt, jobTitle, status, startDate, lastName.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

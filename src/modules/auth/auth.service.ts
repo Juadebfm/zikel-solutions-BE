@@ -496,11 +496,55 @@ export async function register(body: RegisterBody) {
 // Invitation flow — see src/modules/auth/invitations.service.ts and the
 // /api/v1/invitations + /api/v1/auth/invitations/:token routes.
 
+// Minimum response time for availability checks. Padding the response prevents
+// a timing oracle distinguishing "fast: row miss" from "slower: row hit". The
+// FE debounces onBlur so an extra ~80ms is imperceptible.
+const AVAILABILITY_CHECK_MIN_RESPONSE_MS = 80;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withTimingFloor<T>(work: Promise<T>): Promise<T> {
+  const [value] = await Promise.all([work, sleep(AVAILABILITY_CHECK_MIN_RESPONSE_MS)]);
+  return value;
+}
+
 export async function checkEmailAvailability(email: string) {
-  // Deliberately avoid account enumeration via this public endpoint.
-  // Registration is the authoritative uniqueness check.
-  void email;
-  return { available: true };
+  // Step-2 onBlur signal for signup forms. Real availability is returned, but
+  // every response is padded to a fixed minimum so timing cannot leak whether
+  // the email matched. Registration is still the authoritative uniqueness
+  // check; this endpoint exists purely to fail fast in the FE.
+  const normalised = email.trim().toLowerCase();
+  return withTimingFloor(
+    (async () => {
+      const existing = await prisma.tenantUser.findUnique({
+        where: { email: normalised },
+        select: { id: true },
+      });
+      return { available: existing === null };
+    })(),
+  );
+}
+
+export async function checkOrgSlugAvailability(rawSlug: string) {
+  const slug = slugify(rawSlug);
+  if (!slug) {
+    // Invalid input is "not available" — keeps the response shape uniform and
+    // doesn't leak validation rules via a different code path.
+    return withTimingFloor(Promise.resolve({ available: false, slug }));
+  }
+  return withTimingFloor(
+    (async () => {
+      const existing = await prisma.tenant.findUnique({
+        where: { slug },
+        select: { id: true },
+      });
+      return { available: existing === null, slug };
+    })(),
+  );
 }
 
 /**
@@ -1145,6 +1189,44 @@ export async function refreshAccessToken(refreshToken: string) {
       idleExpiresAt: nextIdleExpiry,
       absoluteExpiresAt: sessionAbsoluteExpiresAt,
     }),
+  };
+}
+
+/**
+ * Lightweight cookie-only session validity probe for the FE's SSR middleware.
+ *
+ * Reads the refresh token presented in the `__Host-zikel_rt` cookie (or body
+ * for the legacy flow), validates the row + session WITHOUT touching
+ * `lastActiveAt`, and does not rotate. Returns `valid: true` plus expiry
+ * timestamps for soft-gate UX; `valid: false` triggers a redirect.
+ *
+ * This intentionally avoids the access-token-required `/auth/session-expiry`
+ * path because SSR middleware can only see cookies — the access token lives
+ * in memory client-side.
+ */
+export async function peekSessionFromRefreshToken(refreshToken: string) {
+  const now = new Date();
+  const stored = await prisma.refreshToken.findUnique({
+    where: { token: refreshToken },
+    select: {
+      revokedAt: true,
+      idleExpiresAt: true,
+      session: { select: { revokedAt: true, absoluteExpiresAt: true } },
+    },
+  });
+
+  if (!stored) return { valid: false as const };
+  if (stored.revokedAt !== null) return { valid: false as const };
+  if (stored.session.revokedAt !== null) return { valid: false as const };
+  if (stored.session.absoluteExpiresAt <= now) return { valid: false as const };
+  if (stored.idleExpiresAt <= now) return { valid: false as const };
+
+  return {
+    valid: true as const,
+    session: {
+      idleExpiresAt: stored.idleExpiresAt,
+      absoluteExpiresAt: stored.session.absoluteExpiresAt,
+    },
   };
 }
 

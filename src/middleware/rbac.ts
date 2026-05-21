@@ -6,14 +6,19 @@ import type { Permission } from '../auth/permissions.js';
 type ScopedRoleOptions = {
   globalRoles?: UserRole[];
   tenantRoles?: TenantRole[];
+  // Per-call denial customisation so modules can emit their own error codes
+  // (e.g. EXPORT_FORBIDDEN, SENSITIVE_DATA_FORBIDDEN) that the FE error map
+  // can group, while reusing the same role-bundle check.
+  errorCode?: string;
+  errorMessage?: string;
 };
 
-function deny(reply: FastifyReply) {
+function deny(reply: FastifyReply, errorCode?: string, errorMessage?: string) {
   return reply.status(403).send({
     success: false,
     error: {
-      code: 'FORBIDDEN',
-      message: 'You do not have permission to access this resource.',
+      code: errorCode ?? 'FORBIDDEN',
+      message: errorMessage ?? 'You do not have permission to access this resource.',
     },
   });
 }
@@ -24,14 +29,42 @@ export function requireScopedRole(options: ScopedRoleOptions) {
 
   return async (request: FastifyRequest, reply: FastifyReply) => {
     const user = request.user as JwtPayload | undefined;
-    if (!user) return deny(reply);
+    if (!user) return deny(reply, options.errorCode, options.errorMessage);
 
     if (globalRoles.includes(user.role)) return;
     if (user.tenantRole && tenantRoles.includes(user.tenantRole)) return;
 
-    return deny(reply);
+    return deny(reply, options.errorCode, options.errorMessage);
   };
 }
+
+// ── Pre-baked role bundles to match the SEC-4 audit table ────────────────────
+// Tenant Owner only — for org-wide settings that affect everyone.
+export const OWNER_ONLY: ScopedRoleOptions = {
+  globalRoles: [],
+  tenantRoles: ['tenant_admin'],
+};
+// Forms / similar bundle — broad management roles allowed.
+export const MANAGEMENT_ROLES: ScopedRoleOptions = {
+  globalRoles: ['admin', 'manager'],
+  tenantRoles: ['tenant_admin', 'sub_admin'],
+};
+// Admin tier — same as management but excludes platform `manager` global role
+// where the audit explicitly leaves them out.
+export const ADMIN_AND_OWNER: ScopedRoleOptions = {
+  globalRoles: ['admin'],
+  tenantRoles: ['tenant_admin'],
+};
+// Same as ADMIN_AND_OWNER but also allows the tenant Admin (`sub_admin`).
+export const ADMIN_OWNER_OR_SUB_ADMIN: ScopedRoleOptions = {
+  globalRoles: ['admin'],
+  tenantRoles: ['tenant_admin', 'sub_admin'],
+};
+// Rotas: managers manage staff schedules, plus admin/Owner.
+export const ROTA_MANAGEMENT: ScopedRoleOptions = {
+  globalRoles: ['admin', 'manager'],
+  tenantRoles: ['tenant_admin'],
+};
 
 /**
  * Returns a preHandler hook that enforces role-based access control.

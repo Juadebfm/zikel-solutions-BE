@@ -1,8 +1,9 @@
-import { AuditAction, UploadStatus, type UploadedFile } from '@prisma/client';
+import { AuditAction, UploadPurpose, UploadStatus, type UploadedFile } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
-import { requireTenantContext } from '../../lib/tenant-context.js';
+import { requireTenantContext, type TenantContext } from '../../lib/tenant-context.js';
+import { Permissions, type Permission } from '../../auth/permissions.js';
 import {
   assertUploadsEnabled,
   buildStorageKey,
@@ -14,6 +15,31 @@ import {
   validateUploadInput,
 } from '../../lib/uploads.js';
 import type { CompleteUploadBody, CreateUploadSessionBody } from './uploads.schema.js';
+
+// Upload purposes are gated by the permission that gates the entity the file
+// is attached to. `general` uploads stay open because they cover ad-hoc cases
+// (profile picture, etc.) that any authenticated tenant member legitimately
+// triggers — but the storage layer still scopes by tenant.
+const UPLOAD_PURPOSE_PERMISSIONS: Record<UploadPurpose, Permission[] | null> = {
+  signature: [Permissions.TASKS_WRITE, Permissions.CARE_LOGS_WRITE],
+  task_attachment: [Permissions.TASKS_WRITE, Permissions.CARE_LOGS_WRITE],
+  task_document: [Permissions.TASKS_WRITE, Permissions.CARE_LOGS_WRITE],
+  announcement_image: [Permissions.ANNOUNCEMENTS_WRITE],
+  general: null,
+};
+
+function assertUploadPurposeAllowed(tenant: TenantContext, purpose: UploadPurpose) {
+  const required = UPLOAD_PURPOSE_PERMISSIONS[purpose];
+  if (!required) return;
+  const granted = new Set(tenant.permissions);
+  if (!required.some((perm) => granted.has(perm))) {
+    throw httpError(
+      403,
+      'UPLOAD_FORBIDDEN',
+      'You do not have permission to upload files for this resource.',
+    );
+  }
+}
 
 function mapUploadedFile(file: UploadedFile) {
   return {
@@ -35,14 +61,6 @@ function getUploadUrlExpiryIso() {
   return new Date(Date.now() + (Number.parseInt(String(process.env.UPLOADS_SIGNED_URL_TTL_SECONDS ?? ''), 10) || 900) * 1000).toISOString();
 }
 
-async function getTenantActor(actorUserId: string) {
-  const tenant = await requireTenantContext(actorUserId);
-  return {
-    tenantId: tenant.tenantId,
-    tenantRole: tenant.tenantRole,
-  };
-}
-
 export async function createUploadSession(actorUserId: string, body: CreateUploadSessionBody) {
   assertUploadsEnabled();
   validateUploadInput({
@@ -51,7 +69,12 @@ export async function createUploadSession(actorUserId: string, body: CreateUploa
     sizeBytes: body.sizeBytes,
   });
 
-  const actor = await getTenantActor(actorUserId);
+  const tenant = await requireTenantContext(actorUserId);
+  assertUploadPurposeAllowed(tenant, body.purpose);
+  const actor = {
+    tenantId: tenant.tenantId,
+    tenantRole: tenant.tenantRole,
+  };
   const storageKey = buildStorageKey({
     tenantId: actor.tenantId,
     purpose: body.purpose,
@@ -118,7 +141,8 @@ export async function completeUploadSession(
   body: CompleteUploadBody,
 ) {
   assertUploadsEnabled();
-  const actor = await getTenantActor(actorUserId);
+  const tenant = await requireTenantContext(actorUserId);
+  const actor = { tenantId: tenant.tenantId };
 
   const existing = await prisma.uploadedFile.findFirst({
     where: {
@@ -131,6 +155,11 @@ export async function completeUploadSession(
   if (!existing) {
     throw httpError(404, 'UPLOAD_NOT_FOUND', 'Upload session not found.');
   }
+
+  // Re-check against the persisted purpose so a role change between session
+  // creation and completion doesn't let the caller finalise a file they no
+  // longer have permission to upload.
+  assertUploadPurposeAllowed(tenant, existing.purpose);
 
   if (existing.status === UploadStatus.uploaded) {
     return {
@@ -199,7 +228,8 @@ export async function completeUploadSession(
 
 export async function getUploadDownloadUrl(actorUserId: string, uploadId: string) {
   assertUploadsEnabled();
-  const actor = await getTenantActor(actorUserId);
+  const tenant = await requireTenantContext(actorUserId);
+  const actor = { tenantId: tenant.tenantId };
 
   const file = await prisma.uploadedFile.findFirst({
     where: {
@@ -213,6 +243,8 @@ export async function getUploadDownloadUrl(actorUserId: string, uploadId: string
   if (!file) {
     throw httpError(404, 'UPLOAD_NOT_FOUND', 'Uploaded file not found.');
   }
+
+  assertUploadPurposeAllowed(tenant, file.purpose);
 
   await prisma.auditLog.create({
     data: {

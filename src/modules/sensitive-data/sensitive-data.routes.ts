@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
+import { ADMIN_OWNER_OR_SUB_ADMIN, requireScopedRole } from '../../middleware/rbac.js';
 import {
   CreateSensitiveDataBodySchema,
   ListSensitiveDataQuerySchema,
@@ -12,10 +13,20 @@ import {
 } from './sensitive-data.schema.js';
 import * as sensitiveDataService from './sensitive-data.service.js';
 
+const requireSensitiveDataAccess = requireScopedRole({
+  ...ADMIN_OWNER_OR_SUB_ADMIN,
+  errorCode: 'SENSITIVE_DATA_FORBIDDEN',
+  errorMessage: 'You do not have permission to access sensitive data records.',
+});
+
 const sensitiveDataRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', requirePrivilegedMfa);
   fastify.addHook('preHandler', requireActiveSubscription);
+  // All verbs (list, get, create, update, delete, access-log, categories) are
+  // restricted to admin / tenant_admin / sub_admin. Care Worker / Read-Only
+  // never see sensitive-data rows even though they're tenant-scoped.
+  fastify.addHook('preHandler', requireSensitiveDataAccess);
 
   fastify.get('/', {
     schema: {

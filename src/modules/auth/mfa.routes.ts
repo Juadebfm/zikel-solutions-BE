@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { JwtPayload } from '../../types/index.js';
-import { httpError } from '../../lib/errors.js';
+import { httpError, sendValidationError } from '../../lib/errors.js';
+import { requireNotImpersonating } from '../../middleware/impersonation.js';
 import { prisma } from '../../lib/prisma.js';
 import {
   setupTenantTotp,
@@ -77,12 +78,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = VerifyChallengeSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await verifyTenantTotpAndLogin(parse.data);
       const accessToken = signTenantAccessToken(fastify, result.user, { ...result.session, mfaVerified: true }, result.sessionId);
       setNoStoreHeaders(reply);
@@ -122,12 +118,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BackupChallengeSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await verifyTenantBackupAndLogin(parse.data);
       const accessToken = signTenantAccessToken(fastify, result.user, { ...result.session, mfaVerified: true }, result.sessionId);
       setNoStoreHeaders(reply);
@@ -186,12 +177,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EnrollmentSetupSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = verifyMfaEnrollmentToken({
         token: parse.data.enrollmentToken,
         expectedAudience: 'tenant',
@@ -236,12 +222,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EnrollmentConfirmSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = verifyMfaEnrollmentToken({
         token: parse.data.enrollmentToken,
         expectedAudience: 'tenant',
@@ -307,6 +288,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
 
     authed.post('/totp/setup', {
       config: { rateLimit: { max: 5, timeWindow: '1 minute' } },
+      preHandler: [requireNotImpersonating],
       schema: {
         tags: ['Auth — MFA'],
         summary: 'Begin TOTP enrollment — returns QR + backup codes',
@@ -328,6 +310,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
           404: { $ref: 'ApiError#' },
+          409: { description: 'Impersonation grant active.', $ref: 'ApiError#' },
         },
       },
       handler: async (request, reply) => {
@@ -341,6 +324,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
 
     authed.post('/totp/verify-setup', {
       config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      preHandler: [requireNotImpersonating],
       schema: {
         tags: ['Auth — MFA'],
         summary: 'Confirm TOTP enrollment with the first 6-digit code',
@@ -366,12 +350,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
       },
       handler: async (request, reply) => {
         const parse = CodeSchema.safeParse(request.body);
-        if (!parse.success) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-          });
-        }
+        if (!parse.success) return sendValidationError(reply, parse.error);
         const userId = (request.user as JwtPayload).sub;
         const result = await verifyTenantTotpSetup({ userId, code: parse.data.code });
         return reply.send({ success: true, data: result });
@@ -380,6 +359,7 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
 
     authed.delete('/totp', {
       config: { rateLimit: { max: 5, timeWindow: '5 minutes' } },
+      preHandler: [requireNotImpersonating],
       schema: {
         tags: ['Auth — MFA'],
         summary: 'Disable TOTP — requires current password',
@@ -398,17 +378,13 @@ const mfaRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
           401: { $ref: 'ApiError#' },
+          409: { description: 'Impersonation grant active.', $ref: 'ApiError#' },
           422: { $ref: 'ApiError#' },
         },
       },
       handler: async (request, reply) => {
         const parse = DisableSchema.safeParse(request.body);
-        if (!parse.success) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-          });
-        }
+        if (!parse.success) return sendValidationError(reply, parse.error);
         const userId = (request.user as JwtPayload).sub;
         const result = await disableTenantMfa({ userId, currentPassword: parse.data.currentPassword });
         return reply.send({ success: true, data: result });

@@ -5,6 +5,7 @@ import {
   ResendOtpBodySchema,
   LoginBodySchema,
   CheckEmailQuerySchema,
+  CheckOrgSlugQuerySchema,
   LogoutBodySchema,
   SwitchTenantBodySchema,
   RefreshBodySchema,
@@ -16,6 +17,7 @@ import {
   resendOtpBodyJson,
   loginBodyJson,
   checkEmailQueryJson,
+  checkOrgSlugQueryJson,
   logoutBodyJson,
   switchTenantBodyJson,
   refreshBodyJson,
@@ -26,6 +28,7 @@ import {
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
 import { parseExpiryMs } from '../../lib/tokens.js';
+import { sendValidationError } from '../../lib/errors.js';
 import { env } from '../../config/env.js';
 
 function signAccessToken(
@@ -217,11 +220,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const parse = RegisterBodySchema.safeParse(request.body);
       if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
+        return sendValidationError(reply, parse.error);
       }
       const data = await authService.register(parse.data);
       return reply.status(201).send({ success: true, data });
@@ -234,14 +233,16 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
   //   - recipient: POST /api/v1/auth/invitations/:token/accept
 
   // ── GET /auth/check-email ─────────────────────────────────────────────────
+  // Real availability check for the signup step-2 onBlur signal. Response time
+  // is normalised in the service so timing cannot leak hit vs miss.
   fastify.get('/check-email', {
-    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
 
     schema: {
       tags: ['Auth'],
       summary: 'Check email availability',
       description:
-        'Privacy-safe pre-check endpoint for signup flows. Returns a generic response to avoid account enumeration.',
+        'Returns whether the email is available for registration. Response time is padded to a fixed minimum to deny timing-based enumeration.',
       security: [],
       querystring: checkEmailQueryJson,
       response: {
@@ -259,13 +260,51 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
             },
           },
         },
-
-
       },
     },
     handler: async (request, reply) => {
       const query = CheckEmailQuerySchema.parse(request.query);
       const data = await authService.checkEmailAvailability(query.email);
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── GET /auth/check-org-slug ──────────────────────────────────────────────
+  // Step-2 onBlur signal for the organisation name. Backend normalises the raw
+  // input via slugify so the FE doesn't have to mirror the normalisation rules.
+  fastify.get('/check-org-slug', {
+    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Check organisation slug availability',
+      description:
+        'Normalises the raw input via slugify, then returns whether the slug is available. Response time is padded to deny timing-based enumeration.',
+      security: [],
+      querystring: checkOrgSlugQueryJson,
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['available', 'slug'],
+              properties: {
+                available: { type: 'boolean' },
+                slug: {
+                  type: 'string',
+                  description: 'Normalised slug used for the lookup (empty if input could not be slugified).',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const query = CheckOrgSlugQuerySchema.parse(request.query);
+      const data = await authService.checkOrgSlugAvailability(query.slug);
       return reply.send({ success: true, data });
     },
   });
@@ -527,6 +566,80 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         }
         throw error;
       }
+    },
+  });
+
+  // ── GET /auth/session/peek ────────────────────────────────────────────────
+  // Cookie-only validity probe for SSR middleware. Reads the refresh-token
+  // cookie directly, validates without rotating, and returns 200 + expiry
+  // timestamps or 401. Idempotent — `lastActiveAt` is NOT updated so frequent
+  // calls don't keep idle sessions alive.
+  fastify.get('/session/peek', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    schema: {
+      tags: ['Auth'],
+      summary: 'Probe refresh-token validity without rotating',
+      description:
+        'Soft validity check for SSR middleware. Reads the refresh-token cookie, validates the row + session, and returns expiry timestamps. Does NOT rotate the token or update lastActiveAt.',
+      security: [],
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['valid', 'serverTime'],
+              properties: {
+                valid: { type: 'boolean', enum: [true] },
+                serverTime: { type: 'string', format: 'date-time' },
+                session: {
+                  type: 'object',
+                  required: ['idleExpiresAt', 'absoluteExpiresAt'],
+                  properties: {
+                    idleExpiresAt: { type: 'string', format: 'date-time' },
+                    absoluteExpiresAt: { type: 'string', format: 'date-time' },
+                  },
+                },
+              },
+            },
+          },
+        },
+        401: {
+          description: 'No cookie present, or refresh token invalid / expired / revoked.',
+          $ref: 'ApiError#',
+        },
+      },
+    },
+    handler: async (request, reply) => {
+      const refreshToken = resolveRefreshToken(request);
+      if (!refreshToken) {
+        setNoStoreHeaders(reply);
+        return reply.status(401).send({
+          success: false,
+          error: { code: 'REFRESH_TOKEN_INVALID', message: 'Refresh token is invalid.' },
+        });
+      }
+      const result = await authService.peekSessionFromRefreshToken(refreshToken);
+      setNoStoreHeaders(reply);
+      if (!result.valid) {
+        return reply.status(401).send({
+          success: false,
+          error: { code: 'REFRESH_TOKEN_INVALID', message: 'Refresh token is invalid.' },
+        });
+      }
+      return reply.send({
+        success: true,
+        data: {
+          valid: true,
+          serverTime: new Date().toISOString(),
+          session: {
+            idleExpiresAt: result.session.idleExpiresAt.toISOString(),
+            absoluteExpiresAt: result.session.absoluteExpiresAt.toISOString(),
+          },
+        },
+      });
     },
   });
 
@@ -864,11 +977,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const parse = ResetPasswordBodySchema.safeParse(request.body);
       if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
+        return sendValidationError(reply, parse.error);
       }
       const data = await authService.resetPassword(parse.data);
       return reply.send({ success: true, data });

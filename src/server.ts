@@ -2,9 +2,11 @@ import 'dotenv/config';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import Fastify, { type FastifyError, type FastifyRequest } from 'fastify';
+import { ZodError } from 'zod';
 import { env } from './config/env.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
+import { buildFieldErrors } from './lib/errors.js';
 import { setRequestAuditContext } from './lib/request-context.js';
 import swaggerPlugin from './plugins/swagger.js';
 import compressPlugin from './plugins/compress.js';
@@ -83,6 +85,20 @@ export async function buildApp() {
 
   // Error handler
   fastify.setErrorHandler((error: FastifyError, req, reply) => {
+    // ZodError reaching this handler means a route called `.parse()` (rather
+    // than `.safeParse()` + an inline 422). Emit the audit-spec validation
+    // envelope so the FE's applyApiErrorsToForm can map field paths.
+    if (error instanceof ZodError) {
+      return reply.status(422).send({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: error.issues[0]?.message ?? 'Validation error.',
+          fieldErrors: buildFieldErrors(error),
+        },
+      });
+    }
+
     const statusCode = error.statusCode ?? 500;
     const isServerError = statusCode >= 500;
 

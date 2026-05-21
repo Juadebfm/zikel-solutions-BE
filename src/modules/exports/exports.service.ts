@@ -2,8 +2,39 @@ import { AuditAction, ExportJobEntity, ExportJobFormat, ExportJobStatus, Prisma,
 import { generateExport, type ExportColumn } from '../../lib/export.js';
 import { httpError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
-import { requireTenantContext } from '../../lib/tenant-context.js';
+import { requireTenantContext, type TenantContext } from '../../lib/tenant-context.js';
+import { Permissions, type Permission } from '../../auth/permissions.js';
 import type { CreateExportJobBody, ListExportJobsQuery } from './exports.schema.js';
+
+// Bulk exports of an entity are gated by the same read permission that would
+// gate the equivalent list endpoint. Audit exports require the audit-read
+// permission since they expose cross-module activity.
+const EXPORT_ENTITY_PERMISSIONS: Record<ExportJobEntity, Permission[]> = {
+  homes: [Permissions.HOMES_READ],
+  employees: [Permissions.EMPLOYEES_READ],
+  young_people: [Permissions.YOUNG_PEOPLE_READ],
+  vehicles: [Permissions.VEHICLES_READ],
+  care_groups: [Permissions.CARE_GROUPS_READ],
+  tasks: [Permissions.TASKS_READ],
+  daily_logs: [Permissions.CARE_LOGS_READ],
+  audit: [Permissions.AUDIT_READ],
+};
+
+function assertEntityExportAllowed(tenant: TenantContext, entity: ExportJobEntity) {
+  const required = EXPORT_ENTITY_PERMISSIONS[entity];
+  if (!required || required.length === 0) {
+    throw httpError(403, 'EXPORT_FORBIDDEN', 'You do not have permission to export this resource.');
+  }
+  const granted = new Set(tenant.permissions);
+  const ok = required.some((perm) => granted.has(perm));
+  if (!ok) {
+    throw httpError(
+      403,
+      'EXPORT_FORBIDDEN',
+      'You do not have permission to export this resource.',
+    );
+  }
+}
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
@@ -369,6 +400,7 @@ async function buildExportPayload(tenantId: string, entity: ExportJobEntity, fil
 
 export async function createExportJob(actorUserId: string, body: CreateExportJobBody) {
   const tenant = await requireTenantContext(actorUserId);
+  assertEntityExportAllowed(tenant, body.entity);
 
   const created = await prisma.exportJob.create({
     data: {
@@ -467,6 +499,11 @@ export async function downloadExportJob(actorUserId: string, id: string) {
   if (!row) {
     throw httpError(404, 'EXPORT_JOB_NOT_FOUND', 'Export job not found.');
   }
+
+  // Re-check permission at download time as defence against role revocation
+  // between job creation and download (the user's role may have been changed
+  // or the system role bundle may have been narrowed).
+  assertEntityExportAllowed(tenant, row.entity);
 
   if (row.status === ExportJobStatus.failed) {
     throw httpError(409, 'EXPORT_JOB_FAILED', row.errorMessage ?? 'Export job failed.');
