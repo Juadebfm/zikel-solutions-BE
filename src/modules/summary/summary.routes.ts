@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as summaryService from './summary.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   ApproveTaskBodySchema,
   BatchApproveBodySchema,
@@ -77,13 +78,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SummaryListQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { data, meta, labels } = await summaryService.listTodos(userId, parse.data);
@@ -116,13 +111,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SummaryListQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { data, meta, labels } = await summaryService.listOverdueTodos(userId, parse.data);
@@ -159,13 +148,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SummaryListQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { data, meta, labels } = await summaryService.listTasksToApprove(userId, parse.data);
@@ -241,13 +224,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ReviewTaskBodySchema.safeParse(request.body ?? {});
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
@@ -301,13 +278,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BatchApproveBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await summaryService.processTaskBatch(userId, parse.data);
@@ -349,13 +320,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ApproveTaskBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
@@ -401,13 +366,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ReviewTaskBodySchema.safeParse(request.body ?? {});
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
@@ -457,13 +416,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BatchApproveBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await summaryService.processTaskBatch(userId, parse.data);
@@ -498,13 +451,7 @@ const summaryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ApproveTaskBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

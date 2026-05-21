@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as auditService from './audit.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   ListAuditLogsQuerySchema,
   SecurityAlertsQuerySchema,
@@ -44,13 +45,7 @@ const auditRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListAuditLogsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { data, meta } = await auditService.listAuditLogs(actorUserId, parse.data);
@@ -99,13 +94,7 @@ const auditRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SecurityAlertsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const data = await auditService.listSecurityAlerts(actorUserId, parse.data.lookbackHours);

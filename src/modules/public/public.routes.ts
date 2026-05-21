@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import * as publicService from './public.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   BookDemoBodySchema,
   bookDemoBodyJson,
@@ -45,13 +46,7 @@ const publicRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BookDemoBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const data = await publicService.bookDemo(parse.data);
       return reply.status(201).send({ success: true, data });
     },
@@ -92,13 +87,7 @@ const publicRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = JoinWaitlistBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const data = await publicService.joinWaitlist(parse.data);
       return reply.status(201).send({ success: true, data });
     },
@@ -138,13 +127,7 @@ const publicRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ContactUsBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const msg = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: msg },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const data = await publicService.contactUs(parse.data);
       return reply.status(201).send({ success: true, data });
     },

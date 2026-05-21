@@ -78,6 +78,8 @@ const TriggerTaskSchema = z.object({
   allowCopyPreviousTaskData: z.boolean().default(false),
 });
 
+export const FORM_SORTABLE_FIELDS = ['name', 'group', 'status', 'createdAt', 'updatedAt'] as const;
+
 export const ListFormsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -85,8 +87,9 @@ export const ListFormsQuerySchema = z.object({
   type: z.string().max(200).optional(),
   group: z.string().max(150).optional(),
   status: z.string().max(200).optional(),
-  sortBy: z.enum(['name', 'group', 'status', 'createdAt', 'updatedAt']).default('updatedAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 export const CreateFormBodySchema = z.object({
@@ -247,8 +250,13 @@ export const listFormsQueryJson = {
     type: { type: 'string', maxLength: 200 },
     group: { type: 'string', maxLength: 150 },
     status: { type: 'string', maxLength: 200 },
-    sortBy: { type: 'string', enum: ['name', 'group', 'status', 'createdAt', 'updatedAt'], default: 'updatedAt' },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: name, group, status, createdAt, updatedAt.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

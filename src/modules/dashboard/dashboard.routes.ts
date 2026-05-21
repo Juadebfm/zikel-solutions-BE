@@ -4,6 +4,7 @@ import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as dashboardService from './dashboard.service.js';
 import { CreateWidgetBodySchema, createWidgetBodyJson } from './dashboard.schema.js';
+import { sendValidationError } from '../../lib/errors.js';
 
 const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
   // All dashboard routes require authentication
@@ -89,13 +90,7 @@ const dashboardRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateWidgetBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await dashboardService.createWidget(userId, parse.data);

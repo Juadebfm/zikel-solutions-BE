@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as dailyLogsService from './daily-logs.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateDailyLogBodySchema,
   UpdateDailyLogBodySchema,
@@ -40,13 +41,7 @@ const dailyLogRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListDailyLogsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { data, meta, labels } = await dailyLogsService.listDailyLogs(userId, parse.data);
@@ -75,13 +70,7 @@ const dailyLogRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateDailyLogBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await dailyLogsService.createDailyLog(userId, parse.data);
@@ -139,13 +128,7 @@ const dailyLogRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateDailyLogBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

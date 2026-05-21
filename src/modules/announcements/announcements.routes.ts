@@ -5,6 +5,7 @@ import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as announcementsService from './announcements.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateAnnouncementBodySchema,
   ListAnnouncementsQuerySchema,
@@ -59,13 +60,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListAnnouncementsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const { data, meta } = await announcementsService.listAnnouncements(userId, parse.data);
@@ -156,13 +151,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateAnnouncementBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const data = await announcementsService.createAnnouncement(actorId, parse.data);
@@ -196,13 +185,7 @@ const announcementsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateAnnouncementBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

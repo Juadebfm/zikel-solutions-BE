@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { JwtPayload } from '../../types/index.js';
 import { generateExport } from '../../lib/export.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   emitTherapeuticRouteTelemetry,
   enforceTherapeuticRouteAccess,
@@ -68,13 +69,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EvidencePackQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const pack = await reportsService.generateEvidencePack(userId, 'reg44', parse.data);
@@ -151,13 +146,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EvidencePackQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const pack = await reportsService.generateEvidencePack(userId, 'reg45', parse.data);
@@ -234,13 +223,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = RiDashboardQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const dashboard = await reportsService.generateRiDashboard(userId, parse.data);
@@ -292,13 +275,7 @@ const reportsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = RiDashboardDrilldownQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const drilldown = await reportsService.generateRiDashboardDrilldown(userId, parse.data);

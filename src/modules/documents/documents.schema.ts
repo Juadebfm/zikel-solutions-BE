@@ -8,6 +8,10 @@ const QueryDateSchema = z
     return value instanceof Date ? value : new Date(value);
   });
 
+// Server-side allowlist enforced via `parseSort` so unknown `sortBy` emits
+// 400 INVALID_SORT_FIELD instead of 422 Zod validation.
+export const DOCUMENT_SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'title', 'category'] as const;
+
 export const ListDocumentsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -17,8 +21,10 @@ export const ListDocumentsQuerySchema = z.object({
   uploadedBy: z.string().min(1).optional(),
   dateFrom: QueryDateSchema,
   dateTo: QueryDateSchema,
-  sortBy: z.enum(['createdAt', 'updatedAt', 'title', 'category']).default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  // Legacy alias for sortDir — kept for back-compat with callers that still pass `sortOrder`.
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 export const CreateDocumentBodySchema = z.object({
@@ -57,8 +63,13 @@ export const listDocumentsQueryJson = {
     uploadedBy: { type: 'string' },
     dateFrom: { type: 'string', format: 'date-time' },
     dateTo: { type: 'string', format: 'date-time' },
-    sortBy: { type: 'string', enum: ['createdAt', 'updatedAt', 'title', 'category'], default: 'createdAt' },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: createdAt, updatedAt, title, category.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

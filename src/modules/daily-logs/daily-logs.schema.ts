@@ -48,6 +48,11 @@ export const UpdateDailyLogBodySchema = z
     message: 'At least one field must be provided.',
   });
 
+// Daily logs delegate to the tasks service; sort allowlist is intentionally a
+// subset of TASK_SORTABLE_FIELDS — the tasks service still runs `parseSort`
+// against the full task-sortable list, so unknown values yield 400.
+export const DAILY_LOG_SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'dueAt', 'title'] as const;
+
 export const ListDailyLogsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -57,8 +62,9 @@ export const ListDailyLogsQuerySchema = z.object({
   dateFrom: z.union([z.string().datetime(), z.string().date()]).optional(),
   dateTo: z.union([z.string().datetime(), z.string().date()]).optional(),
   search: z.string().max(200).optional(),
-  sortBy: z.enum(['createdAt', 'dueAt', 'title']).default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 // ─── JSON Schemas (OpenAPI) ──────────────────────────────────────────────────
@@ -125,8 +131,13 @@ export const listDailyLogsQueryJson = {
     dateFrom: { type: 'string', format: 'date-time' },
     dateTo: { type: 'string', format: 'date-time' },
     search: { type: 'string', maxLength: 200 },
-    sortBy: { type: 'string', enum: ['createdAt', 'dueAt', 'title'], default: 'createdAt' },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: createdAt, updatedAt, dueAt, title.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

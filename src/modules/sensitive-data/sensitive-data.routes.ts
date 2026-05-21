@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { ADMIN_OWNER_OR_SUB_ADMIN, requireScopedRole } from '../../middleware/rbac.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateSensitiveDataBodySchema,
   ListSensitiveDataQuerySchema,
@@ -48,13 +49,7 @@ const sensitiveDataRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListSensitiveDataQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { data, meta } = await sensitiveDataService.listSensitiveDataRecords(actorId, parse.data);
@@ -163,13 +158,7 @@ const sensitiveDataRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateSensitiveDataBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const data = await sensitiveDataService.createSensitiveDataRecord(actorId, parse.data);
@@ -198,13 +187,7 @@ const sensitiveDataRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateSensitiveDataBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

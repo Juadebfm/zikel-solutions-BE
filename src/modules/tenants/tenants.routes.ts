@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as tenantsService from './tenants.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   AcceptTenantInviteBodySchema,
   AddTenantMemberBodySchema,
@@ -79,13 +80,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListTenantMembershipsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actor = request.user as JwtPayload;
       const { id } = request.params as { id: string };
@@ -122,13 +117,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = AddTenantMemberBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actor = request.user as JwtPayload;
       const { id } = request.params as { id: string };
@@ -159,13 +148,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateTenantMemberBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actor = request.user as JwtPayload;
       const { id, membershipId } = request.params as { id: string; membershipId: string };
@@ -225,13 +208,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ProvisionStaffBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actor = request.user as JwtPayload;
       const { id } = request.params as { id: string };
@@ -286,13 +263,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     reply: FastifyReply,
   ) {
     const parse = CreateInviteLinkBodySchema.safeParse(request.body);
-    if (!parse.success) {
-      const message = parse.error.issues[0]?.message ?? 'Validation error.';
-      return reply.status(422).send({
-        success: false,
-        error: { code: 'VALIDATION_ERROR', message },
-      });
-    }
+    if (!parse.success) return sendValidationError(reply, parse.error);
 
     const actor = request.user as JwtPayload;
     const { id } = request.params;
@@ -420,13 +391,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListTenantInvitesQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const { id } = request.params as { id: string };
       const actor = request.user as JwtPayload;
@@ -470,13 +435,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateTenantInviteBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const { id } = request.params as { id: string };
       const actor = request.user as JwtPayload;
@@ -548,13 +507,7 @@ const tenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = AcceptTenantInviteBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actor = request.user as JwtPayload;
       const data = await tenantsService.acceptTenantInvite(actor.sub, actor.email, parse.data);

@@ -13,11 +13,22 @@ const QueryDateSchema = z
     return value instanceof Date ? value : new Date(value);
   });
 
+export const SUMMARY_TODO_SORTABLE_FIELDS = [
+  'title',
+  'status',
+  'approvalStatus',
+  'priority',
+  'dueDate',
+  'createdAt',
+  'updatedAt',
+] as const;
+
 export const SummaryListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(20),
-  sortBy: z.string().optional(),
-  sortOrder: z.enum(['asc', 'desc']).default('asc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
   search: z.string().optional(),
   formGroup: z.string().max(120).optional(),
   taskDateFrom: QueryDateSchema,
@@ -120,8 +131,13 @@ export const tasksToApproveQueryJson = {
   properties: {
     page: { type: 'integer', minimum: 1, default: 1 },
     pageSize: { type: 'integer', minimum: 1, maximum: 500, default: 20 },
-    sortBy: { type: 'string' },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: title, status, approvalStatus, priority, dueDate, createdAt, updatedAt.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
     search: { type: 'string' },
     formGroup: { type: 'string', maxLength: 120 },
     taskDateFrom: {

@@ -7,6 +7,7 @@ import { Permissions as P } from '../../auth/permissions.js';
 import { generateExport, type ExportColumn } from '../../lib/export.js';
 import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as youngPeopleService from './young-people.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateYoungPersonBodySchema,
   ListYoungPeopleQuerySchema,
@@ -41,13 +42,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListYoungPeopleQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { data, meta } = await youngPeopleService.listYoungPeople(actorId, parse.data);
@@ -73,9 +68,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
       const query = request.query as Record<string, unknown>;
       const format = ExportFormatSchema.catch('pdf').parse(query.format);
       const parse = ListYoungPeopleQuerySchema.safeParse({ ...query, pageSize: Math.min(Number(query.pageSize) || 500, 5000) });
-      if (!parse.success) {
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { data } = await youngPeopleService.listYoungPeople(actorId, parse.data);
@@ -159,13 +152,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateYoungPersonBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const data = await youngPeopleService.createYoungPerson(actorId, parse.data);
@@ -199,13 +186,7 @@ const youngPeopleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateYoungPersonBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

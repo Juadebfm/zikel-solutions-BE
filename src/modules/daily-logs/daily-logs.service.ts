@@ -78,6 +78,7 @@ export async function listDailyLogs(actorUserId: string, query: ListDailyLogsQue
     dateTo: query.dateTo ? new Date(query.dateTo) : undefined,
     search: query.search,
     sortBy: query.sortBy,
+    sortDir: query.sortDir,
     sortOrder: query.sortOrder,
   });
 }

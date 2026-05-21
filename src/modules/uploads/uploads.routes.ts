@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as uploadsService from './uploads.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CompleteUploadBodySchema,
   CreateUploadSessionBodySchema,
@@ -60,13 +61,7 @@ const uploadsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateUploadSessionBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const data = await uploadsService.createUploadSession(actorUserId, parse.data);
@@ -114,13 +109,7 @@ const uploadsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CompleteUploadBodySchema.safeParse(request.body ?? {});
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

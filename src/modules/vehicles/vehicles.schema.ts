@@ -4,7 +4,7 @@ const BoolishSchema = z
   .union([z.boolean(), z.enum(['true', 'false'])])
   .transform((v) => v === true || v === 'true');
 
-const VehicleSortBySchema = z.enum([
+export const VEHICLE_SORTABLE_FIELDS = [
   'registration',
   'make',
   'model',
@@ -12,7 +12,7 @@ const VehicleSortBySchema = z.enum([
   'motDue',
   'createdAt',
   'updatedAt',
-]);
+] as const;
 
 const NullableDateSchema = z
   .union([z.string().datetime(), z.string().date(), z.date(), z.null()])
@@ -33,8 +33,9 @@ export const ListVehiclesQuerySchema = z.object({
   status: z.enum(['current', 'past', 'planned', 'all']).default('all'),
   fuelType: z.string().max(20).optional(),
   isActive: BoolishSchema.optional(),
-  sortBy: VehicleSortBySchema.optional(),
-  sortOrder: z.enum(['asc', 'desc']).default('asc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 // ─── Create ──────────────────────────────────────────────────────────────────
@@ -122,8 +123,14 @@ export const listVehiclesQueryJson = {
     status: { type: 'string', enum: ['current', 'past', 'planned', 'all'], default: 'all' },
     fuelType: { type: 'string', maxLength: 20 },
     isActive: { type: 'boolean' },
-    sortBy: { type: 'string', enum: ['registration', 'make', 'model', 'nextServiceDue', 'motDue', 'createdAt', 'updatedAt'] },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description:
+        'Sortable column. Allowed: registration, make, model, nextServiceDue, motDue, createdAt, updatedAt.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

@@ -13,6 +13,7 @@ import { Permissions as P } from '../../auth/permissions.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import * as billing from './billing.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 
 // ─── Body schemas ───────────────────────────────────────────────────────────
 
@@ -167,12 +168,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CheckoutSessionBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await billing.createSubscriptionCheckoutSession({
         actorUserId: userId,
@@ -255,12 +251,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = TopUpCheckoutBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await billing.createTopUpCheckoutSession({
         actorUserId: userId,
@@ -336,12 +327,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListInvoicesQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const result = await billing.listInvoices({
         actorUserId: userId,
@@ -408,12 +394,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateAiRestrictionsBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await billing.updateAiRestrictions({
         actorUserId: userId,

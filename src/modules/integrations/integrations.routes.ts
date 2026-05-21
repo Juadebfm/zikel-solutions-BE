@@ -5,6 +5,7 @@ import { logger } from '../../lib/logger.js';
 import { buildWebhookSignature, parseWebhookSignature } from '../../lib/webhook-signature.js';
 import { IngestSecurityAlertBodySchema, ingestSecurityAlertBodyJson } from './integrations.schema.js';
 import * as integrationsService from './integrations.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 
 function headerValue(request: FastifyRequest, headerName: string) {
   const value = request.headers[headerName];
@@ -148,13 +149,7 @@ const integrationsRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const parse = IngestSecurityAlertBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const data = await integrationsService.receiveSecurityAlertWebhook(parse.data, {
         requestId: request.id,
