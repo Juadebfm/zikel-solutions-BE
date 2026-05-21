@@ -13,8 +13,15 @@ import {
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type { ApproveTaskBody, BatchApproveBody, ReviewTaskBody, SummaryListQuery } from './summary.schema.js';
+import {
+  SUMMARY_TODO_SORTABLE_FIELDS,
+  type ApproveTaskBody,
+  type BatchApproveBody,
+  type ReviewTaskBody,
+  type SummaryListQuery,
+} from './summary.schema.js';
 
 type UserContext = {
   id: string;
@@ -27,15 +34,6 @@ type UserContext = {
   employee: { id: string; homeId: string | null } | null;
 };
 
-const TODO_SORTABLE_FIELDS = new Set([
-  'title',
-  'status',
-  'approvalStatus',
-  'priority',
-  'dueDate',
-  'createdAt',
-  'updatedAt',
-]);
 const ACTIVE_WORKFLOW_STATUSES: TaskStatus[] = [TaskStatus.pending, TaskStatus.in_progress];
 const EXCLUDED_APPROVAL_BUCKET_STATUSES: TaskApprovalStatus[] = [
   TaskApprovalStatus.pending_approval,
@@ -208,11 +206,18 @@ async function listCommentedTaskIdsForTenant(tenantId: string): Promise<string[]
 }
 
 function buildTaskOrderBy(query: SummaryListQuery): Prisma.TaskOrderByWithRelationInput[] {
-  if (query.sortBy && TODO_SORTABLE_FIELDS.has(query.sortBy)) {
-    return [{ [query.sortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
+  if (!query.sortBy) {
+    return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
   }
-
-  return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: SUMMARY_TODO_SORTABLE_FIELDS,
+    defaultBy: 'dueDate',
+    defaultDir: 'asc',
+  });
+  return [{ [sort.by]: sort.dir }] as Prisma.TaskOrderByWithRelationInput[];
 }
 
 function buildPaginationMeta(total: number, page: number, pageSize: number) {

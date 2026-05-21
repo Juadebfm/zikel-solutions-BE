@@ -15,18 +15,20 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import { emitNotification } from '../../lib/notification-emitter.js';
 import { triggerRiskEvaluationForTaskMutation } from '../safeguarding/risk-alerts.service.js';
-import type {
-  BatchArchiveBody,
-  BatchPostponeBody,
-  BatchReassignBody,
-  CreateTaskBody,
-  ListTasksQuery,
-  PostponeTaskBody,
-  TaskActionBody,
-  UpdateTaskBody,
+import {
+  TASK_SORTABLE_FIELDS,
+  type BatchArchiveBody,
+  type BatchPostponeBody,
+  type BatchReassignBody,
+  type CreateTaskBody,
+  type ListTasksQuery,
+  type PostponeTaskBody,
+  type TaskActionBody,
+  type UpdateTaskBody,
 } from './tasks.schema.js';
 
 type TaskActorContext = {
@@ -38,20 +40,6 @@ type TaskActorContext = {
   employeeId: string | null;
 };
 
-const SORTABLE_FIELDS = new Set([
-  'taskRef',
-  'title',
-  'status',
-  'approvalStatus',
-  'category',
-  'type',
-  'priority',
-  'submittedAt',
-  'dueAt',
-  'dueDate',
-  'createdAt',
-  'updatedAt',
-]);
 
 const WORKFLOW_STATUS_LABELS: Record<TaskStatus, string> = {
   pending: 'Pending',
@@ -497,19 +485,26 @@ function paginationMeta(total: number, page: number, pageSize: number) {
 }
 
 function orderByFromQuery(query: ListTasksQuery): Prisma.TaskOrderByWithRelationInput[] {
-  if (query.sortBy && SORTABLE_FIELDS.has(query.sortBy)) {
-    const normalizedSortBy = query.sortBy === 'dueAt'
-      ? 'dueDate'
-      : query.sortBy === 'submittedAt'
-        ? 'submittedAt'
-        : query.sortBy === 'taskRef'
-          ? 'createdAt'
-          : query.sortBy === 'type'
-            ? 'category'
-            : query.sortBy;
-    return [{ [normalizedSortBy]: query.sortOrder }] as Prisma.TaskOrderByWithRelationInput[];
+  // No sortBy → preserve legacy default ordering.
+  if (!query.sortBy) {
+    return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
   }
-  return [{ dueDate: 'asc' }, { createdAt: 'desc' }];
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: TASK_SORTABLE_FIELDS,
+    defaultBy: 'createdAt',
+    defaultDir: 'desc',
+  });
+  // FE-facing names → Prisma column names.
+  const columnMap: Record<string, string> = {
+    dueAt: 'dueDate',
+    taskRef: 'createdAt',
+    type: 'category',
+  };
+  const column = columnMap[sort.by] ?? sort.by;
+  return [{ [column]: sort.dir }] as Prisma.TaskOrderByWithRelationInput[];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

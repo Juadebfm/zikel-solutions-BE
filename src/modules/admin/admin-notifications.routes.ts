@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import type { PlatformJwtPayload } from '../../types/index.js';
 import { requirePlatformRole } from '../../middleware/platform-rbac.js';
 import { requirePlatformMfa } from '../../middleware/mfa.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   BroadcastNotificationBodySchema,
   broadcastNotificationBodyJson,
@@ -45,12 +46,7 @@ const adminNotificationsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BroadcastNotificationBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const data = await broadcastPlatformNotification(platformUser.sub, parse.data);
       return reply.status(201).send({ success: true, data });

@@ -2,8 +2,14 @@ import { AuditAction, Prisma, UploadStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type { CreateDocumentBody, ListDocumentsQuery, UpdateDocumentBody } from './documents.schema.js';
+import {
+  DOCUMENT_SORTABLE_FIELDS,
+  type CreateDocumentBody,
+  type ListDocumentsQuery,
+  type UpdateDocumentBody,
+} from './documents.schema.js';
 
 function toDisplayName(firstName?: string | null, lastName?: string | null) {
   return `${firstName ?? ''} ${lastName ?? ''}`.trim();
@@ -107,6 +113,15 @@ export async function listDocuments(actorUserId: string, query: ListDocumentsQue
     if (query.dateTo) where.createdAt.lte = query.dateTo;
   }
 
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: DOCUMENT_SORTABLE_FIELDS,
+    defaultBy: 'createdAt',
+    defaultDir: 'desc',
+  });
+
   const [total, rows] = await Promise.all([
     prisma.documentRecord.count({ where }),
     prisma.documentRecord.findMany({
@@ -126,7 +141,7 @@ export async function listDocuments(actorUserId: string, query: ListDocumentsQue
         home: { select: { id: true, name: true } },
         uploadedBy: { select: { id: true, firstName: true, lastName: true, email: true } },
       },
-      orderBy: { [query.sortBy]: query.sortOrder },
+      orderBy: { [sort.by]: sort.dir },
     }),
   ]);
 

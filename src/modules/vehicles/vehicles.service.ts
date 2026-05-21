@@ -3,22 +3,14 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type {
-  CreateVehicleBody,
-  ListVehiclesQuery,
-  UpdateVehicleBody,
+import {
+  VEHICLE_SORTABLE_FIELDS,
+  type CreateVehicleBody,
+  type ListVehiclesQuery,
+  type UpdateVehicleBody,
 } from './vehicles.schema.js';
-
-const SORTABLE_FIELDS = new Set([
-  'registration',
-  'make',
-  'model',
-  'nextServiceDue',
-  'motDue',
-  'createdAt',
-  'updatedAt',
-]);
 
 function normalizeRegistration(registration: string) {
   return registration.trim().replace(/\s+/g, ' ').toUpperCase();
@@ -82,10 +74,21 @@ function paginationMeta(total: number, page: number, pageSize: number) {
 function orderByFromQuery(
   query: ListVehiclesQuery,
 ): Prisma.VehicleOrderByWithRelationInput[] {
-  if (query.sortBy && SORTABLE_FIELDS.has(query.sortBy)) {
-    return [{ [query.sortBy]: query.sortOrder }] as Prisma.VehicleOrderByWithRelationInput[];
+  // If the caller passed no sortBy, retain the legacy `registration ASC` default;
+  // otherwise validate against the allowlist via parseSort.
+  if (!query.sortBy) {
+    const dir = query.sortDir ?? query.sortOrder ?? 'asc';
+    return [{ registration: dir }];
   }
-  return [{ registration: 'asc' }];
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: VEHICLE_SORTABLE_FIELDS,
+    defaultBy: 'registration',
+    defaultDir: 'asc',
+  });
+  return [{ [sort.by]: sort.dir }] as Prisma.VehicleOrderByWithRelationInput[];
 }
 
 export async function listVehicles(actorUserId: string, query: ListVehiclesQuery) {

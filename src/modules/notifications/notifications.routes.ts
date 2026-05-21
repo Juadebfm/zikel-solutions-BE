@@ -3,6 +3,7 @@ import type { JwtPayload } from '../../types/index.js';
 import { requirePrivilegedMfa } from '../../middleware/mfa.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import * as notificationsService from './notifications.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   ListNotificationsQuerySchema,
   UpdatePreferencesBodySchema,
@@ -35,12 +36,7 @@ const notificationsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListNotificationsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const result = await notificationsService.listNotifications(userId, parse.data);
       return reply.send({ success: true, ...result });
@@ -183,12 +179,7 @@ const notificationsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdatePreferencesBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await notificationsService.updatePreferences(userId, parse.data);
       return reply.send({ success: true, data });

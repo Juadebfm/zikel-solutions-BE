@@ -6,6 +6,7 @@ import { requirePermission } from '../../middleware/rbac.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as faqsService from './faqs.service.js';
 import * as ticketsService from './tickets.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateFaqBodySchema,
   ListFaqsQuerySchema,
@@ -52,12 +53,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListFaqsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await faqsService.listFaqs(parse.data);
       return reply.send({ success: true, ...result });
     },
@@ -107,12 +103,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateFaqBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await faqsService.createFaq(userId, parse.data);
       return reply.status(201).send({ success: true, data });
@@ -141,12 +132,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateFaqBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const { id } = request.params as { id: string };
       const data = await faqsService.updateFaq(id, parse.data);
       return reply.send({ success: true, data });
@@ -199,12 +185,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateTicketBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await ticketsService.createTicket(userId, parse.data);
       return reply.status(201).send({ success: true, data });
@@ -231,12 +212,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListTicketsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const result = await ticketsService.listTickets(userId, parse.data);
       return reply.send({ success: true, ...result });
@@ -290,12 +266,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateTicketBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
       const data = await ticketsService.updateTicket(userId, id, parse.data);
@@ -325,12 +296,7 @@ const helpCenterRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateTicketCommentBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
       const data = await ticketsService.addComment(userId, id, parse.data);

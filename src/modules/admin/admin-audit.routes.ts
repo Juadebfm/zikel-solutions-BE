@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { AuditAction } from '@prisma/client';
 import { z } from 'zod';
 import type { PlatformJwtPayload } from '../../types/index.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   listTenantAuditForPlatform,
   listPlatformAudit,
@@ -133,12 +134,7 @@ const adminAuditRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListTenantAuditQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const result = await listTenantAuditForPlatform({
@@ -191,12 +187,7 @@ const adminAuditRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ExportTenantAuditQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const result = await exportTenantAuditForPlatform({
@@ -273,12 +264,7 @@ const adminAuditRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListPlatformAuditQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await listPlatformAudit({
         page: parse.data.page,
         pageSize: parse.data.pageSize,

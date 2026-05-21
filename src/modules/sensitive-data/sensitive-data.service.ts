@@ -2,11 +2,13 @@ import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
-import type {
-  CreateSensitiveDataBody,
-  ListSensitiveDataQuery,
-  UpdateSensitiveDataBody,
+import {
+  SENSITIVE_DATA_SORTABLE_FIELDS,
+  type CreateSensitiveDataBody,
+  type ListSensitiveDataQuery,
+  type UpdateSensitiveDataBody,
 } from './sensitive-data.schema.js';
 
 function buildPaginationMeta(total: number, page: number, pageSize: number) {
@@ -116,13 +118,22 @@ export async function listSensitiveDataRecords(actorUserId: string, query: ListS
     if (query.dateTo) where.createdAt.lte = query.dateTo;
   }
 
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: SENSITIVE_DATA_SORTABLE_FIELDS,
+    defaultBy: 'createdAt',
+    defaultDir: 'desc',
+  });
+
   const [total, rows] = await Promise.all([
     prisma.sensitiveDataRecord.count({ where }),
     prisma.sensitiveDataRecord.findMany({
       where,
       skip,
       take: query.pageSize,
-      orderBy: { [query.sortBy]: query.sortOrder },
+      orderBy: { [sort.by]: sort.dir },
       include: {
         youngPerson: { select: { id: true, firstName: true, lastName: true, preferredName: true } },
         home: { select: { id: true, name: true } },

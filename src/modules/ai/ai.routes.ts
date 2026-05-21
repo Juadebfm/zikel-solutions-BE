@@ -5,6 +5,7 @@ import { requirePermission } from '../../middleware/rbac.js';
 import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as aiService from './ai.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   AskAiBodySchema,
   SetAiAccessBodySchema,
@@ -92,13 +93,7 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = AskAiBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const userId = (request.user as JwtPayload).sub;
       const data = await aiService.askAi(userId, parse.data);
@@ -141,13 +136,7 @@ const aiRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SetAiAccessBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

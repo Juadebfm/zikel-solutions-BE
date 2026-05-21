@@ -7,6 +7,7 @@ import { Permissions as P } from '../../auth/permissions.js';
 import { generateExport, type ExportColumn } from '../../lib/export.js';
 import { ExportFormatSchema } from '../../lib/export-schema.js';
 import * as vehiclesService from './vehicles.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateVehicleBodySchema,
   ListVehiclesQuerySchema,
@@ -41,13 +42,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListVehiclesQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { data, meta } = await vehiclesService.listVehicles(actorUserId, parse.data);
@@ -73,9 +68,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
       const query = request.query as Record<string, unknown>;
       const format = ExportFormatSchema.catch('pdf').parse(query.format);
       const parse = ListVehiclesQuerySchema.safeParse({ ...query, pageSize: Math.min(Number(query.pageSize) || 500, 5000) });
-      if (!parse.success) {
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { data } = await vehiclesService.listVehicles(actorUserId, parse.data);
@@ -156,13 +149,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateVehicleBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const data = await vehiclesService.createVehicle(actorUserId, parse.data);
@@ -196,13 +183,7 @@ const vehicleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateVehicleBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const actorUserId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };

@@ -5,6 +5,7 @@ import { requireActiveSubscription } from '../../middleware/billing-status.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import * as rolesService from './roles.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   CreateRoleBodySchema,
   UpdateRoleBodySchema,
@@ -41,10 +42,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListRolesQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({ success: false as const, error: { code: 'VALIDATION_ERROR', message } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const { data, meta } = await rolesService.listRoles(userId, parse.data);
       return reply.send({ success: true, data, meta });
@@ -87,9 +85,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CreateRoleBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const data = await rolesService.createRole(userId, parse.data);
       return reply.status(201).send({ success: true, data });
@@ -114,9 +110,7 @@ const roleRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = UpdateRoleBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const userId = (request.user as JwtPayload).sub;
       const { id } = request.params as { id: string };
       const data = await rolesService.updateRole(userId, id, parse.data);

@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
-import { httpError } from '../../lib/errors.js';
+import { httpError, sendValidationError } from '../../lib/errors.js';
 import { parseExpiryMs } from '../../lib/tokens.js';
 import { refreshIdleExpiresAt, generateRefreshToken } from '../../lib/tokens.js';
 import { prisma } from '../../lib/prisma.js';
@@ -116,10 +116,7 @@ const adminAuthRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = LoginBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        const message = parse.error.issues[0]?.message ?? 'Validation error.';
-        return reply.status(422).send({ success: false, error: { code: 'VALIDATION_ERROR', message } });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
 
       const ua = request.headers['user-agent'];
       const result = await loginPlatformUser({

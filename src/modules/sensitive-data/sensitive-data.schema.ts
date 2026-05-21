@@ -10,6 +10,8 @@ const QueryDateSchema = z
 
 const ConfidentialityScopeSchema = z.enum(['restricted', 'confidential', 'highly_confidential']);
 
+export const SENSITIVE_DATA_SORTABLE_FIELDS = ['createdAt', 'updatedAt', 'title', 'retentionDate'] as const;
+
 export const ListSensitiveDataQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -20,8 +22,9 @@ export const ListSensitiveDataQuerySchema = z.object({
   confidentialityScope: ConfidentialityScopeSchema.optional(),
   dateFrom: QueryDateSchema,
   dateTo: QueryDateSchema,
-  sortBy: z.enum(['createdAt', 'updatedAt', 'title', 'retentionDate']).default('createdAt'),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 });
 
 export const CreateSensitiveDataBodySchema = z.object({
@@ -63,8 +66,13 @@ export const listSensitiveDataQueryJson = {
     confidentialityScope: { type: 'string', enum: ['restricted', 'confidential', 'highly_confidential'] },
     dateFrom: { type: 'string', format: 'date-time' },
     dateTo: { type: 'string', format: 'date-time' },
-    sortBy: { type: 'string', enum: ['createdAt', 'updatedAt', 'title', 'retentionDate'], default: 'createdAt' },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
+    sortBy: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Sortable column. Allowed: createdAt, updatedAt, title, retentionDate.',
+    },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

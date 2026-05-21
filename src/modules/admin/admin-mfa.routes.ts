@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyReply } from 'fastify'
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { PlatformJwtPayload, PlatformRole } from '../../types/index.js';
-import { httpError } from '../../lib/errors.js';
+import { httpError, sendValidationError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 import { parseExpiryMs } from '../../lib/tokens.js';
 import {
@@ -120,12 +120,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = VerifyChallengeSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const ua = request.headers['user-agent'];
       const result = await verifyPlatformTotpAndLogin({
         challengeToken: parse.data.challengeToken,
@@ -179,12 +174,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = BackupChallengeSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const ua = request.headers['user-agent'];
       const result = await verifyPlatformBackupAndLogin({
         challengeToken: parse.data.challengeToken,
@@ -251,12 +241,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EnrollmentSetupSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUserId = verifyMfaEnrollmentToken({
         token: parse.data.enrollmentToken,
         expectedAudience: 'platform',
@@ -305,12 +290,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = EnrollmentConfirmSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUserId = verifyMfaEnrollmentToken({
         token: parse.data.enrollmentToken,
         expectedAudience: 'platform',
@@ -444,12 +424,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = CodeSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUserId = (request.user as PlatformJwtPayload).sub;
       const result = await verifyPlatformTotpSetup({ platformUserId, code: parse.data.code });
       return reply.send({ success: true, data: result });
@@ -481,12 +456,7 @@ const adminMfaRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = DisableSchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUserId = (request.user as PlatformJwtPayload).sub;
       const result = await disablePlatformMfa({
         platformUserId,

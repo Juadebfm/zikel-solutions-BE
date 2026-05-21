@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { env } from '../../config/env.js';
 import type { PlatformJwtPayload, UserRole, TenantRole } from '../../types/index.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   createImpersonationGrant,
   revokeActiveImpersonation,
@@ -108,12 +109,7 @@ const impersonationRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ImpersonateBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const result = await createImpersonationGrant({
@@ -231,12 +227,7 @@ const impersonationRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListGrantsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const { page, pageSize, platformUserId, targetTenantId, ticketReference } = parse.data;
       const result = await listImpersonationGrants({
         page,

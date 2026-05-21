@@ -17,6 +17,7 @@ import type { PlatformJwtPayload } from '../../types/index.js';
 import { requirePlatformMfa } from '../../middleware/mfa.js';
 import { requirePlatformRole } from '../../middleware/platform-rbac.js';
 import * as adminBilling from './admin-billing.service.js';
+import { sendValidationError } from '../../lib/errors.js';
 
 const ListSubscriptionsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -102,12 +103,7 @@ const adminBillingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListSubscriptionsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await adminBilling.listSubscriptionsForPlatform({
         page: parse.data.page,
         pageSize: parse.data.pageSize,
@@ -182,12 +178,7 @@ const adminBillingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = OverrideBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const data = await adminBilling.applySubscriptionOverride({
@@ -236,12 +227,7 @@ const adminBillingRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListEventsQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const result = await adminBilling.listBillingEvents({
         page: parse.data.page,
         pageSize: parse.data.pageSize,

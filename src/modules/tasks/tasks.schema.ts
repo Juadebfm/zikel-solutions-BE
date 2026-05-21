@@ -146,6 +146,22 @@ const TaskReferenceInputSchema = z.object({
   }
 });
 
+// `dueAt`, `submittedAt`, `taskRef`, and `type` are surface-level field names
+// the FE uses; the service normalises them to the underlying Prisma columns.
+export const TASK_SORTABLE_FIELDS = [
+  'taskRef',
+  'title',
+  'status',
+  'approvalStatus',
+  'category',
+  'type',
+  'priority',
+  'dueAt',
+  'submittedAt',
+  'createdAt',
+  'updatedAt',
+] as const;
+
 export const ListTasksQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -173,22 +189,9 @@ export const ListTasksQuerySchema = z.object({
   dateTo: QueryDateSchema,
   formGroup: z.string().max(120).optional(),
   mine: BoolishSchema.optional(),
-  sortBy: z
-    .enum([
-      'taskRef',
-      'title',
-      'status',
-      'approvalStatus',
-      'category',
-      'type',
-      'priority',
-      'dueAt',
-      'submittedAt',
-      'createdAt',
-      'updatedAt',
-    ])
-    .optional(),
-  sortOrder: z.enum(['asc', 'desc']).default('asc'),
+  sortBy: z.string().min(1).max(40).optional(),
+  sortDir: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(['asc', 'desc']).optional(),
 }).superRefine((value, ctx) => {
   if (value.dateFrom && value.dateTo && value.dateFrom > value.dateTo) {
     ctx.addIssue({
@@ -293,21 +296,12 @@ export const listTasksQueryJson = {
     mine: { type: 'boolean' },
     sortBy: {
       type: 'string',
-      enum: [
-        'taskRef',
-        'title',
-        'status',
-        'approvalStatus',
-        'category',
-        'type',
-        'priority',
-        'dueAt',
-        'submittedAt',
-        'createdAt',
-        'updatedAt',
-      ],
+      maxLength: 40,
+      description:
+        'Sortable column. Allowed: taskRef, title, status, approvalStatus, category, type, priority, dueAt, submittedAt, createdAt, updatedAt.',
     },
-    sortOrder: { type: 'string', enum: ['asc', 'desc'], default: 'asc' },
+    sortDir: { type: 'string', enum: ['asc', 'desc'] },
+    sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
   },
 } as const;
 

@@ -2,17 +2,19 @@ import { AuditAction, MembershipStatus, Prisma, TenantRole, UserRole } from '@pr
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import { parseSort } from '../../lib/sort.js';
 import { createTask } from '../tasks/tasks.service.js';
-import type {
-  CloneFormBody,
-  CreateFormBody,
-  FormAccessBody,
-  FormBuilderBody,
-  FormPreviewBody,
-  FormSubmissionBody,
-  FormTriggerBody,
-  ListFormsQuery,
-  UpdateFormBody,
+import {
+  FORM_SORTABLE_FIELDS,
+  type CloneFormBody,
+  type CreateFormBody,
+  type FormAccessBody,
+  type FormBuilderBody,
+  type FormPreviewBody,
+  type FormSubmissionBody,
+  type FormTriggerBody,
+  type ListFormsQuery,
+  type UpdateFormBody,
 } from './forms.schema.js';
 
 type FormActorContext = {
@@ -335,15 +337,22 @@ function paginationMeta(total: number, page: number, pageSize: number) {
 
 function sortForms(
   rows: ReturnType<typeof mapFormTemplate>[],
-  sortBy: ListFormsQuery['sortBy'],
-  sortOrder: ListFormsQuery['sortOrder'],
+  query: Pick<ListFormsQuery, 'sortBy' | 'sortDir' | 'sortOrder'>,
 ) {
-  const direction = sortOrder === 'desc' ? -1 : 1;
+  const sort = parseSort({
+    sortBy: query.sortBy,
+    sortDir: query.sortDir,
+    sortOrder: query.sortOrder,
+    allowed: FORM_SORTABLE_FIELDS,
+    defaultBy: 'updatedAt',
+    defaultDir: 'desc',
+  });
+  const direction = sort.dir === 'desc' ? -1 : 1;
   return [...rows].sort((a, b) => {
-    if (sortBy === 'name') return a.name.localeCompare(b.name) * direction;
-    if (sortBy === 'group') return a.formGroup.localeCompare(b.formGroup) * direction;
-    if (sortBy === 'status') return a.status.localeCompare(b.status) * direction;
-    if (sortBy === 'createdAt') return (a.createdAt.getTime() - b.createdAt.getTime()) * direction;
+    if (sort.by === 'name') return a.name.localeCompare(b.name) * direction;
+    if (sort.by === 'group') return a.formGroup.localeCompare(b.formGroup) * direction;
+    if (sort.by === 'status') return a.status.localeCompare(b.status) * direction;
+    if (sort.by === 'createdAt') return (a.createdAt.getTime() - b.createdAt.getTime()) * direction;
     return (a.updatedAt.getTime() - b.updatedAt.getTime()) * direction;
   });
 }
@@ -676,7 +685,7 @@ export async function listForms(actorUserId: string, query: ListFormsQuery) {
       return true;
     });
 
-  const sorted = sortForms(filtered, query.sortBy, query.sortOrder);
+  const sorted = sortForms(filtered, query);
   const total = sorted.length;
   const skip = (query.page - 1) * query.pageSize;
   const data = sorted.slice(skip, skip + query.pageSize);

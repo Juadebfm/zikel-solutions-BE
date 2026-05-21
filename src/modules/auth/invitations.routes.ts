@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { JwtPayload } from '../../types/index.js';
 import { Permissions as P } from '../../auth/permissions.js';
-import { httpError } from '../../lib/errors.js';
+import { httpError, sendValidationError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import {
@@ -77,12 +77,7 @@ const invitationRoutes: FastifyPluginAsync = async (fastify) => {
       },
       handler: async (request, reply) => {
         const parse = ListInvitationsQuerySchema.safeParse(request.query);
-        if (!parse.success) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-          });
-        }
+        if (!parse.success) return sendValidationError(reply, parse.error);
         const userId = (request.user as JwtPayload).sub;
         const tenant = await requireTenantContext(userId);
         const result = await listInvitations({
@@ -128,12 +123,7 @@ const invitationRoutes: FastifyPluginAsync = async (fastify) => {
       },
       handler: async (request, reply) => {
         const parse = CreateInvitationBodySchema.safeParse(request.body);
-        if (!parse.success) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-          });
-        }
+        if (!parse.success) return sendValidationError(reply, parse.error);
         const userId = (request.user as JwtPayload).sub;
         const tenant = await requireTenantContext(userId);
         const { invitation, plaintextToken } = await createInvitation({
@@ -359,12 +349,7 @@ const publicInvitationRoutes: FastifyPluginAsync = async (fastify) => {
         throw httpError(422, 'VALIDATION_ERROR', paramsParse.error.issues[0]?.message ?? 'Invalid token.');
       }
       const bodyParse = AcceptInvitationBodySchema.safeParse(request.body);
-      if (!bodyParse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: bodyParse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!bodyParse.success) return sendValidationError(reply, bodyParse.error);
       const result = await acceptInvitation({
         plaintextToken: paramsParse.data.token,
         firstName: bodyParse.data.firstName,

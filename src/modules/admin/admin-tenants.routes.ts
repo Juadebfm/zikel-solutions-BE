@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { PlatformJwtPayload } from '../../types/index.js';
 import { requirePlatformRole } from '../../middleware/platform-rbac.js';
 import { requirePlatformMfa } from '../../middleware/mfa.js';
+import { sendValidationError } from '../../lib/errors.js';
 import {
   listTenantsForPlatform,
   getTenantForPlatform,
@@ -63,12 +64,7 @@ const adminTenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ListQuerySchema.safeParse(request.query);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const { page, pageSize, search, isActive, country } = parse.data;
       const result = await listTenantsForPlatform({
         page,
@@ -156,12 +152,7 @@ const adminTenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = SuspendBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const result = await suspendTenant({
@@ -217,12 +208,7 @@ const adminTenantRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const parse = ReactivateBodySchema.safeParse(request.body);
-      if (!parse.success) {
-        return reply.status(422).send({
-          success: false,
-          error: { code: 'VALIDATION_ERROR', message: parse.error.issues[0]?.message ?? 'Validation error.' },
-        });
-      }
+      if (!parse.success) return sendValidationError(reply, parse.error);
       const platformUser = request.user as PlatformJwtPayload;
       const ua = request.headers['user-agent'];
       const result = await reactivateTenant({
