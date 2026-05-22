@@ -217,7 +217,10 @@ function buildTaskOrderBy(query: SummaryListQuery): Prisma.TaskOrderByWithRelati
     defaultBy: 'dueDate',
     defaultDir: 'asc',
   });
-  return [{ [sort.by]: sort.dir }] as Prisma.TaskOrderByWithRelationInput[];
+  // FE-facing alias → Prisma column. Mirrors the same rename on /tasks so
+  // the FE can use `dueAt` consistently across both endpoints.
+  const column = sort.by === 'dueAt' ? 'dueDate' : sort.by;
+  return [{ [column]: sort.dir }] as Prisma.TaskOrderByWithRelationInput[];
 }
 
 function buildPaginationMeta(total: number, page: number, pageSize: number) {

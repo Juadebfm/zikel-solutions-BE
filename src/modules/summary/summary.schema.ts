@@ -13,11 +13,15 @@ const QueryDateSchema = z
     return value instanceof Date ? value : new Date(value);
   });
 
+// `dueAt` is the FE-facing alias for the underlying `dueDate` column —
+// mirrors the alias on /tasks so the FE can use one sortBy name across
+// both endpoints. Service-side `buildTaskOrderBy` does the column rename.
 export const SUMMARY_TODO_SORTABLE_FIELDS = [
   'title',
   'status',
   'approvalStatus',
   'priority',
+  'dueAt',
   'dueDate',
   'createdAt',
   'updatedAt',
@@ -134,7 +138,8 @@ export const tasksToApproveQueryJson = {
     sortBy: {
       type: 'string',
       maxLength: 40,
-      description: 'Sortable column. Allowed: title, status, approvalStatus, priority, dueDate, createdAt, updatedAt.',
+      description:
+        'Sortable column. Allowed: title, status, approvalStatus, priority, dueAt (alias for dueDate), dueDate, createdAt, updatedAt.',
     },
     sortDir: { type: 'string', enum: ['asc', 'desc'] },
     sortOrder: { type: 'string', enum: ['asc', 'desc'], description: 'Legacy alias for sortDir.' },
