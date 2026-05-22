@@ -36,7 +36,9 @@ const HINT_COOKIE_DOMAIN = env.AUTH_HINT_COOKIE_DOMAIN;
 const HINT_COOKIE_SECURE = REFRESH_COOKIE_SECURE;
 const LEGACY_REFRESH_TOKEN_IN_BODY = env.AUTH_LEGACY_REFRESH_TOKEN_IN_BODY;
 const ACCESS_TOKEN_EXPIRY_MS = parseExpiryMs(env.JWT_ACCESS_EXPIRY);
-const SESSION_WARNING_WINDOW_SECONDS = env.SESSION_WARNING_WINDOW_SECONDS;
+// Exported because the /auth/session-expiry handler emits its own response
+// shape (not via buildTimedAuthResponse) but needs the same warning window.
+export const SESSION_WARNING_WINDOW_SECONDS = env.SESSION_WARNING_WINDOW_SECONDS;
 
 export function signTenantAccessToken(
   fastify: FastifyInstance,
