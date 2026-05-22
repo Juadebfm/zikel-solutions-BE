@@ -18,8 +18,16 @@ import { env } from '../../config/env.js';
 import { parseExpiryMs } from '../../lib/tokens.js';
 import type { JwtPayload } from '../../types/index.js';
 
-const REFRESH_COOKIE_NAME = env.AUTH_REFRESH_COOKIE_NAME;
 const REFRESH_COOKIE_SECURE = env.NODE_ENV === 'staging' || env.NODE_ENV === 'production';
+// `__Host-` prefix REQUIRES Secure=true per RFC 6265bis; without it browsers
+// refuse to store the cookie. In dev/test (Secure=false), strip the prefix so
+// the cookie is acceptable over plain HTTP. Production keeps the prefix.
+// Mirrors the same logic in auth.routes.ts so /auth/login and the MFA
+// completion endpoints (totp/verify, backup/verify, totp/enroll/confirm) emit
+// — and resolve — the same cookie name across environments.
+const REFRESH_COOKIE_NAME = REFRESH_COOKIE_SECURE
+  ? env.AUTH_REFRESH_COOKIE_NAME
+  : env.AUTH_REFRESH_COOKIE_NAME.replace(/^__Host-/, '');
 const REFRESH_COOKIE_DOMAIN = env.AUTH_REFRESH_COOKIE_DOMAIN;
 const REFRESH_COOKIE_PATH = env.AUTH_REFRESH_COOKIE_PATH;
 const REFRESH_COOKIE_SAME_SITE = env.AUTH_REFRESH_COOKIE_SAME_SITE;
