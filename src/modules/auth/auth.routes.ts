@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync } from 'fastify';
 import {
   RegisterBodySchema,
   VerifyOtpBodySchema,
@@ -27,147 +27,19 @@ import {
 } from './auth.schema.js';
 import type { JwtPayload } from '../../types/index.js';
 import * as authService from './auth.service.js';
-import { parseExpiryMs } from '../../lib/tokens.js';
 import { sendValidationError } from '../../lib/errors.js';
-import { env } from '../../config/env.js';
-
-function signAccessToken(
-  fastify: FastifyInstance,
-  user: { id: string; email: string; role: JwtPayload['role'] },
-  session: {
-    activeTenantId: string | null;
-    activeTenantRole: JwtPayload['tenantRole'];
-    mfaVerified: boolean;
-  },
-  sessionId: string | null,
-) {
-  return fastify.jwt.sign({
-    sub: user.id,
-    email: user.email,
-    role: user.role,
-    tenantId: session.activeTenantId,
-    tenantRole: session.activeTenantRole ?? null,
-    mfaVerified: session.mfaVerified,
-    ...(sessionId ? { sid: sessionId } : {}),
-    aud: 'tenant',
-  });
-}
-
-const ACCESS_TOKEN_EXPIRY_MS = parseExpiryMs(env.JWT_ACCESS_EXPIRY);
-const SESSION_WARNING_WINDOW_SECONDS = env.SESSION_WARNING_WINDOW_SECONDS;
-const LEGACY_REFRESH_TOKEN_IN_BODY = env.AUTH_LEGACY_REFRESH_TOKEN_IN_BODY;
-const REFRESH_COOKIE_SECURE = env.NODE_ENV === 'staging' || env.NODE_ENV === 'production';
-// `__Host-` prefix REQUIRES Secure=true per RFC 6265bis; without it browsers
-// (and curl) refuse to save the cookie. In dev/test (Secure=false), strip the
-// prefix so the cookie is acceptable. Production keeps the prefix.
-const REFRESH_COOKIE_NAME = REFRESH_COOKIE_SECURE
-  ? env.AUTH_REFRESH_COOKIE_NAME
-  : env.AUTH_REFRESH_COOKIE_NAME.replace(/^__Host-/, '');
-const REFRESH_COOKIE_DOMAIN = env.AUTH_REFRESH_COOKIE_DOMAIN;
-const REFRESH_COOKIE_PATH = env.AUTH_REFRESH_COOKIE_PATH;
-const REFRESH_COOKIE_SAME_SITE = env.AUTH_REFRESH_COOKIE_SAME_SITE;
-const HINT_COOKIE_NAME = env.AUTH_HINT_COOKIE_NAME;
-const HINT_COOKIE_DOMAIN = env.AUTH_HINT_COOKIE_DOMAIN;
-const HINT_COOKIE_SECURE = REFRESH_COOKIE_SECURE;
-
-function buildTimedAuthResponse(args: {
-  user: Record<string, unknown>;
-  session: {
-    activeTenantId: string | null;
-    activeTenantRole: JwtPayload['tenantRole'];
-    memberships: unknown[];
-    mfaRequired: boolean;
-    mfaVerified: boolean;
-  };
-  sessionExpiry: {
-    idleExpiresAt: Date;
-    absoluteExpiresAt: Date;
-  };
-  accessToken: string;
-  refreshToken?: string;
-}) {
-  const serverTime = new Date();
-  const tokens: Record<string, string> = {
-    accessToken: args.accessToken,
-    accessTokenExpiresAt: new Date(serverTime.getTime() + ACCESS_TOKEN_EXPIRY_MS).toISOString(),
-    refreshTokenExpiresAt: args.sessionExpiry.absoluteExpiresAt.toISOString(),
-  };
-
-  if (LEGACY_REFRESH_TOKEN_IN_BODY && args.refreshToken) {
-    tokens.refreshToken = args.refreshToken;
-  }
-
-  return {
-    user: args.user,
-    session: {
-      ...args.session,
-      idleExpiresAt: args.sessionExpiry.idleExpiresAt.toISOString(),
-      absoluteExpiresAt: args.sessionExpiry.absoluteExpiresAt.toISOString(),
-      warningWindowSeconds: SESSION_WARNING_WINDOW_SECONDS,
-    },
-    tokens,
-    serverTime: serverTime.toISOString(),
-  };
-}
-
-function setNoStoreHeaders(reply: import('fastify').FastifyReply) {
-  reply.header('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-  reply.header('Pragma', 'no-cache');
-  reply.header('Expires', '0');
-}
-
-function setRefreshTokenCookie(
-  reply: import('fastify').FastifyReply,
-  refreshToken: string,
-  expiresAt: Date,
-) {
-  reply.setCookie(REFRESH_COOKIE_NAME, refreshToken, {
-    httpOnly: true,
-    secure: REFRESH_COOKIE_SECURE,
-    sameSite: REFRESH_COOKIE_SAME_SITE,
-    path: REFRESH_COOKIE_PATH,
-    ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
-    expires: expiresAt,
-  });
-  setAuthHintCookie(reply, expiresAt);
-}
-
-function clearRefreshTokenCookie(reply: import('fastify').FastifyReply) {
-  reply.clearCookie(REFRESH_COOKIE_NAME, {
-    path: REFRESH_COOKIE_PATH,
-    ...(REFRESH_COOKIE_DOMAIN ? { domain: REFRESH_COOKIE_DOMAIN } : {}),
-  });
-  clearAuthHintCookie(reply);
-}
-
-// Non-HttpOnly presence flag, scoped to the parent domain (e.g. .zikelsolutions.com),
-// so the marketing site can swap "Login" for an avatar without calling the API.
-// Carries no session data — its absence/presence is the only signal.
-function setAuthHintCookie(reply: import('fastify').FastifyReply, expiresAt: Date) {
-  reply.setCookie(HINT_COOKIE_NAME, '1', {
-    httpOnly: false,
-    secure: HINT_COOKIE_SECURE,
-    sameSite: 'lax',
-    path: '/',
-    ...(HINT_COOKIE_DOMAIN ? { domain: HINT_COOKIE_DOMAIN } : {}),
-    expires: expiresAt,
-  });
-}
-
-function clearAuthHintCookie(reply: import('fastify').FastifyReply) {
-  reply.clearCookie(HINT_COOKIE_NAME, {
-    path: '/',
-    ...(HINT_COOKIE_DOMAIN ? { domain: HINT_COOKIE_DOMAIN } : {}),
-  });
-}
-
-function resolveRefreshToken(
-  request: import('fastify').FastifyRequest,
-  bodyRefreshToken?: string,
-) {
-  const cookieToken = request.cookies?.[REFRESH_COOKIE_NAME];
-  return bodyRefreshToken ?? cookieToken ?? null;
-}
+// All session-cookie + access-token + timed-auth-response logic lives in
+// auth.helpers.ts. Keeping this file as a pure route definition avoids the
+// drift that previously caused the __Host- dev-cookie bug (PR #6).
+import {
+  buildTimedAuthResponse,
+  clearTenantRefreshCookie,
+  resolveTenantRefreshToken,
+  SESSION_WARNING_WINDOW_SECONDS,
+  setNoStoreHeaders,
+  setTenantRefreshCookie,
+  signTenantAccessToken,
+} from './auth.helpers.js';
 
 const authRoutes: FastifyPluginAsync = async (fastify) => {
   // ── POST /auth/register ────────────────────────────────────────────────────
@@ -334,9 +206,9 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const body = VerifyOtpBodySchema.parse(request.body);
       const { user, refreshToken, session, sessionId, sessionExpiry } = await authService.verifyOtp(body);
-      const accessToken = signAccessToken(fastify, user, session, sessionId);
+      const accessToken = signTenantAccessToken(fastify, user, session, sessionId);
       setNoStoreHeaders(reply);
-      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
+      setTenantRefreshCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
         success: true,
         data: buildTimedAuthResponse({
@@ -478,9 +350,9 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const { user, refreshToken, session, sessionId, sessionExpiry } = result;
-      const accessToken = signAccessToken(fastify, user, session, sessionId);
+      const accessToken = signTenantAccessToken(fastify, user, session, sessionId);
       setNoStoreHeaders(reply);
-      setRefreshTokenCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
+      setTenantRefreshCookie(reply, refreshToken, sessionExpiry.absoluteExpiresAt);
       return reply.send({
         success: true,
         data: buildTimedAuthResponse({
@@ -524,11 +396,11 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     },
     handler: async (request, reply) => {
       const body = RefreshBodySchema.parse(request.body ?? {});
-      const providedRefreshToken = resolveRefreshToken(request, body.refreshToken);
+      const providedRefreshToken = resolveTenantRefreshToken(request, body.refreshToken);
 
       if (!providedRefreshToken) {
         setNoStoreHeaders(reply);
-        clearRefreshTokenCookie(reply);
+        clearTenantRefreshCookie(reply);
         return reply.status(401).send({
           success: false,
           error: {
@@ -540,9 +412,9 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
 
       try {
         const { user, newRefreshToken, session, sessionId, sessionExpiry } = await authService.refreshAccessToken(providedRefreshToken);
-        const accessToken = signAccessToken(fastify, user, session, sessionId);
+        const accessToken = signTenantAccessToken(fastify, user, session, sessionId);
         setNoStoreHeaders(reply);
-        setRefreshTokenCookie(reply, newRefreshToken, sessionExpiry.absoluteExpiresAt);
+        setTenantRefreshCookie(reply, newRefreshToken, sessionExpiry.absoluteExpiresAt);
         return reply.send({
           success: true,
           data: buildTimedAuthResponse({
@@ -562,7 +434,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
           )
         ) {
           setNoStoreHeaders(reply);
-          clearRefreshTokenCookie(reply);
+          clearTenantRefreshCookie(reply);
         }
         throw error;
       }
@@ -613,7 +485,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       },
     },
     handler: async (request, reply) => {
-      const refreshToken = resolveRefreshToken(request);
+      const refreshToken = resolveTenantRefreshToken(request);
       if (!refreshToken) {
         setNoStoreHeaders(reply);
         return reply.status(401).send({
@@ -750,7 +622,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
       const body = SwitchTenantBodySchema.parse(request.body);
       const actorUserId = (request.user as JwtPayload).sub;
       const { user, session } = await authService.switchTenant(actorUserId, body.tenantId);
-      const accessToken = signAccessToken(fastify, user, session, (request.user as JwtPayload).sid ?? null);
+      const accessToken = signTenantAccessToken(fastify, user, session, (request.user as JwtPayload).sid ?? null);
       setNoStoreHeaders(reply);
       return reply.send({
         success: true,
@@ -793,14 +665,14 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const body = LogoutBodySchema.parse(request.body ?? {});
       const jwt = request.user as JwtPayload;
-      const refreshToken = resolveRefreshToken(request, body.refreshToken);
+      const refreshToken = resolveTenantRefreshToken(request, body.refreshToken);
       await authService.logout({
         actorUserId: jwt.sub,
         sessionId: jwt.sid ?? null,
         refreshToken: refreshToken ?? null,
       });
       setNoStoreHeaders(reply);
-      clearRefreshTokenCookie(reply);
+      clearTenantRefreshCookie(reply);
       return reply.send({ success: true, data: { message: 'Logged out successfully.' } });
     },
   });
@@ -864,7 +736,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
         sessionId: request.params.id,
       });
       if (request.params.id === jwt.sid) {
-        clearRefreshTokenCookie(reply);
+        clearTenantRefreshCookie(reply);
         setNoStoreHeaders(reply);
       }
       return reply.send({ success: true, data: result });
@@ -892,7 +764,7 @@ const authRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const jwt = request.user as JwtPayload;
       const result = await authService.revokeAllTenantSessions(jwt.sub);
-      clearRefreshTokenCookie(reply);
+      clearTenantRefreshCookie(reply);
       setNoStoreHeaders(reply);
       return reply.send({ success: true, data: result });
     },
