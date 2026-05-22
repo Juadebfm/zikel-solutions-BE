@@ -129,6 +129,41 @@ function slugify(input: string): string {
     .slice(0, 120);
 }
 
+// Slugs we never let tenants register. Covers obvious infra/UX namespaces
+// (api, www, admin, etc.), our own brand, and a handful of common product
+// surfaces so a tenant can't squat e.g. `zikel.app/help` or `app.zikel`.
+// Stored as a Set for O(1) membership; lowercase only because every
+// candidate passes through `slugify()` first.
+const RESERVED_SLUGS = new Set<string>([
+  'admin',
+  'api',
+  'app',
+  'auth',
+  'account',
+  'billing',
+  'blog',
+  'dashboard',
+  'docs',
+  'help',
+  'internal',
+  'login',
+  'mail',
+  'public',
+  'register',
+  'root',
+  'settings',
+  'signup',
+  'status',
+  'support',
+  'system',
+  'www',
+  'zikel',
+]);
+
+function isReservedSlug(slug: string): boolean {
+  return RESERVED_SLUGS.has(slug);
+}
+
 function parseUniqueConstraintTarget(metaTarget: unknown): string[] {
   if (Array.isArray(metaTarget)) {
     return metaTarget.map((item) => String(item).toLowerCase());
@@ -392,6 +427,18 @@ export async function register(body: RegisterBody) {
   if (!tenantSlug) {
     throw httpError(422, 'VALIDATION_ERROR', 'Unable to derive slug from organization name.');
   }
+  // Reserved-slug check mirrors the /auth/check-org-slug endpoint. We block
+  // here too so a caller can't bypass the availability check by going
+  // straight to /auth/register with a reserved value (e.g. `admin`, `api`).
+  // Distinct error code from `ORG_SLUG_TAKEN` so the FE can render a
+  // dedicated "please choose a different organisation name" message.
+  if (isReservedSlug(tenantSlug)) {
+    throw httpError(
+      409,
+      'ORG_SLUG_RESERVED',
+      'This organisation name is not available. Please choose a different one.',
+    );
+  }
 
   const passwordHash = await hashPassword(body.password);
 
@@ -534,6 +581,11 @@ export async function checkOrgSlugAvailability(rawSlug: string) {
   if (!slug) {
     // Invalid input is "not available" — keeps the response shape uniform and
     // doesn't leak validation rules via a different code path.
+    return withTimingFloor(Promise.resolve({ available: false, slug }));
+  }
+  if (isReservedSlug(slug)) {
+    // Same shape as a taken slug. The FE renders "not available"; we don't
+    // tell the caller *why* (reserved vs taken) to avoid leaking the list.
     return withTimingFloor(Promise.resolve({ available: false, slug }));
   }
   return withTimingFloor(
