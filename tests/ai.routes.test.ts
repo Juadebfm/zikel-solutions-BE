@@ -210,7 +210,7 @@ describe('AI routes', () => {
         {
           tenantId: 'tenant_1',
           status: 'active',
-          role: { name: 'Care Worker', permissions: ['ai:use'] },
+          role: { name: 'Residential Care Worker', permissions: ['ai:use'] },
         },
       ],
     });

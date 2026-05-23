@@ -215,7 +215,7 @@ describe('Reports routes', () => {
         {
           tenantId: 'tenant_1',
           status: 'active',
-          role: { name: 'Care Worker', permissions: ['care_logs:read', 'care_logs:write'] },
+          role: { name: 'Residential Care Worker', permissions: ['care_logs:read', 'care_logs:write'] },
         },
       ],
     });

@@ -184,10 +184,10 @@ describe('requireAvailableQuota — per-role caps', () => {
   it('throws 403 AI_DISABLED_FOR_ROLE when perRoleCap is 0', async () => {
     mockPrisma.tokenAllocation.upsert.mockResolvedValue(ALLOCATION_BASE);
     mockPrisma.tenantAiRestriction.findUnique.mockResolvedValue({
-      perRoleCaps: { 'Care Worker': 0 },
+      perRoleCaps: { 'Residential Care Worker': 0 },
       perUserCaps: {},
     });
-    mockPrisma.tenantMembership.findFirst.mockResolvedValue({ role: { name: 'Care Worker' } });
+    mockPrisma.tenantMembership.findFirst.mockResolvedValue({ role: { name: 'Residential Care Worker' } });
     await expect(
       quota.requireAvailableQuota({ tenantId: 't_1', userId: 'u_1', surface: 'chat' }),
     ).rejects.toMatchObject({ statusCode: 403, code: 'AI_DISABLED_FOR_ROLE' });
@@ -196,10 +196,10 @@ describe('requireAvailableQuota — per-role caps', () => {
   it("throws 402 AI_USER_CAP_EXHAUSTED when user's role cap is exceeded", async () => {
     mockPrisma.tokenAllocation.upsert.mockResolvedValue(ALLOCATION_BASE);
     mockPrisma.tenantAiRestriction.findUnique.mockResolvedValue({
-      perRoleCaps: { 'Care Worker': 50 },
+      perRoleCaps: { 'Residential Care Worker': 50 },
       perUserCaps: {},
     });
-    mockPrisma.tenantMembership.findFirst.mockResolvedValue({ role: { name: 'Care Worker' } });
+    mockPrisma.tenantMembership.findFirst.mockResolvedValue({ role: { name: 'Residential Care Worker' } });
     mockPrisma.tokenLedgerEntry.aggregate.mockResolvedValue({ _sum: { delta: -50 } });
     await expect(
       quota.requireAvailableQuota({ tenantId: 't_1', userId: 'u_1', surface: 'chat' }),
@@ -209,7 +209,7 @@ describe('requireAvailableQuota — per-role caps', () => {
   it('Owner-role with no role cap configured passes', async () => {
     mockPrisma.tokenAllocation.upsert.mockResolvedValue(ALLOCATION_BASE);
     mockPrisma.tenantAiRestriction.findUnique.mockResolvedValue({
-      perRoleCaps: { 'Care Worker': 50 },
+      perRoleCaps: { 'Residential Care Worker': 50 },
       perUserCaps: {},
     });
     mockPrisma.tenantMembership.findFirst.mockResolvedValue({ role: { name: 'Owner' } });

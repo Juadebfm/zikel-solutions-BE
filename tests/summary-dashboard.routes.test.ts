@@ -128,7 +128,7 @@ function mockTenantContext(
   //   that here by picking a roleName that maps back to the desired enum.
   const roleName = tenantRole === 'tenant_admin' ? 'Owner'
     : tenantRole === 'sub_admin' ? 'Admin'
-    : 'Care Worker';
+    : 'Residential Care Worker';
   mockPrisma.tenantUser.findUnique.mockResolvedValueOnce({
     id: userId,
     role: userRole,

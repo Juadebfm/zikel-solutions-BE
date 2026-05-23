@@ -94,7 +94,12 @@ export const ALL_PERMISSIONS: Permission[] = Object.values(Permissions);
 
 // ── System roles (seeded per-tenant on creation; tenants cannot delete) ──────
 
-export const SYSTEM_ROLE_NAMES = ['Owner', 'Admin', 'Care Worker', 'Read-Only'] as const;
+// Built-in role names. "Residential Care Worker" mirrors the GOV.UK
+// Regulated Professions Register + Skills for Care canonical title for
+// staff in UK children's residential care. "Viewer" is the SaaS-standard
+// access-tier label for read-only stakeholders.
+// See docs/role-and-membership-contract.md for the naming decision record.
+export const SYSTEM_ROLE_NAMES = ['Owner', 'Admin', 'Residential Care Worker', 'Viewer'] as const;
 export type SystemRoleName = (typeof SYSTEM_ROLE_NAMES)[number];
 
 export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
@@ -105,8 +110,8 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   // does not exist as a permission yet — owner-only by hardcoded check).
   Admin: ALL_PERMISSIONS.filter((p) => p !== Permissions.BILLING_WRITE),
 
-  // Care Worker: day-to-day frontline staff.
-  'Care Worker': [
+  // Residential Care Worker: day-to-day frontline staff in a children's home.
+  'Residential Care Worker': [
     Permissions.EMPLOYEES_READ,
     Permissions.HOMES_READ,
     Permissions.CARE_GROUPS_READ,
@@ -121,8 +126,8 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
     Permissions.AI_USE,
   ],
 
-  // Read-Only: pure observer (auditor, regulator, parent portal etc.).
-  'Read-Only': [
+  // Viewer: pure observer (auditor, regulator, parent portal, IRO, etc.).
+  Viewer: [
     Permissions.EMPLOYEES_READ,
     Permissions.HOMES_READ,
     Permissions.CARE_GROUPS_READ,

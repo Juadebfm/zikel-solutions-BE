@@ -461,7 +461,7 @@ describe('POST /api/v1/billing/cancel', () => {
 describe('PUT /api/v1/billing/ai-restrictions', () => {
   it('persists per-role caps + audit user', async () => {
     mockPrisma.tenantAiRestriction.upsert.mockResolvedValue({
-      perRoleCaps: { 'Care Worker': 50 },
+      perRoleCaps: { 'Residential Care Worker': 50 },
       perUserCaps: {},
       updatedAt: new Date(),
     });
@@ -472,14 +472,14 @@ describe('PUT /api/v1/billing/ai-restrictions', () => {
         authorization: `Bearer ${ownerToken()}`,
         'content-type': 'application/json',
       },
-      payload: { perRoleCaps: { 'Care Worker': 50 } },
+      payload: { perRoleCaps: { 'Residential Care Worker': 50 } },
     });
     expect(res.statusCode).toBe(200);
     expect(mockPrisma.tenantAiRestriction.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tenantId: 't_1' },
         update: expect.objectContaining({
-          perRoleCaps: { 'Care Worker': 50 },
+          perRoleCaps: { 'Residential Care Worker': 50 },
           updatedByUserId: 'u_owner',
         }),
       }),
@@ -494,7 +494,7 @@ describe('PUT /api/v1/billing/ai-restrictions', () => {
         authorization: `Bearer ${ownerToken()}`,
         'content-type': 'application/json',
       },
-      payload: { perRoleCaps: { 'Care Worker': 999_999 } },
+      payload: { perRoleCaps: { 'Residential Care Worker': 999_999 } },
     });
     expect(res.statusCode).toBe(422);
     const body = res.json() as { error: { code: string } };

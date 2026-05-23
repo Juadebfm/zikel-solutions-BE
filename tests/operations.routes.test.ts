@@ -130,7 +130,7 @@ beforeEach(() => {
 function authHeader(
   userId = 'user_1',
   role: 'staff' | 'manager' | 'admin' = 'manager',
-  tenantRoleName: 'Owner' | 'Admin' | 'Care Worker' = 'Admin',
+  tenantRoleName: 'Owner' | 'Admin' | 'Residential Care Worker' = 'Admin',
   mfaVerified?: boolean,
 ) {
   const tenantRoleEnum =
@@ -157,7 +157,7 @@ function authHeader(
 function mockTenantContext(
   userId = 'user_1',
   userRole: 'staff' | 'manager' | 'admin' = 'manager',
-  roleName: 'Owner' | 'Admin' | 'Care Worker' | 'Read-Only' = 'Admin',
+  roleName: 'Owner' | 'Admin' | 'Residential Care Worker' | 'Viewer' = 'Admin',
   permissions: string[] = ALL_PERMS,
 ) {
   mockPrisma.tenantUser.findUnique.mockResolvedValue({
@@ -314,7 +314,7 @@ describe('New module routes', () => {
   it('POST /api/v1/vehicles allows a Care Worker with vehicles:write permission', async () => {
     // Phase 3: a Care Worker role with vehicles:write permission can create
     // vehicles even with userRole='staff'. Authorization is now capability-based.
-    mockTenantContext('staff_1', 'staff', 'Care Worker', ['vehicles:read', 'vehicles:write']);
+    mockTenantContext('staff_1', 'staff', 'Residential Care Worker', ['vehicles:read', 'vehicles:write']);
     mockPrisma.vehicle.create.mockResolvedValueOnce({
       id: 'veh_new',
       tenantId: 'tenant_1',
@@ -334,7 +334,7 @@ describe('New module routes', () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/v1/vehicles',
-      headers: authHeader('staff_1', 'staff', 'Care Worker'),
+      headers: authHeader('staff_1', 'staff', 'Residential Care Worker'),
       payload: { registration: 'abc 321' },
     });
 

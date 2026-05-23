@@ -168,8 +168,8 @@ function roleNamesForLegacyRoles(legacy: TenantRole[]): string[] {
     if (role === TenantRole.tenant_admin) names.add('Owner');
     else if (role === TenantRole.sub_admin) names.add('Admin');
     else if (role === TenantRole.staff) {
-      names.add('Care Worker');
-      names.add('Read-Only');
+      names.add('Residential Care Worker');
+      names.add('Viewer');
     }
   }
   return Array.from(names);
@@ -595,10 +595,10 @@ export async function addTenantMembership(
   }
 
   // Map legacy TenantRole enum to a system Role.id
-  const targetRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+  const targetRoleName: 'Owner' | 'Admin' | 'Residential Care Worker' =
     body.role === TenantRole.tenant_admin ? 'Owner'
       : body.role === TenantRole.sub_admin ? 'Admin'
-      : 'Care Worker';
+      : 'Residential Care Worker';
   const targetRoleId = await getSystemRoleId(tenantId, targetRoleName);
 
   const membership = await prisma.tenantMembership.create({
@@ -683,10 +683,10 @@ export async function provisionStaff(
       },
     });
 
-    const targetRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+    const targetRoleName: 'Owner' | 'Admin' | 'Residential Care Worker' =
       targetRole === TenantRole.tenant_admin ? 'Owner'
         : targetRole === TenantRole.sub_admin ? 'Admin'
-        : 'Care Worker';
+        : 'Residential Care Worker';
     const targetRoleId = await getSystemRoleId(tenantId, targetRoleName, tx);
 
     const membership = await tx.tenantMembership.create({
@@ -806,7 +806,7 @@ export async function updateTenantMembership(
         tenantId,
         body.role === TenantRole.tenant_admin ? 'Owner'
           : body.role === TenantRole.sub_admin ? 'Admin'
-          : 'Care Worker',
+          : 'Residential Care Worker',
       )
     : null;
 
@@ -1050,10 +1050,10 @@ export async function acceptTenantInvite(
       },
     });
 
-    const inviteRoleName: 'Owner' | 'Admin' | 'Care Worker' =
+    const inviteRoleName: 'Owner' | 'Admin' | 'Residential Care Worker' =
       invite.role === TenantRole.tenant_admin ? 'Owner'
         : invite.role === TenantRole.sub_admin ? 'Admin'
-        : 'Care Worker';
+        : 'Residential Care Worker';
     const inviteRoleId = await getSystemRoleId(invite.tenantId, inviteRoleName, tx);
 
     const membership = existingMembership
