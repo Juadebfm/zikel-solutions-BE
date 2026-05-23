@@ -3,7 +3,46 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { invalidateRolesCache } from '../../lib/cache.js';
+import { Permissions } from '../../auth/permissions.js';
 import type { CreateRoleBody, ListRolesQuery, UpdateRoleBody } from './roles.schema.js';
+
+// `billing:write` is reserved exclusively for the seeded Owner role.
+//
+// Why: granting billing-write to a custom role would let an Owner delegate
+// final financial authority (payments, plan changes, top-ups) self-service —
+// which we don't want. If a tenant needs someone other than the Owner to
+// hold billing-write, that goes through support, not the role builder.
+//
+// Two enforcement directions:
+//   1. No non-Owner role may include `billing:write` in its permissions.
+//   2. The Owner role's `billing:write` cannot be stripped via this API
+//      (otherwise no role would have it and the platform would deadlock on
+//      billing actions).
+//
+// Both rules collapse to: `billing:write ∈ permissions  IFF  roleName === "Owner"`.
+function assertBillingWriteReservation(
+  roleName: string,
+  permissions: readonly string[] | undefined,
+): void {
+  if (permissions === undefined) return;
+  const hasBillingWrite = permissions.includes(Permissions.BILLING_WRITE);
+  const isOwner = roleName === 'Owner';
+
+  if (hasBillingWrite && !isOwner) {
+    throw httpError(
+      403,
+      'PERMISSION_RESERVED',
+      'The billing:write permission is reserved for the organisation Owner. Contact support to delegate billing access.',
+    );
+  }
+  if (isOwner && !hasBillingWrite) {
+    throw httpError(
+      403,
+      'PERMISSION_RESERVED',
+      'The billing:write permission cannot be removed from the Owner role.',
+    );
+  }
+}
 
 const ROLE_INCLUDE = {
   _count: { select: { memberships: true } },
@@ -83,6 +122,8 @@ export async function getRole(actorId: string, id: string) {
 export async function createRole(actorId: string, body: CreateRoleBody) {
   const tenant = await requireTenantContext(actorId);
 
+  assertBillingWriteReservation(body.name, body.permissions);
+
   try {
     const role = await prisma.role.create({
       data: {
@@ -121,11 +162,16 @@ export async function updateRole(actorId: string, id: string, body: UpdateRoleBo
   const tenant = await requireTenantContext(actorId);
   const existing = await prisma.role.findFirst({
     where: { id, tenantId: tenant.tenantId },
-    select: { id: true },
+    select: { id: true, name: true },
   });
   if (!existing) {
     throw httpError(404, 'ROLE_NOT_FOUND', 'Role not found.');
   }
+
+  // Check the billing-write reservation against whatever the role's name will
+  // be AFTER this update (rename + permissions change can arrive together).
+  const effectiveName = body.name ?? existing.name;
+  assertBillingWriteReservation(effectiveName, body.permissions);
 
   const updateData: Prisma.RoleUpdateInput = {};
   if (body.name !== undefined) updateData.name = body.name;

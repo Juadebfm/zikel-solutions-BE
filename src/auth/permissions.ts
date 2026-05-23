@@ -66,6 +66,10 @@ export const Permissions = {
 
   // ── Billing ────────────────────────────────────────────────────────────────
   BILLING_READ: 'billing:read',
+  // RESERVED for the seeded Owner system role only. The self-service role
+  // builder (roles.service.ts:createRole/updateRole) rejects any non-Owner
+  // role that includes this permission with 403 PERMISSION_RESERVED.
+  // To delegate billing-write to a non-Owner, escalate to support.
   BILLING_WRITE: 'billing:write',
 
   // ── AI assistant ───────────────────────────────────────────────────────────
