@@ -2185,7 +2185,7 @@ model TokenLedgerEntry {
 }
 
 // Per-tenant config for the hybrid quota.
-//   perRoleCaps:  { Owner: null, Admin: null, "Care Worker": 50, "Read-Only": 0 }
+//   perRoleCaps:  { Owner: null, Admin: null, "Residential Care Worker": 50, "Viewer": 0 }
 //   perUserCaps:  { "userIdX": 200, "userIdY": 0 }
 // All caps are MONTHLY limits drawn from the shared pool.
 //   null  = no cap (free-for-all from pool)

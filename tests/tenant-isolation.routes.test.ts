@@ -99,7 +99,7 @@ function authHeader(
 function mockTenantContext(
   userId = 'user_1',
   userRole: 'staff' | 'manager' | 'admin' = 'manager',
-  roleName: 'Owner' | 'Admin' | 'Care Worker' = 'Admin',
+  roleName: 'Owner' | 'Admin' | 'Residential Care Worker' = 'Admin',
   permissions: string[] = ALL_PERMS,
 ) {
   mockPrisma.tenantUser.findUnique.mockResolvedValue({

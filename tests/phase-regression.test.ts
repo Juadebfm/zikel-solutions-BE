@@ -201,7 +201,7 @@ describe('Phase 3 — requirePermission denial', () => {
         {
           tenantId: 't_1',
           status: 'active',
-          role: { name: 'Read-Only', permissions: ['employees:read'] },
+          role: { name: 'Viewer', permissions: ['employees:read'] },
         },
       ],
     });

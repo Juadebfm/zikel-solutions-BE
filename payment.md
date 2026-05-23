@@ -210,7 +210,7 @@ Single migration, runs in one transaction. All new models tenant-scoped where ap
 - [ ] Model `TenantAiRestriction` — per-tenant config for the hybrid quota:
   ```
   id, tenantId (unique),
-  perRoleCaps (JSON — { Owner: null, Admin: null, "Care Worker": 50, "Read-Only": 0 }),
+  perRoleCaps (JSON — { Owner: null, Admin: null, "Residential Care Worker": 50, "Viewer": 0 }),
   perUserCaps (JSON — { "userId123": 200, "userId456": 0 }),
   updatedByUserId, updatedAt
   ```

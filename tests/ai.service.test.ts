@@ -87,18 +87,18 @@ const STAFF_PERMS = ['care_logs:read', 'care_logs:write', 'tasks:read', 'ai:use'
  * `roleName` controls the derived legacy `tenantRole`:
  *   - 'Owner' → tenant_admin → strengthProfile 'owner'
  *   - 'Admin' → sub_admin   → strengthProfile 'manager'
- *   - 'Care Worker' → staff → strengthProfile 'staff'
+ *   - 'Residential Care Worker' → staff → strengthProfile 'staff'
  */
 function mockUserAndAccess(args: {
   userId: string;
   userRole?: 'staff' | 'manager' | 'admin';
-  roleName?: 'Owner' | 'Admin' | 'Care Worker' | 'Read-Only';
+  roleName?: 'Owner' | 'Admin' | 'Residential Care Worker' | 'Viewer';
   permissions?: string[];
   aiAccessEnabled?: boolean;
   tenantAiEnabled?: boolean;
 }) {
   const userRole = args.userRole ?? 'staff';
-  const roleName = args.roleName ?? 'Care Worker';
+  const roleName = args.roleName ?? 'Residential Care Worker';
   const permissions = args.permissions ?? STAFF_PERMS;
   const tenantAiEnabled = args.tenantAiEnabled ?? true;
   mockPrisma.tenantUser.findUnique

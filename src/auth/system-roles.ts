@@ -7,9 +7,9 @@ import { SYSTEM_ROLE_NAMES, SYSTEM_ROLE_PERMISSIONS, type SystemRoleName } from 
 type PrismaLike = { role: typeof prisma.role };
 
 /**
- * Seeds the four system roles (Owner, Admin, Care Worker, Read-Only) for a tenant.
- * Idempotent — safe to call on tenant creation. Uses upsert so it can also be
- * used to refresh permission lists if the catalog changes.
+ * Seeds the four system roles (Owner, Admin, Residential Care Worker, Viewer)
+ * for a tenant. Idempotent — safe to call on tenant creation. Uses upsert so
+ * it can also be used to refresh permission lists if the catalog changes.
  *
  * Pass an optional `tx` to participate in an outer Prisma transaction.
  *
@@ -69,9 +69,9 @@ function descriptionFor(name: SystemRoleName): string {
       return 'Full access. Cannot be modified or deleted. One per tenant.';
     case 'Admin':
       return 'Full operational access excluding billing changes and ownership transfer.';
-    case 'Care Worker':
+    case 'Residential Care Worker':
       return 'Day-to-day frontline staff: read tenant data, write care logs and tasks.';
-    case 'Read-Only':
-      return 'Observer access for auditors, regulators, parent portals.';
+    case 'Viewer':
+      return 'Observer access for auditors, regulators, parent portals, IROs.';
   }
 }
