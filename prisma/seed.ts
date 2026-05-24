@@ -7,7 +7,6 @@ import {
   Prisma,
   PrismaClient,
   UserRole,
-  TenantRole,
   MembershipStatus,
   TaskCategory,
   TaskStatus,
@@ -18,6 +17,11 @@ import {
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import 'dotenv/config';
+import {
+  SYSTEM_ROLE_NAMES,
+  SYSTEM_ROLE_PERMISSIONS,
+  type SystemRoleName,
+} from '../src/auth/permissions.js';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const adapter = new PrismaPg(pool);
@@ -562,7 +566,7 @@ async function main() {
   const seedMarker = '[seed:summary-showcase]';
   const defaultPasswordHash = await bcrypt.hash('Admin1234!', BCRYPT_COST);
 
-  const adminUser = await prisma.user.upsert({
+  const adminUser = await prisma.tenantUser.upsert({
     where: { email: 'admin@zikel.dev' },
     update: {
       passwordHash: defaultPasswordHash,
@@ -585,7 +589,7 @@ async function main() {
     },
   });
 
-  const managerUser = await prisma.user.upsert({
+  const managerUser = await prisma.tenantUser.upsert({
     where: { email: 'manager@zikel.dev' },
     update: {
       passwordHash: defaultPasswordHash,
@@ -608,7 +612,7 @@ async function main() {
     },
   });
 
-  const staffNorthUser = await prisma.user.upsert({
+  const staffNorthUser = await prisma.tenantUser.upsert({
     where: { email: 'staff.north@zikel.dev' },
     update: {
       passwordHash: defaultPasswordHash,
@@ -631,7 +635,7 @@ async function main() {
     },
   });
 
-  const staffSouthUser = await prisma.user.upsert({
+  const staffSouthUser = await prisma.tenantUser.upsert({
     where: { email: 'staff.south@zikel.dev' },
     update: {
       passwordHash: defaultPasswordHash,
@@ -669,12 +673,39 @@ async function main() {
     },
   });
 
-  await prisma.user.updateMany({
+  await prisma.tenantUser.updateMany({
     where: { id: { in: [adminUser.id, managerUser.id, staffNorthUser.id, staffSouthUser.id] } },
     data: { activeTenantId: tenant.id },
   });
 
-  const ensureMembership = async (userId: string, role: TenantRole) => {
+  // Phase 3 changed TenantMembership.role from an enum to a relation to a
+  // Role row. System roles are seeded per tenant on creation; the seed has to
+  // do the same upserts before assigning memberships by id. Permissions and
+  // names come from src/auth/permissions.ts so the seed never drifts from the
+  // canonical catalog (e.g. PR #9's Care Worker → Residential Care Worker).
+  const systemRoleIds = {} as Record<SystemRoleName, string>;
+  for (const name of SYSTEM_ROLE_NAMES) {
+    const role = await prisma.role.upsert({
+      where: { tenantId_name: { tenantId: tenant.id, name } },
+      update: {
+        permissions: SYSTEM_ROLE_PERMISSIONS[name],
+        isSystemRole: true,
+        isAssignable: true,
+      },
+      create: {
+        tenantId: tenant.id,
+        name,
+        permissions: SYSTEM_ROLE_PERMISSIONS[name],
+        isSystemRole: true,
+        isAssignable: true,
+      },
+      select: { id: true },
+    });
+    systemRoleIds[name] = role.id;
+  }
+
+  const ensureMembership = async (userId: string, roleName: SystemRoleName) => {
+    const roleId = systemRoleIds[roleName];
     await prisma.tenantMembership.upsert({
       where: {
         tenantId_userId: {
@@ -683,23 +714,25 @@ async function main() {
         },
       },
       update: {
-        role,
+        roleId,
         status: MembershipStatus.active,
       },
       create: {
         tenantId: tenant.id,
         userId,
-        role,
+        roleId,
         status: MembershipStatus.active,
         invitedById: adminUser.id,
       },
     });
   };
 
-  await ensureMembership(adminUser.id, TenantRole.tenant_admin);
-  await ensureMembership(managerUser.id, TenantRole.sub_admin);
-  await ensureMembership(staffNorthUser.id, TenantRole.staff);
-  await ensureMembership(staffSouthUser.id, TenantRole.staff);
+  // staff.north gets the active frontline role; staff.south gets the
+  // read-only Viewer role so demos can show both ends of the spectrum.
+  await ensureMembership(adminUser.id, 'Owner');
+  await ensureMembership(managerUser.id, 'Admin');
+  await ensureMembership(staffNorthUser.id, 'Residential Care Worker');
+  await ensureMembership(staffSouthUser.id, 'Viewer');
 
   const careGroup = await prisma.careGroup.upsert({
     where: {
