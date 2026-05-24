@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { JwtPayload } from '../../types/index.js';
 import { Permissions as P } from '../../auth/permissions.js';
 import { httpError, sendValidationError } from '../../lib/errors.js';
+import { prisma } from '../../lib/prisma.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import {
@@ -287,6 +288,24 @@ const publicInvitationRoutes: FastifyPluginAsync = async (fastify) => {
         throw httpError(422, 'VALIDATION_ERROR', parse.error.issues[0]?.message ?? 'Invalid token.');
       }
       const invitation = await resolveInvitationByToken(parse.data.token);
+
+      // Whether the invited email already maps to a TenantUser. Lets the FE
+      // skip the "I already have a Zikel account" checkbox and pick the
+      // right accept-form variant automatically.
+      //
+      // Security: safe to expose. The 32-byte token is the gate — anyone
+      // holding it already knows the email (received it via invite delivery
+      // or admin handoff). The accept endpoint already behaves differently
+      // for new vs existing users, so a determined attacker could probe via
+      // accept attempts; surfacing the flag here just makes the implicit
+      // signal explicit. Token brute-force is computationally infeasible
+      // and the route is rate-limited (30/min per IP) on top.
+      const existingUser = await prisma.tenantUser.findUnique({
+        where: { email: invitation.email },
+        select: { id: true },
+      });
+      const recipientExists = existingUser !== null;
+
       return reply.send({
         success: true,
         data: {
@@ -295,6 +314,7 @@ const publicInvitationRoutes: FastifyPluginAsync = async (fastify) => {
           role: { id: invitation.role.id, name: invitation.role.name },
           home: invitation.home ? { id: invitation.home.id, name: invitation.home.name } : null,
           expiresAt: invitation.expiresAt,
+          recipientExists,
         },
       });
     },
