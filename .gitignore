@@ -35,8 +35,5 @@ coverage/
 .DS_Store
 Thumbs.db
 
-# ─── Fly.io ───────────────────────────────────────────────────────────────────
-.fly/
-
 # ─── Claude Code tooling — local only, never commit ───────────────────────────
 .claude/
