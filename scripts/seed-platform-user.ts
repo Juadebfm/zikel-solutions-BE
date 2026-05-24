@@ -9,8 +9,9 @@
  * Roles: platform_admin | support | engineer | billing
  */
 
-// Load .env BEFORE any module that touches env vars (env.ts validates at import).
-import 'dotenv/config';
+// Load .env.local + .env BEFORE any module that touches env vars
+// (env.ts validates at import). See src/lib/load-env.ts.
+import '../src/lib/load-env.js';
 
 import { provisionPlatformUser } from '../src/modules/admin/admin-auth.service.js';
 

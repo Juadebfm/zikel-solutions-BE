@@ -10,7 +10,9 @@
  * Idempotent — safe to run multiple times. Email/password are hard-coded
  * because this is local-only seed data; do NOT run against production.
  */
-import 'dotenv/config';
+// Must come before any module that reads process.env (prisma client init,
+// password lib, etc.). See src/lib/load-env.ts.
+import '../src/lib/load-env.js';
 import { PlatformRole } from '@prisma/client';
 import { prisma } from '../src/lib/prisma.js';
 import { hashPassword } from '../src/lib/password.js';

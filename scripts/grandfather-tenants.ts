@@ -23,7 +23,8 @@
  *     Customer is also keyed to that Owner's email.
  */
 
-import 'dotenv/config';
+// Must come before any module that reads process.env. See src/lib/load-env.ts.
+import '../src/lib/load-env.js';
 import { prisma } from '../src/lib/prisma.js';
 import { logger } from '../src/lib/logger.js';
 import {

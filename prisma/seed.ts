@@ -16,7 +16,9 @@ import {
 } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import 'dotenv/config';
+// Must come before any module that reads process.env. Layers .env.local
+// over .env so local devs can override DATABASE_URL without touching .env.
+import '../src/lib/load-env.js';
 import {
   SYSTEM_ROLE_NAMES,
   SYSTEM_ROLE_PERMISSIONS,

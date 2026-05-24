@@ -1,4 +1,7 @@
-import 'dotenv/config';
+// Must be the FIRST import — populates process.env before any module that
+// reads env at import-time (e.g. src/config/env.ts validates via Zod the
+// moment it's imported). See src/lib/load-env.ts for the layered pattern.
+import './lib/load-env.js';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import Fastify, { type FastifyError, type FastifyRequest } from 'fastify';
