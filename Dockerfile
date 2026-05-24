@@ -35,7 +35,7 @@ USER appuser
 
 EXPOSE 3000
 
-# Healthcheck — Fly.io also uses the /health route in fly.toml
+# Healthcheck — also wired up as Render's healthCheckPath in render.yaml.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3000/health || exit 1
 
