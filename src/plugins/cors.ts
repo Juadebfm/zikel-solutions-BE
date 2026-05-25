@@ -8,7 +8,7 @@ export default fp(async (fastify) => {
   await fastify.register(cors, {
     origin: env.NODE_ENV === 'production' ? origins : true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
     credentials: true,
   });
 });
