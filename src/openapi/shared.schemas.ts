@@ -237,12 +237,24 @@ export const TenantSchema = {
 export const TenantMembershipSchema = {
   $id: 'TenantMembership',
   type: 'object',
-  required: ['id', 'tenantId', 'userId', 'role', 'status', 'createdAt', 'updatedAt'],
+  required: [
+    'id',
+    'tenantId',
+    'userId',
+    'roleId',
+    'roleName',
+    'permissions',
+    'status',
+    'createdAt',
+    'updatedAt',
+  ],
   properties: {
     id: { type: 'string' },
     tenantId: { type: 'string' },
     userId: { type: 'string' },
-    role: { $ref: 'TenantRole#' },
+    roleId: { type: 'string' },
+    roleName: { type: ['string', 'null'] },
+    permissions: { type: 'array', items: { type: 'string' } },
     status: { type: 'string', enum: ['invited', 'active', 'suspended', 'revoked'] },
     invitedById: { type: 'string', nullable: true },
     user: {
