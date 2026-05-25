@@ -5,7 +5,7 @@
  * row:
  *   - Create a Stripe Customer (metadata only — no PM attached).
  *   - Create a `Subscription` row with `status='trialing'`,
- *     `trialEndsAt = now + 30 days`, `planId = standard_monthly`,
+ *     `trialEndsAt = now + 30 days`, `planId = single_home`,
  *     `stripeCustomerId` set, `stripeSubscriptionId = null` (no Stripe
  *     subscription yet — they create one when they hit checkout).
  *   - Create initial `TokenAllocation { bundledCalls: 1000, ... }`.
@@ -42,7 +42,7 @@ export interface GrandfatherTenantResult {
  */
 export async function grandfatherTenant(args: {
   tenantId: string;
-  planCode?: 'standard_monthly';
+  planCode?: 'single_home';
 }): Promise<GrandfatherTenantResult> {
   return withUnscopedTenant(async () => {
     const tenant = await prisma.tenant.findUnique({
@@ -86,8 +86,10 @@ export async function grandfatherTenant(args: {
       };
     }
 
-    // Resolve the standard_monthly plan.
-    const planCode = args.planCode ?? 'standard_monthly';
+    // Resolve the single_home plan (Day-1 default for any fresh tenant
+    // grandfathered onto a trial). Sales-led tenants get switched to 'group'
+    // manually by support tooling once a contract is signed.
+    const planCode = args.planCode ?? 'single_home';
     const plan = await prisma.plan.findUnique({ where: { code: planCode } });
     if (!plan) {
       throw new Error(

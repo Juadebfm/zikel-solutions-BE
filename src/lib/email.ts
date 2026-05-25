@@ -419,3 +419,65 @@ export async function sendSafeguardingRiskAlertEmail(args: {
 
   await sendEmail(args.to, `Safeguarding risk alert: ${args.alert.severity.toUpperCase()}`, html);
 }
+
+// ─── Contact-sales lead ────────────────────────────────────────────────────────
+
+export interface ContactSalesLead {
+  name: string;
+  email: string;
+  phone?: string | undefined;
+  companyName?: string | undefined;
+  estimatedHomes?: number | undefined;
+  message?: string | undefined;
+  // Audit trail for the sales team.
+  submittedFromIp?: string | undefined;
+  submittedAt: Date;
+}
+
+/**
+ * Sends the lead to the sales inbox. Recipient is fixed at
+ * `sales@zikelsolutions.com` — kept hardcoded rather than env-driven to prevent
+ * accidental misrouting via a stale env var. Change here if the inbox moves.
+ */
+export async function sendContactSalesLeadEmail(lead: ContactSalesLead): Promise<void> {
+  const to = 'sales@zikelsolutions.com';
+  const subject = `New Group plan lead: ${escapeHtml(lead.companyName ?? lead.name)}`;
+
+  const rows: Array<[string, string]> = [
+    ['Name', escapeHtml(lead.name)],
+    ['Email', escapeHtml(lead.email)],
+  ];
+  if (lead.phone) rows.push(['Phone', escapeHtml(lead.phone)]);
+  if (lead.companyName) rows.push(['Company', escapeHtml(lead.companyName)]);
+  if (typeof lead.estimatedHomes === 'number') {
+    rows.push(['Estimated homes', String(lead.estimatedHomes)]);
+  }
+  if (lead.message) rows.push(['Message', escapeHtml(lead.message)]);
+  if (lead.submittedFromIp) rows.push(['IP', escapeHtml(lead.submittedFromIp)]);
+  rows.push(['Submitted', lead.submittedAt.toISOString()]);
+
+  const rowsHtml = rows
+    .map(
+      ([label, value]) => `
+      <tr>
+        <td style="padding:8px 16px 8px 0;font-size:13px;color:#888888;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;vertical-align:top;white-space:nowrap">${label}</td>
+        <td style="padding:8px 0;font-size:14px;color:#02060A;line-height:1.6">${value}</td>
+      </tr>`,
+    )
+    .join('');
+
+  const html = buildEmailHtml(`
+    <h1 style="margin:0 0 12px;font-size:22px;font-weight:700;color:#02060A">New Group plan enquiry</h1>
+    <p style="margin:0 0 20px;font-size:14px;color:#444444;line-height:1.6">
+      A prospect just submitted the Group plan contact form. Reach out within one
+      business day to maintain the response-time commitment shown on the pricing page.
+    </p>
+    <table cellpadding="0" cellspacing="0" style="width:100%;margin:0 0 20px">${rowsHtml}</table>
+    <p style="margin:0;font-size:13px;color:#888888;line-height:1.6">
+      This email is generated automatically by the Zikel billing module.
+    </p>
+  `);
+
+  await sendEmail(to, subject, html);
+}
+

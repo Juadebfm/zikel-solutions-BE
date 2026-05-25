@@ -96,10 +96,13 @@ beforeEach(() => {
     manuallyOverriddenUntil: null,
     tenant: { name: 'Acme Care', slug: 'acme', country: 'UK', isActive: true },
     plan: {
-      code: 'standard_monthly',
-      name: 'Standard Monthly',
+      code: 'single_home',
+      name: 'Single Home',
       interval: 'month',
-      unitAmountMinor: 3000,
+      unitAmountMinor: 0,
+      pricePerBedMinor: 700,
+      maxHomes: 1,
+      maxSeats: 25,
       bundledCallsPerPeriod: 1000,
     },
   });
@@ -128,7 +131,7 @@ describe('GET /admin/billing/subscriptions', () => {
         tenantId: 't_1',
         status: 'active',
         tenant: { name: 'Acme Care', slug: 'acme', country: 'UK', isActive: true },
-        plan: { code: 'standard_monthly', name: 'Standard', interval: 'month', unitAmountMinor: 3000 },
+        plan: { code: 'single_home', name: 'Single Home', interval: 'month', unitAmountMinor: 0 },
       },
     ]);
     const res = await app.inject({

@@ -5,6 +5,7 @@ import { httpError } from '../../lib/errors.js';
 import { hashPassword } from '../../lib/password.js';
 import { sendOtpEmail } from '../../lib/email.js';
 import { logger } from '../../lib/logger.js';
+import { assertSeatCapAvailable } from '../billing/capacity-enforcement.js';
 
 const INVITATION_TOKEN_BYTES = 32;
 const INVITATION_DEFAULT_EXPIRY_HOURS = 7 * 24; // 7 days
@@ -73,6 +74,11 @@ export async function createInvitation(args: {
   expiresInHours?: number;
 }) {
   const email = normalizeEmail(args.email);
+
+  // Block before any work if the tenant has hit their tier's seat cap.
+  // Active members + outstanding pending invitations both count toward seats.
+  // Throws HTTP 402 SEAT_LIMIT_REACHED with a message suitable for FE display.
+  await assertSeatCapAvailable(args.tenantId);
 
   // Validate the role belongs to this tenant (or is a system role).
   const role = await prisma.role.findFirst({

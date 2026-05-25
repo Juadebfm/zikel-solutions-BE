@@ -21,8 +21,8 @@ vi.hoisted(() => {
   // real (test-mode) client and checkout-session creation doesn't 503.
   process.env.STRIPE_SECRET_KEY = 'sk_test_phase7_unit';
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_phase7_unit';
-  process.env.STRIPE_PRICE_ID_MONTHLY = 'price_test_monthly';
-  process.env.STRIPE_PRICE_ID_ANNUAL = 'price_test_annual';
+  process.env.STRIPE_PRICE_ID_SINGLE_HOME = 'price_test_single_home';
+  process.env.STRIPE_PRICE_ID_MULTI_HOME = 'price_test_multi_home';
   process.env.STRIPE_PRICE_ID_TOPUP_SMALL = 'price_test_topup_small';
   process.env.STRIPE_PRICE_ID_TOPUP_MEDIUM = 'price_test_topup_medium';
   process.env.STRIPE_PRICE_ID_TOPUP_LARGE = 'price_test_topup_large';
@@ -41,6 +41,8 @@ const { mockPrisma, mockStripe } = vi.hoisted(() => {
     plan: { findUnique: vi.fn(), findMany: vi.fn() },
     topUpPack: { findUnique: vi.fn(), findMany: vi.fn() },
     invoice: { findMany: vi.fn(), count: vi.fn() },
+    home: { aggregate: vi.fn(async () => ({ _sum: { capacity: null } })) },
+    auditLog: { create: vi.fn(async () => ({})) },
     tenantAiRestriction: { findUnique: vi.fn(async () => null), upsert: vi.fn() },
     tenantMembership: {
       findFirst: vi.fn(async () => ({ role: { name: 'Owner' } })),
@@ -174,11 +176,16 @@ describe('GET /api/v1/billing/subscription', () => {
       pastDueSince: null,
       manuallyOverriddenUntil: null,
       plan: {
-        code: 'standard_monthly',
-        name: 'Standard Monthly',
+        code: 'single_home',
+        name: 'Single Home',
         interval: 'month',
-        unitAmountMinor: 3000,
+        unitAmountMinor: 0,
+        pricePerBedMinor: 700,
         currency: 'gbp',
+        maxHomes: 1,
+        maxSeats: 25,
+        bundledCallsPerPeriod: 1000,
+        stripePriceId: 'price_test_single_home',
       },
     });
 
@@ -192,12 +199,13 @@ describe('GET /api/v1/billing/subscription', () => {
       data: {
         status: string;
         isInTrial: boolean;
-        plan: { code: string };
+        plan: { code: string; cta: string };
       };
     };
     expect(body.data.status).toBe('trialing');
     expect(body.data.isInTrial).toBe(true);
-    expect(body.data.plan.code).toBe('standard_monthly');
+    expect(body.data.plan.code).toBe('single_home');
+    expect(body.data.plan.cta).toBe('subscribe');
   });
 
   it('returns trialing default state when no subscription row exists yet', async () => {
@@ -215,23 +223,43 @@ describe('GET /api/v1/billing/subscription', () => {
 });
 
 describe('GET /api/v1/billing/plans', () => {
-  it('returns the active plans + top-up packs', async () => {
+  it('returns the active plans + top-up packs with new tier fields', async () => {
     mockPrisma.plan.findMany.mockResolvedValue([
       {
-        code: 'standard_monthly',
-        name: 'Standard Monthly',
+        code: 'single_home',
+        name: 'Single Home',
         interval: 'month',
-        unitAmountMinor: 3000,
+        unitAmountMinor: 0,
+        pricePerBedMinor: 700,
         currency: 'gbp',
+        maxHomes: 1,
+        maxSeats: 25,
         bundledCallsPerPeriod: 1000,
+        stripePriceId: 'price_test_single_home',
       },
       {
-        code: 'standard_annual',
-        name: 'Standard Annual',
-        interval: 'year',
-        unitAmountMinor: 30000,
+        code: 'multi_home',
+        name: 'Multi-Home',
+        interval: 'month',
+        unitAmountMinor: 0,
+        pricePerBedMinor: 700,
         currency: 'gbp',
-        bundledCallsPerPeriod: 1000,
+        maxHomes: 5,
+        maxSeats: 75,
+        bundledCallsPerPeriod: 5000,
+        stripePriceId: 'price_test_multi_home',
+      },
+      {
+        code: 'group',
+        name: 'Group',
+        interval: 'month',
+        unitAmountMinor: 0,
+        pricePerBedMinor: null,
+        currency: 'gbp',
+        maxHomes: null,
+        maxSeats: null,
+        bundledCallsPerPeriod: 50000,
+        stripePriceId: null,
       },
     ]);
     mockPrisma.topUpPack.findMany.mockResolvedValue([
@@ -247,10 +275,30 @@ describe('GET /api/v1/billing/plans', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as {
-      data: { plans: Array<{ code: string }>; topUpPacks: Array<{ code: string }> };
+      data: {
+        plans: Array<{
+          code: string;
+          pricePerBedMinor: number | null;
+          maxHomes: number | null;
+          maxSeats: number | null;
+          cta: 'subscribe' | 'contact_sales';
+        }>;
+        topUpPacks: Array<{ code: string }>;
+      };
     };
-    expect(body.data.plans).toHaveLength(2);
+    expect(body.data.plans).toHaveLength(3);
     expect(body.data.topUpPacks).toHaveLength(3);
+
+    const single = body.data.plans.find((p) => p.code === 'single_home');
+    expect(single?.pricePerBedMinor).toBe(700);
+    expect(single?.maxHomes).toBe(1);
+    expect(single?.maxSeats).toBe(25);
+    expect(single?.cta).toBe('subscribe');
+
+    const group = body.data.plans.find((p) => p.code === 'group');
+    expect(group?.pricePerBedMinor).toBeNull();
+    expect(group?.maxHomes).toBeNull();
+    expect(group?.cta).toBe('contact_sales');
   });
 });
 
@@ -278,8 +326,8 @@ describe('GET /api/v1/billing/quota', () => {
 describe('POST /api/v1/billing/checkout-session', () => {
   it('creates a Stripe Checkout subscription session', async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({
-      code: 'standard_monthly',
-      stripePriceId: 'price_test_monthly',
+      code: 'single_home',
+      stripePriceId: 'price_test_single_home',
     });
     mockPrisma.subscription.findUnique.mockResolvedValue(null);
 
@@ -290,21 +338,22 @@ describe('POST /api/v1/billing/checkout-session', () => {
         authorization: `Bearer ${ownerToken()}`,
         'content-type': 'application/json',
       },
-      payload: { planCode: 'standard_monthly' },
+      payload: { planCode: 'single_home' },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { data: { url: string | null } };
     expect(body.data.url).toMatch(/checkout\.stripe\.com/);
 
-    // Verify Stripe was called with the right shape.
+    // Verify Stripe was called with the right shape — quantity floors at 1
+    // when the tenant has no configured beds yet (home.aggregate _sum is null).
     expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         mode: 'subscription',
-        line_items: [{ price: 'price_test_monthly', quantity: 1 }],
+        line_items: [{ price: 'price_test_single_home', quantity: 1 }],
         metadata: expect.objectContaining({
           tenantId: 't_1',
           kind: 'subscription',
-          planCode: 'standard_monthly',
+          planCode: 'single_home',
         }),
         subscription_data: expect.objectContaining({
           trial_period_days: 7,
@@ -321,10 +370,37 @@ describe('POST /api/v1/billing/checkout-session', () => {
     );
   });
 
+  it('passes the tenant\'s active bed count as quantity', async () => {
+    mockPrisma.plan.findUnique.mockResolvedValue({
+      code: 'multi_home',
+      stripePriceId: 'price_test_multi_home',
+    });
+    mockPrisma.subscription.findUnique.mockResolvedValue(null);
+    // Tenant has 18 beds across active homes.
+    mockPrisma.home.aggregate.mockResolvedValueOnce({ _sum: { capacity: 18 } });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/billing/checkout-session',
+      headers: {
+        authorization: `Bearer ${ownerToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: { planCode: 'multi_home' },
+    });
+    expect(res.statusCode).toBe(200);
+
+    expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [{ price: 'price_test_multi_home', quantity: 18 }],
+      }),
+    );
+  });
+
   it('reuses existing stripeCustomerId on re-checkout', async () => {
     mockPrisma.plan.findUnique.mockResolvedValue({
-      code: 'standard_monthly',
-      stripePriceId: 'price_test_monthly',
+      code: 'single_home',
+      stripePriceId: 'price_test_single_home',
     });
     mockPrisma.subscription.findUnique.mockResolvedValue({
       tenantId: 't_1',
@@ -340,7 +416,7 @@ describe('POST /api/v1/billing/checkout-session', () => {
         authorization: `Bearer ${ownerToken()}`,
         'content-type': 'application/json',
       },
-      payload: { planCode: 'standard_monthly' },
+      payload: { planCode: 'single_home' },
     });
     expect(res.statusCode).toBe(200);
 
@@ -410,6 +486,59 @@ describe('POST /api/v1/billing/topup-checkout-session', () => {
     expect(res.statusCode).toBe(409);
     const body = res.json() as { error: { code: string } };
     expect(body.error.code).toBe('SUBSCRIPTION_REQUIRED');
+  });
+});
+
+describe('POST /api/v1/billing/contact-sales', () => {
+  // NOTE: don't override tenantUser.findUnique here — the `beforeEach` sets up
+  // the Owner mock with full permissions (incl. tenantMemberships array).
+  // Overriding strips permissions and returns 403.
+
+  it('accepts a lead and writes an audit row', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/billing/contact-sales',
+      headers: {
+        authorization: `Bearer ${ownerToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: {
+        phone: '+44 7700 900123',
+        companyName: 'Acme Care Group',
+        estimatedHomes: 8,
+        message: 'We have 8 homes across Yorkshire. Need a demo.',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { data: { ok: boolean } };
+    expect(body.data.ok).toBe(true);
+
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          entityType: 'contact_sales_lead',
+          metadata: expect.objectContaining({
+            event: 'contact_sales_lead',
+            companyName: 'Acme Care Group',
+            estimatedHomes: 8,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('accepts an empty body (all fields optional)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/v1/billing/contact-sales',
+      headers: {
+        authorization: `Bearer ${ownerToken()}`,
+        'content-type': 'application/json',
+      },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(200);
   });
 });
 
