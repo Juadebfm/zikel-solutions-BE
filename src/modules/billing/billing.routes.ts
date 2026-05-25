@@ -17,8 +17,11 @@ import { sendValidationError } from '../../lib/errors.js';
 
 // ─── Body schemas ───────────────────────────────────────────────────────────
 
+// Group is intentionally excluded — Group customers go through the contact-sales
+// form, not Stripe Checkout. createSubscriptionCheckoutSession rejects 'group'
+// explicitly if it ever slips through.
 const CheckoutSessionBodySchema = z.object({
-  planCode: z.enum(['standard_monthly', 'standard_annual']),
+  planCode: z.enum(['single_home', 'multi_home']),
 });
 
 const TopUpCheckoutBodySchema = z.object({
@@ -29,6 +32,18 @@ const ListInvoicesQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 });
+
+// Group tier lead-capture body. Email + name come from the authenticated user;
+// the form just adds the context sales needs to triage. All fields optional —
+// even a blank submission ("we're interested, please reach out") is valid.
+const ContactSalesBodySchema = z
+  .object({
+    phone: z.string().trim().max(40).optional(),
+    companyName: z.string().trim().max(200).optional(),
+    estimatedHomes: z.number().int().min(1).max(10_000).optional(),
+    message: z.string().trim().max(2000).optional(),
+  })
+  .strict();
 
 // AI restrictions: caps are nullable integers, ≥ 0, ≤ 100k.
 const CapValueSchema = z.union([z.null(), z.number().int().min(0).max(100_000)]);
@@ -78,7 +93,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     preHandler: [requirePermission(P.BILLING_READ)],
     schema: {
       tags: ['Billing'],
-      summary: 'List the Standard plan (monthly + annual) and the three top-up packs',
+      summary: 'List subscription tiers (Single Home, Multi-Home, Group) and the three top-up packs',
       response: {
         200: {
           type: 'object',
@@ -140,7 +155,7 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
         type: 'object',
         required: ['planCode'],
         properties: {
-          planCode: { type: 'string', enum: ['standard_monthly', 'standard_annual'] },
+          planCode: { type: 'string', enum: ['single_home', 'multi_home'] },
         },
       },
       response: {
@@ -207,6 +222,65 @@ const billingRoutes: FastifyPluginAsync = async (fastify) => {
     handler: async (request, reply) => {
       const userId = (request.user as JwtPayload).sub;
       const data = await billing.createPortalSession({ actorUserId: userId });
+      return reply.send({ success: true, data });
+    },
+  });
+
+  // ── POST /api/v1/billing/contact-sales ──────────────────────────────────
+  // Group tier lead capture. Authenticated user's email + name come from the
+  // JWT/DB; the body carries optional context (phone, company, est. homes,
+  // free-text message). Routes the lead to sales@zikelsolutions.com via Resend
+  // and writes an audit trail row. Tighter rate limit than other billing
+  // routes — this is a low-frequency action and we don't want a runaway form.
+  fastify.post('/contact-sales', {
+    config: { rateLimit: { max: 5, timeWindow: '10 minutes' } },
+    preHandler: [requirePermission(P.BILLING_WRITE)],
+    schema: {
+      tags: ['Billing'],
+      summary: 'Submit a Group-plan sales enquiry (routes to sales@zikelsolutions.com)',
+      body: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          phone: { type: 'string', maxLength: 40 },
+          companyName: { type: 'string', maxLength: 200 },
+          estimatedHomes: { type: 'integer', minimum: 1, maximum: 10_000 },
+          message: { type: 'string', maxLength: 2000 },
+        },
+      },
+      response: {
+        200: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', enum: [true] },
+            data: {
+              type: 'object',
+              required: ['ok'],
+              properties: { ok: { type: 'boolean', enum: [true] } },
+            },
+          },
+        },
+        401: { $ref: 'ApiError#' },
+        403: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ContactSalesBodySchema.safeParse(request.body);
+      if (!parse.success) return sendValidationError(reply, parse.error);
+
+      const userId = (request.user as JwtPayload).sub;
+      const data = await billing.submitContactSalesLead({
+        actorUserId: userId,
+        ...(parse.data.phone ? { phone: parse.data.phone } : {}),
+        ...(parse.data.companyName ? { companyName: parse.data.companyName } : {}),
+        ...(typeof parse.data.estimatedHomes === 'number'
+          ? { estimatedHomes: parse.data.estimatedHomes }
+          : {}),
+        ...(parse.data.message ? { message: parse.data.message } : {}),
+        ipAddress: request.ip,
+      });
       return reply.send({ success: true, data });
     },
   });

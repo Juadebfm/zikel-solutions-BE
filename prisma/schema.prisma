@@ -1999,12 +1999,25 @@ enum BillingEventKind {
 
 model Plan {
   id                    String       @id @default(cuid())
-  code                  String       @unique  // 'standard_monthly' | 'standard_annual'
+  code                  String       @unique  // 'single_home' | 'multi_home' | 'group'
   name                  String
   interval              PlanInterval
-  unitAmountMinor       Int          // pence: 3000 (£30) for monthly, 30000 (£300) for annual
+  // Base flat fee in pence. 0 for metered tiers (per-bed billing). Group tier
+  // is sales-led so this stays 0 until a custom contract is wired in.
+  unitAmountMinor       Int
   currency              String       @default("gbp")
-  bundledCallsPerPeriod Int          // 1000 for the Standard plan
+  // Per-bed monthly rate in pence (e.g. 700 = £7). Null for Group tier
+  // (sales-led, custom-priced) and for flat-fee plans if we ever reintroduce one.
+  pricePerBedMinor      Int?
+  // Capacity caps. Null = unlimited (Group tier). Both caps are enforced at
+  // create-time in homes.service.ts (createHome) and invitations.service.ts
+  // (createInvitation) — see docs/billing-tiers-build.md for the contract.
+  maxHomes              Int?
+  maxSeats              Int?
+  // Monthly bundled AI calls. 1000 (Single Home), 5000 (Multi-Home). Group
+  // tier seeds with a high default (50000) — actual per-contract quota lives
+  // on the Subscription once sales wires a custom agreement.
+  bundledCallsPerPeriod Int
   stripeProductId       String?
   stripePriceId         String?      @unique
   isActive              Boolean      @default(true)
@@ -2052,6 +2065,18 @@ model Subscription {
   // Support escalation: a platform_admin can grant full access until this
   // timestamp regardless of Stripe state.
   manuallyOverriddenUntil  DateTime?
+  // Per-tenant capacity overrides — null means "inherit from Plan.maxHomes /
+  // Plan.maxSeats". Used for Group-tier negotiated contracts and any other
+  // bespoke arrangement that doesn't fit a published tier. Enforcement reads
+  // `subscription.maxHomesOverride ?? subscription.plan.maxHomes` (same for seats).
+  maxHomesOverride         Int?
+  maxSeatsOverride         Int?
+  // Per-bed metered usage tracking. `bedCountSnapshot` is the count we last
+  // pushed to Stripe (sum of Home.capacity across this tenant's active homes);
+  // `lastUsageReportedAt` is when. The usage-report scheduler in
+  // src/modules/billing/usage-report.scheduler.ts maintains both.
+  bedCountSnapshot         Int?
+  lastUsageReportedAt      DateTime?
   createdAt                DateTime           @default(now())
   updatedAt                DateTime           @updatedAt
 

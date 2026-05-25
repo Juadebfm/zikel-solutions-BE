@@ -73,8 +73,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Default: Plan exists, no existing subscription, real Stripe.
   mockPrisma.plan.findUnique.mockResolvedValue({
-    id: 'plan_monthly',
-    code: 'standard_monthly',
+    id: 'plan_single_home',
+    code: 'single_home',
     bundledCallsPerPeriod: 1000,
   });
   mockPrisma.subscription.findUnique.mockResolvedValue(null);
@@ -127,7 +127,7 @@ describe('grandfatherTenant', () => {
     expect(mockPrisma.subscription.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         tenantId: 't_1',
-        planId: 'plan_monthly',
+        planId: 'plan_single_home',
         status: 'trialing',
         stripeCustomerId: 'cus_test_grandfather',
         stripeSubscriptionId: null,
@@ -216,7 +216,7 @@ describe('grandfatherTenant', () => {
     mockPrisma.plan.findUnique.mockResolvedValue(null);
     await expect(
       grandfather.grandfatherTenant({ tenantId: 't_1' }),
-    ).rejects.toThrow(/Plan standard_monthly not found/);
+    ).rejects.toThrow(/Plan single_home not found/);
   });
 });
 

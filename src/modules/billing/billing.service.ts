@@ -10,8 +10,9 @@
  * (Stripe unconfigured) the routes return 503 BILLING_NOT_CONFIGURED.
  */
 
-import { Prisma } from '@prisma/client';
+import { AuditAction, Prisma } from '@prisma/client';
 import type { TenantAiRestriction, Subscription, Plan, TopUpPack } from '@prisma/client';
+import { sendContactSalesLeadEmail } from '../../lib/email.js';
 import { env } from '../../config/env.js';
 import { httpError } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
@@ -19,6 +20,7 @@ import { withUnscopedTenant } from '../../lib/request-context.js';
 import { requireStripeClient } from '../../lib/stripe.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { getQuotaSnapshotForTenant } from '../../lib/quota.js';
+import { getTenantBedCount } from './subscription-quantity.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -67,8 +69,14 @@ function mapPlan(plan: Plan) {
     name: plan.name,
     interval: plan.interval,
     unitAmountMinor: plan.unitAmountMinor,
+    pricePerBedMinor: plan.pricePerBedMinor,
     currency: plan.currency,
+    maxHomes: plan.maxHomes,
+    maxSeats: plan.maxSeats,
     bundledCallsPerPeriod: plan.bundledCallsPerPeriod,
+    // FE-facing hint for which CTA to render on the pricing card.
+    // Sales-led plans have no Stripe Price; they go through POST /billing/contact-sales.
+    cta: (plan.stripePriceId ? 'subscribe' : 'contact_sales') as 'subscribe' | 'contact_sales',
   };
 }
 
@@ -111,15 +119,7 @@ export async function getSubscriptionState(actorUserId: string) {
 
   return {
     status: subscription?.status ?? 'trialing',
-    plan: subscription
-      ? {
-          code: subscription.plan.code,
-          name: subscription.plan.name,
-          interval: subscription.plan.interval,
-          unitAmountMinor: subscription.plan.unitAmountMinor,
-          currency: subscription.plan.currency,
-        }
-      : null,
+    plan: subscription ? mapPlan(subscription.plan) : null,
     trialEndsAt: subscription?.trialEndsAt ?? null,
     currentPeriodStart: subscription?.currentPeriodStart ?? null,
     currentPeriodEnd: subscription?.currentPeriodEnd ?? null,
@@ -150,7 +150,7 @@ export async function getQuotaForTenant(actorUserId: string) {
 
 export async function createSubscriptionCheckoutSession(args: {
   actorUserId: string;
-  planCode: 'standard_monthly' | 'standard_annual';
+  planCode: 'single_home' | 'multi_home';
 }) {
   const stripe = requireStripeClient();
   if (!env.BILLING_CHECKOUT_SUCCESS_URL || !env.BILLING_CHECKOUT_CANCEL_URL) {
@@ -194,10 +194,16 @@ export async function createSubscriptionCheckoutSession(args: {
     stripeCustomerId = customer.id;
   }
 
+  // Per-bed billing: line item quantity = sum of Home.capacity across the
+  // tenant's active homes (min 1). Stripe bills `quantity × pricePerBedMinor`
+  // each cycle and prorates mid-cycle changes. The home-mutation hooks keep
+  // this in sync; this is the INITIAL value at checkout time.
+  const bedCount = await getTenantBedCount(tenant.tenantId);
+
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     customer: stripeCustomerId,
-    line_items: [{ price: plan.stripePriceId, quantity: 1 }],
+    line_items: [{ price: plan.stripePriceId, quantity: bedCount }],
     // Stripe Tax requires `automatic_tax: { enabled: true }` AND the Customer
     // to have a billing address. Stripe Hosted Checkout collects this from
     // the customer at checkout time.
@@ -229,6 +235,64 @@ export async function createSubscriptionCheckoutSession(args: {
     url: session.url,
     expiresAt: session.expires_at ? new Date(session.expires_at * 1000).toISOString() : null,
   };
+}
+
+// ─── Contact sales (Group tier lead capture) ────────────────────────────────
+
+/**
+ * Captures a Group-tier lead and routes it to the sales inbox. Called from
+ * `POST /api/v1/billing/contact-sales`. The authenticated user's email + name
+ * are used as the contact (no override) so the lead is always tied to an
+ * existing tenant account. The form body only carries the extra context the
+ * sales team needs to triage.
+ */
+export async function submitContactSalesLead(args: {
+  actorUserId: string;
+  phone?: string | undefined;
+  companyName?: string | undefined;
+  estimatedHomes?: number | undefined;
+  message?: string | undefined;
+  ipAddress?: string | undefined;
+}) {
+  const tenant = await requireTenantContext(args.actorUserId);
+
+  const user = await prisma.tenantUser.findUnique({
+    where: { id: args.actorUserId },
+    select: { email: true, firstName: true, lastName: true },
+  });
+  if (!user) {
+    throw httpError(404, 'USER_NOT_FOUND', 'User not found.');
+  }
+  const fullName = `${user.firstName} ${user.lastName}`.trim();
+
+  await sendContactSalesLeadEmail({
+    name: fullName,
+    email: user.email,
+    phone: args.phone,
+    companyName: args.companyName,
+    estimatedHomes: args.estimatedHomes,
+    message: args.message,
+    submittedFromIp: args.ipAddress,
+    submittedAt: new Date(),
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: tenant.tenantId,
+      userId: args.actorUserId,
+      action: AuditAction.record_created,
+      entityType: 'contact_sales_lead',
+      // No entityId — leads aren't persisted as a row, they flow straight to email.
+      // The audit row itself is the local record of the submission.
+      metadata: {
+        event: 'contact_sales_lead',
+        ...(args.companyName ? { companyName: args.companyName } : {}),
+        ...(typeof args.estimatedHomes === 'number' ? { estimatedHomes: args.estimatedHomes } : {}),
+      },
+    },
+  });
+
+  return { ok: true };
 }
 
 // ─── Stripe Customer Portal ─────────────────────────────────────────────────

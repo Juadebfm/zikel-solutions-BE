@@ -5,6 +5,8 @@ import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
 import { assertUploadedFilesBelongToTenant } from '../uploads/uploads.service.js';
 import { triggerRiskEvaluationForHomeEventMutation } from '../safeguarding/risk-alerts.service.js';
+import { syncStripeSubscriptionQuantity } from '../billing/subscription-quantity.js';
+import { assertHomeCapAvailable } from '../billing/capacity-enforcement.js';
 import type { CreateHomeBody, ListHomesQuery, UpdateHomeBody } from './homes.schema.js';
 
 type HomeRow = Prisma.HomeGetPayload<{
@@ -171,6 +173,9 @@ export async function getHome(actorId: string, id: string) {
 
 export async function createHome(actorId: string, body: CreateHomeBody) {
   const tenant = await requireTenantContext(actorId);
+  // Block before any work if the tenant has hit their tier's home cap.
+  // Throws HTTP 402 HOME_LIMIT_REACHED with a message suitable for FE display.
+  await assertHomeCapAvailable(tenant.tenantId);
   await ensureCareGroupExists(body.careGroupId, tenant.tenantId);
   if (body.avatarFileId) {
     await assertUploadedFilesBelongToTenant(tenant.tenantId, [body.avatarFileId]);
@@ -217,6 +222,11 @@ export async function createHome(actorId: string, body: CreateHomeBody) {
       entityId: home.id,
     },
   });
+
+  // Push the new bed total to Stripe (idempotent; no-op if no Stripe sub yet).
+  // Awaited so any logging from the helper completes before we return, but
+  // the helper itself never throws — Stripe outages don't break home creation.
+  await syncStripeSubscriptionQuantity(tenant.tenantId);
 
   return mapHome(home);
 }
@@ -306,6 +316,13 @@ export async function updateHome(actorId: string, id: string, body: UpdateHomeBo
       metadata: { fields: Object.keys(body) },
     },
   });
+
+  // Only sync to Stripe if the change actually affects the billed bed count.
+  // capacity changes obviously matter; isActive matters because inactive homes
+  // are excluded from the sum in subscription-quantity.ts.
+  if (body.capacity !== undefined || body.isActive !== undefined) {
+    await syncStripeSubscriptionQuantity(tenant.tenantId);
+  }
 
   return mapHome(updated);
 }

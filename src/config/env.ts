@@ -121,8 +121,11 @@ const envSchema = z.object({
   STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
   STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
   STRIPE_API_VERSION: z.string().min(1).default('2025-08-27.basil'),
-  STRIPE_PRICE_ID_MONTHLY: z.string().min(1).optional(),
-  STRIPE_PRICE_ID_ANNUAL: z.string().min(1).optional(),
+  // Per-bed metered Stripe Prices, one per self-serve tier. Configured in the
+  // Stripe dashboard as `usage_type: 'metered'`, `aggregate_usage: 'last_during_period'`.
+  // Group tier has no Price (sales-led, custom contracts).
+  STRIPE_PRICE_ID_SINGLE_HOME: z.string().min(1).optional(),
+  STRIPE_PRICE_ID_MULTI_HOME: z.string().min(1).optional(),
   STRIPE_PRICE_ID_TOPUP_SMALL: z.string().min(1).optional(),
   STRIPE_PRICE_ID_TOPUP_MEDIUM: z.string().min(1).optional(),
   STRIPE_PRICE_ID_TOPUP_LARGE: z.string().min(1).optional(),
@@ -378,14 +381,14 @@ function parseEnv(): Env {
     const stripePartial =
       parsed.STRIPE_SECRET_KEY ||
       parsed.STRIPE_WEBHOOK_SECRET ||
-      parsed.STRIPE_PRICE_ID_MONTHLY ||
-      parsed.STRIPE_PRICE_ID_ANNUAL;
+      parsed.STRIPE_PRICE_ID_SINGLE_HOME ||
+      parsed.STRIPE_PRICE_ID_MULTI_HOME;
     if (stripePartial) {
       const missing: string[] = [];
       if (!parsed.STRIPE_SECRET_KEY) missing.push('STRIPE_SECRET_KEY');
       if (!parsed.STRIPE_WEBHOOK_SECRET) missing.push('STRIPE_WEBHOOK_SECRET');
-      if (!parsed.STRIPE_PRICE_ID_MONTHLY) missing.push('STRIPE_PRICE_ID_MONTHLY');
-      if (!parsed.STRIPE_PRICE_ID_ANNUAL) missing.push('STRIPE_PRICE_ID_ANNUAL');
+      if (!parsed.STRIPE_PRICE_ID_SINGLE_HOME) missing.push('STRIPE_PRICE_ID_SINGLE_HOME');
+      if (!parsed.STRIPE_PRICE_ID_MULTI_HOME) missing.push('STRIPE_PRICE_ID_MULTI_HOME');
       if (!parsed.STRIPE_PRICE_ID_TOPUP_SMALL) missing.push('STRIPE_PRICE_ID_TOPUP_SMALL');
       if (!parsed.STRIPE_PRICE_ID_TOPUP_MEDIUM) missing.push('STRIPE_PRICE_ID_TOPUP_MEDIUM');
       if (!parsed.STRIPE_PRICE_ID_TOPUP_LARGE) missing.push('STRIPE_PRICE_ID_TOPUP_LARGE');
