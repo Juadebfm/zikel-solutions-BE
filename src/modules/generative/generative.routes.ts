@@ -28,8 +28,12 @@ import {
   ArtifactIdParamSchema,
   CreateDailyLogSummaryBodySchema,
   EditArtifactBodySchema,
+  ListArtifactsQuerySchema,
+  LookupDailyLogSummaryQuerySchema,
   createDailyLogSummaryBodyJson,
   editArtifactBodyJson,
+  listArtifactsQueryJson,
+  lookupDailyLogSummaryQueryJson,
 } from './generative.schema.js';
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
@@ -97,6 +101,58 @@ const generativeRoutes: FastifyPluginAsync = async (fastify) => {
         artifactId: artifact.id,
       });
 
+      return reply.send({ success: true, data: { artifact } });
+    },
+  });
+
+  // ── GET /api/v1/generative/artifacts ─────────────────────────────────────
+  // Paginated list. Used by the FE to render "all summaries for this home",
+  // "all my drafts", "all committed summaries in date range", etc.
+  fastify.get('/artifacts', {
+    preHandler: [requirePermission(P.GENERATIVE_CREATE)],
+    schema: {
+      tags: ['Generative'],
+      summary: 'List generative artifacts (tenant-scoped, filterable, paginated)',
+      querystring: listArtifactsQueryJson,
+      response: {
+        200: artifactListEnvelopeJson,
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = ListArtifactsQuerySchema.safeParse(request.query);
+      if (!parse.success) return sendValidationError(reply, parse.error);
+      const userId = (request.user as JwtPayload).sub;
+      const { data, meta } = await generative.listArtifacts(userId, parse.data);
+      return reply.send({ success: true, data, meta });
+    },
+  });
+
+  // ── GET /api/v1/generative/daily-log-summary?homeId&date ─────────────────
+  // Lookup-by-target. Answers "is there an active summary for {home, date}?"
+  // without first listing then filtering client-side. Returns the current
+  // active artifact (the one DailyLogSummary points at) or 404 SUMMARY_NOT_FOUND.
+  fastify.get('/daily-log-summary', {
+    preHandler: [requirePermission(P.GENERATIVE_CREATE)],
+    schema: {
+      tags: ['Generative'],
+      summary: 'Look up the active daily-log summary for {homeId, date}',
+      querystring: lookupDailyLogSummaryQueryJson,
+      response: {
+        200: artifactEnvelopeJson,
+        404: { $ref: 'ApiError#' },
+        422: { $ref: 'ApiError#' },
+      },
+    },
+    handler: async (request, reply) => {
+      const parse = LookupDailyLogSummaryQuerySchema.safeParse(request.query);
+      if (!parse.success) return sendValidationError(reply, parse.error);
+      const userId = (request.user as JwtPayload).sub;
+      const artifact = await generative.getDailyLogSummaryByTarget({
+        actorUserId: userId,
+        homeId: parse.data.homeId,
+        date: parse.data.date,
+      });
       return reply.send({ success: true, data: { artifact } });
     },
   });
@@ -194,6 +250,9 @@ const cuidParamJson = {
 // artifact shape (additionalProperties: true) because we want server-driven
 // expansion without re-deploying — the artifact already validates at the
 // service layer.
+// Response envelopes — bind to the canonical GenerativeArtifact schema
+// registered in src/openapi/shared.schemas.ts so Swagger docs and any future
+// FE TypeScript codegen see one consistent shape.
 const artifactEnvelopeJson = {
   type: 'object',
   required: ['success', 'data'],
@@ -203,9 +262,22 @@ const artifactEnvelopeJson = {
       type: 'object',
       required: ['artifact'],
       properties: {
-        artifact: { type: 'object', additionalProperties: true },
+        artifact: { $ref: 'GenerativeArtifact#' },
       },
     },
+  },
+} as const;
+
+const artifactListEnvelopeJson = {
+  type: 'object',
+  required: ['success', 'data', 'meta'],
+  properties: {
+    success: { type: 'boolean', enum: [true] },
+    data: {
+      type: 'array',
+      items: { $ref: 'GenerativeArtifact#' },
+    },
+    meta: { $ref: 'PaginationMeta#' },
   },
 } as const;
 

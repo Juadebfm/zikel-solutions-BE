@@ -25,7 +25,7 @@ import { httpError } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
-import type { DailyLogSummaryContent } from './generative.schema.js';
+import type { DailyLogSummaryContent, ListArtifactsQuery } from './generative.schema.js';
 
 // ─── Mapping ────────────────────────────────────────────────────────────────
 
@@ -165,6 +165,28 @@ export async function createDailyLogSummaryDraft(args: CreateDailyLogSummaryDraf
         where: { id: existing.id },
         data: { artifactId: created.id },
       });
+      // Audit the regeneration so an inspector can see both the supersede
+      // and the new draft as a coherent event pair.
+      await tx.auditLog.create({
+        data: {
+          tenantId: tenant.tenantId,
+          userId: args.actorUserId,
+          action: AuditAction.record_created,
+          entityType: 'generative_artifact',
+          entityId: created.id,
+          metadata: {
+            event: 'generative_artifact_regenerated',
+            supersededArtifactId: existing.artifactId,
+            artifactType: created.artifactType,
+            targetEntityType: created.entityType,
+            targetEntityId: created.entityId,
+            sourceRecordIds: created.sourceRecordIds,
+            modelId: created.modelId,
+            promptVersion: created.promptVersion,
+            source: created.source,
+          },
+        },
+      });
       return mapArtifact(created);
     });
   }
@@ -196,6 +218,27 @@ export async function createDailyLogSummaryDraft(args: CreateDailyLogSummaryDraf
         artifactId: created.id,
       },
     });
+    // Audit-log the draft creation so tenant audit queries can answer
+    // "show me every AI generation in Q4" without crawling artifact rows.
+    await tx.auditLog.create({
+      data: {
+        tenantId: tenant.tenantId,
+        userId: args.actorUserId,
+        action: AuditAction.record_created,
+        entityType: 'generative_artifact',
+        entityId: created.id,
+        metadata: {
+          event: 'generative_artifact_drafted',
+          artifactType: created.artifactType,
+          targetEntityType: created.entityType,
+          targetEntityId: created.entityId,
+          sourceRecordIds: created.sourceRecordIds,
+          modelId: created.modelId,
+          promptVersion: created.promptVersion,
+          source: created.source,
+        },
+      },
+    });
     return mapArtifact(created);
   });
 }
@@ -211,6 +254,101 @@ export async function getArtifact(actorUserId: string, artifactId: string) {
     throw httpError(404, 'ARTIFACT_NOT_FOUND', 'Generative artifact not found.');
   }
   return mapArtifact(row);
+}
+
+/**
+ * Paginated list. Tenant-scoped. Filters: artifactType, status, homeId (mapped
+ * to entityId for daily_log_summary artifacts), createdAt window.
+ *
+ * Returns the same artifact shape as the get-by-id endpoint plus pagination
+ * meta — same envelope the FE expects from list endpoints elsewhere.
+ */
+export async function listArtifacts(actorUserId: string, query: ListArtifactsQuery) {
+  const tenant = await requireTenantContext(actorUserId);
+
+  const where: Prisma.GenerativeArtifactWhereInput = { tenantId: tenant.tenantId };
+  if (query.artifactType) {
+    where.artifactType = query.artifactType as GenerativeArtifactType;
+  }
+  if (query.status) {
+    where.status = query.status as GenerativeArtifactStatus;
+  }
+  if (query.homeId) {
+    // For daily_log_summary, entityType='home' so homeId === entityId. We
+    // filter on entityId directly (cheap) rather than join to DailyLogSummary.
+    where.entityType = 'home';
+    where.entityId = query.homeId;
+  }
+  if (query.dateFrom || query.dateTo) {
+    where.createdAt = {};
+    if (query.dateFrom) where.createdAt.gte = new Date(query.dateFrom);
+    if (query.dateTo) where.createdAt.lt = new Date(query.dateTo);
+  }
+
+  const skip = (query.page - 1) * query.pageSize;
+  const [total, rows] = await Promise.all([
+    prisma.generativeArtifact.count({ where }),
+    prisma.generativeArtifact.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: query.pageSize,
+    }),
+  ]);
+
+  return {
+    data: rows.map(mapArtifact),
+    meta: {
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalPages: Math.max(1, Math.ceil(total / query.pageSize)),
+    },
+  };
+}
+
+/**
+ * Lookup-by-target: "is there a summary for this {home, date}?" Returns the
+ * current ACTIVE artifact (the one DailyLogSummary points at) or 404. Used by
+ * the FE to choose between "Generate summary" and "View existing" CTAs
+ * without first listing then filtering client-side.
+ */
+export async function getDailyLogSummaryByTarget(args: {
+  actorUserId: string;
+  homeId: string;
+  date: string;
+}) {
+  const tenant = await requireTenantContext(args.actorUserId);
+
+  // Verify home is in tenant for a clean 404 vs. silent null.
+  const home = await prisma.home.findFirst({
+    where: { id: args.homeId, tenantId: tenant.tenantId },
+    select: { id: true },
+  });
+  if (!home) {
+    throw httpError(404, 'HOME_NOT_FOUND', 'Home not found in this tenant.');
+  }
+
+  const summaryDate = parseSummaryDate(args.date);
+  const pointer = await prisma.dailyLogSummary.findUnique({
+    where: {
+      tenantId_homeId_summaryDate: {
+        tenantId: tenant.tenantId,
+        homeId: args.homeId,
+        summaryDate,
+      },
+    },
+    include: { artifact: true },
+  });
+
+  if (!pointer) {
+    throw httpError(
+      404,
+      'SUMMARY_NOT_FOUND',
+      'No summary exists for this home and date yet.',
+    );
+  }
+  return mapArtifact(pointer.artifact);
 }
 
 // ─── Edit (append to history) ───────────────────────────────────────────────

@@ -1,8 +1,8 @@
 # AI Phase 1 — Daily-log Summarisation
 
-**Status:** Week 1 + Week 1.5 + Week 2 complete locally (365 pass, 0 fail). Awaiting PR review.
+**Status:** Phase 1 complete locally — all endpoints, OpenAPI schemas, audit-log coverage, tests, smoke runbook, and FE handoff doc shipped (371 pass, 0 fail). Awaiting PR review.
 **Branch:** `add-generative-artifacts`
-**Estimated effort:** ~3 weeks end-to-end (collapsed to ~1 working session in practice)
+**Estimated effort:** ~3 weeks end-to-end (collapsed in practice)
 **Last updated:** 2026-05-26
 
 ---
@@ -276,14 +276,22 @@ Response (200):
 ### OpenAPI + permissions
 - [x] `GENERATIVE_CREATE` permission added (Owner/Admin/Manager/Residential Care Worker)
 - [x] `GENERATIVE_COMMIT` permission added (Owner/Admin/Manager — RCW excluded from commit by design)
-- [x] All four routes have OpenAPI schemas (params, body, response envelope)
+- [x] Canonical `GenerativeArtifact` + `DailyLogSummaryContent` schemas registered in `src/openapi/shared.schemas.ts`
+- [x] Routes bind to canonical `$ref: 'GenerativeArtifact#'` (no more loose `additionalProperties: true`)
 - [x] Wired into `src/routes/index.ts` under `/api/v1/generative`
+
+### FE-readiness gaps (added before any FE handoff)
+- [x] `GET /api/v1/generative/artifacts` — paginated list, filterable by `homeId`, `artifactType`, `status`, `dateFrom`/`dateTo`
+- [x] `GET /api/v1/generative/daily-log-summary?homeId&date` — lookup-by-target (returns active artifact or 404 SUMMARY_NOT_FOUND)
+- [x] Audit log entries for drafts (`generative_artifact_drafted`) and regenerations (`generative_artifact_regenerated`) in addition to commits — full forensic trail
+- [x] Smoke-test runbook: `docs/ai-phase-1-smoke-runbook.md`
+- [x] FE handoff doc drafted (held until Julius approves): `docs/ai-phase-1-fe-handoff.md`
 
 ### Verification
 - [x] `npx tsc --noEmit` clean
-- [x] Full suite: **365 pass, 2 skipped (intentional), 0 fail** (+14 net vs. pre-Phase-1)
-- [ ] Manual smoke test via dev DB (Julius to run after PR review): trigger summary, edit, commit, verify audit log entry, verify `summariesUsed` increments on `/billing/quota`
-- [ ] FE handoff note (separate doc — generate when this PR is approved)
+- [x] Full suite: **371 pass, 2 skipped (intentional), 0 fail** (+20 net vs. pre-Phase-1)
+- [ ] Manual smoke test in production (Julius to run after PR merges + Render deploys — see [smoke runbook](ai-phase-1-smoke-runbook.md))
+- [ ] FE handoff (send `docs/ai-phase-1-fe-handoff.md` only after smoke test passes and Julius approves)
 
 ## Permissions
 

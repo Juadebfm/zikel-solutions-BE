@@ -25,6 +25,8 @@ const { mockPrisma, requireTenantContext } = vi.hoisted(() => ({
     },
     generativeArtifact: {
       findFirst: vi.fn(),
+      findMany: vi.fn(),
+      count: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -45,6 +47,8 @@ const {
   getArtifact,
   editArtifact,
   commitArtifact,
+  listArtifacts,
+  getDailyLogSummaryByTarget,
 } = await import('../src/modules/generative/generative.service.js');
 
 function makeContent(overrides: Partial<DailyLogSummaryContent> = {}): DailyLogSummaryContent {
@@ -126,6 +130,18 @@ describe('createDailyLogSummaryDraft', () => {
     expect(mockPrisma.generativeArtifact.create).toHaveBeenCalledOnce();
     expect(mockPrisma.dailyLogSummary.create).toHaveBeenCalledOnce();
     expect(mockPrisma.generativeArtifact.update).not.toHaveBeenCalled();
+    // Audit log row for the draft creation (forensic completeness).
+    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          entityType: 'generative_artifact',
+          metadata: expect.objectContaining({
+            event: 'generative_artifact_drafted',
+            artifactType: 'daily_log_summary',
+          }),
+        }),
+      }),
+    );
   });
 
   it('throws 409 SUMMARY_EXISTS when one exists and regenerate=false', async () => {
@@ -213,6 +229,120 @@ describe('createDailyLogSummaryDraft', () => {
         },
       }),
     ).rejects.toMatchObject({ statusCode: 404, code: 'HOME_NOT_FOUND' });
+  });
+});
+
+describe('listArtifacts', () => {
+  it('returns paginated tenant-scoped artifacts', async () => {
+    mockPrisma.generativeArtifact.count.mockResolvedValue(7);
+    mockPrisma.generativeArtifact.findMany.mockResolvedValue([
+      makeArtifactRow(),
+      makeArtifactRow({ id: 'art_2', status: 'committed' }),
+    ]);
+
+    const result = await listArtifacts('u_1', { page: 1, pageSize: 20 });
+
+    expect(result.meta).toEqual({ total: 7, page: 1, pageSize: 20, totalPages: 1 });
+    expect(result.data).toHaveLength(2);
+    expect(mockPrisma.generativeArtifact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { tenantId: 't_1' },
+        orderBy: { createdAt: 'desc' },
+        skip: 0,
+        take: 20,
+      }),
+    );
+  });
+
+  it('applies homeId filter as entityType=home + entityId match', async () => {
+    mockPrisma.generativeArtifact.count.mockResolvedValue(0);
+    mockPrisma.generativeArtifact.findMany.mockResolvedValue([]);
+
+    await listArtifacts('u_1', { page: 1, pageSize: 20, homeId: 'h_xyz' });
+
+    expect(mockPrisma.generativeArtifact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tenantId: 't_1',
+          entityType: 'home',
+          entityId: 'h_xyz',
+        }),
+      }),
+    );
+  });
+
+  it('applies status + artifactType + date-window filters', async () => {
+    mockPrisma.generativeArtifact.count.mockResolvedValue(0);
+    mockPrisma.generativeArtifact.findMany.mockResolvedValue([]);
+
+    await listArtifacts('u_1', {
+      page: 2,
+      pageSize: 10,
+      artifactType: 'daily_log_summary',
+      status: 'committed',
+      dateFrom: '2026-05-01T00:00:00.000Z',
+      dateTo: '2026-06-01T00:00:00.000Z',
+    });
+
+    expect(mockPrisma.generativeArtifact.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          artifactType: 'daily_log_summary',
+          status: 'committed',
+          createdAt: {
+            gte: new Date('2026-05-01T00:00:00.000Z'),
+            lt: new Date('2026-06-01T00:00:00.000Z'),
+          },
+        }),
+        skip: 10, // (page-1) * pageSize
+        take: 10,
+      }),
+    );
+  });
+});
+
+describe('getDailyLogSummaryByTarget', () => {
+  it('returns the active artifact for {home, date} when one exists', async () => {
+    mockPrisma.home.findFirst.mockResolvedValue({ id: 'h_1' });
+    mockPrisma.dailyLogSummary.findUnique.mockResolvedValue({
+      id: 'dls_1',
+      artifactId: 'art_1',
+      artifact: makeArtifactRow(),
+    });
+
+    const result = await getDailyLogSummaryByTarget({
+      actorUserId: 'u_1',
+      homeId: 'h_1',
+      date: '2026-05-26',
+    });
+
+    expect(result.id).toBe('art_1');
+  });
+
+  it('throws 404 SUMMARY_NOT_FOUND when no pointer exists', async () => {
+    mockPrisma.home.findFirst.mockResolvedValue({ id: 'h_1' });
+    mockPrisma.dailyLogSummary.findUnique.mockResolvedValue(null);
+
+    await expect(
+      getDailyLogSummaryByTarget({
+        actorUserId: 'u_1',
+        homeId: 'h_1',
+        date: '2026-05-26',
+      }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'SUMMARY_NOT_FOUND' });
+  });
+
+  it('throws 404 HOME_NOT_FOUND before looking up the summary if home is not in tenant', async () => {
+    mockPrisma.home.findFirst.mockResolvedValue(null);
+
+    await expect(
+      getDailyLogSummaryByTarget({
+        actorUserId: 'u_1',
+        homeId: 'h_other',
+        date: '2026-05-26',
+      }),
+    ).rejects.toMatchObject({ statusCode: 404, code: 'HOME_NOT_FOUND' });
+    expect(mockPrisma.dailyLogSummary.findUnique).not.toHaveBeenCalled();
   });
 });
 
