@@ -436,6 +436,9 @@ model TenantUser {
   // Phase 7.2 (Day 2) — token-ledger debits attribute calls back to a user
   tokenLedgerEntries                 TokenLedgerEntry[]
   aiRestrictionsUpdated              TenantAiRestriction[]       @relation("AiRestrictionUpdatedBy")
+  // AI Phase 1 — generative artifact authorship
+  generativeArtifactsCreated         GenerativeArtifact[]        @relation("GenerativeArtifactCreatedBy")
+  generativeArtifactsCommitted       GenerativeArtifact[]        @relation("GenerativeArtifactCommittedBy")
 
   @@index([email])
   @@index([role])
@@ -566,22 +569,22 @@ model PlatformMfaBackupCode {
 }
 
 model Tenant {
-  id        String   @id @default(cuid())
-  name      String
-  slug      String   @unique
-  country   Country  @default(UK)
-  isActive  Boolean  @default(true)
+  id                 String             @id @default(cuid())
+  name               String
+  slug               String             @unique
+  country            Country            @default(UK)
+  isActive           Boolean            @default(true)
   // Phase 8.1 (2026-05-09): tenant-level AI master switch. Flipped to false
   // automatically when subscriptionStatus enters past_due_readonly / suspended;
   // also editable by the Owner via /api/v1/billing/ai-restrictions.
-  aiEnabled Boolean  @default(true)
+  aiEnabled          Boolean            @default(true)
   // Phase 7.1 (Day 2): denormalised cache of `Subscription.status` so the
   // enforcement middleware can read it on every request without a join.
   // Default `trialing` so new tenants start in a trial automatically; the
   // grandfather migration (Phase 7.9) backfills existing tenants the same way.
   subscriptionStatus SubscriptionStatus @default(trialing)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   activeUsers                TenantUser[]                @relation("UserActiveTenant")
   memberships                TenantMembership[]
@@ -632,6 +635,9 @@ model Tenant {
   tokenAllocations           TokenAllocation[]
   tokenLedgerEntries         TokenLedgerEntry[]
   aiRestriction              TenantAiRestriction?
+  // AI Phase 1 — generative artifacts (audit-trail primitive)
+  generativeArtifacts        GenerativeArtifact[]
+  dailyLogSummaries          DailyLogSummary[]
 
   @@index([name])
   @@index([isActive])
@@ -936,6 +942,7 @@ model Home {
   sensitiveDataRecords   SensitiveDataRecord[]
   safeguardingRiskAlerts SafeguardingRiskAlert[]
   invitations            Invitation[]
+  dailyLogSummaries      DailyLogSummary[]
 
   @@index([tenantId])
   @@index([careGroupId])
@@ -1941,8 +1948,8 @@ model AiConversation {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  tenant   Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user     TenantUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant   Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user     TenantUser  @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages AiMessage[]
 
   @@index([tenantId, userId, updatedAt])
@@ -1969,13 +1976,13 @@ model AiMessage {
 // ─── Billing — subscriptions & invoices (Phase 7.1) ──────────────────────────
 
 enum SubscriptionStatus {
-  trialing            // in trial — full access, no payment yet
-  active              // paid up — full access
-  past_due_grace      // < 3 days since first failed charge — full access
-  past_due_readonly   // 3–14 days past due — read-only enforcement
-  suspended           // > 14 days past due OR Stripe `unpaid` — Tenant.isActive=false
-  cancelled           // Owner cancelled, period ended
-  incomplete          // Stripe Checkout started but not yet completed
+  trialing // in trial — full access, no payment yet
+  active // paid up — full access
+  past_due_grace // < 3 days since first failed charge — full access
+  past_due_readonly // 3–14 days past due — read-only enforcement
+  suspended // > 14 days past due OR Stripe `unpaid` — Tenant.isActive=false
+  cancelled // Owner cancelled, period ended
+  incomplete // Stripe Checkout started but not yet completed
 }
 
 enum PlanInterval {
@@ -1998,31 +2005,38 @@ enum BillingEventKind {
 }
 
 model Plan {
-  id                    String       @id @default(cuid())
-  code                  String       @unique  // 'single_home' | 'multi_home' | 'group'
-  name                  String
-  interval              PlanInterval
+  id                         String       @id @default(cuid())
+  code                       String       @unique // 'single_home' | 'multi_home' | 'group'
+  name                       String
+  interval                   PlanInterval
   // Base flat fee in pence. 0 for metered tiers (per-bed billing). Group tier
   // is sales-led so this stays 0 until a custom contract is wired in.
-  unitAmountMinor       Int
-  currency              String       @default("gbp")
+  unitAmountMinor            Int
+  currency                   String       @default("gbp")
   // Per-bed monthly rate in pence (e.g. 700 = £7). Null for Group tier
   // (sales-led, custom-priced) and for flat-fee plans if we ever reintroduce one.
-  pricePerBedMinor      Int?
+  pricePerBedMinor           Int?
   // Capacity caps. Null = unlimited (Group tier). Both caps are enforced at
   // create-time in homes.service.ts (createHome) and invitations.service.ts
   // (createInvitation) — see docs/billing-tiers-build.md for the contract.
-  maxHomes              Int?
-  maxSeats              Int?
+  maxHomes                   Int?
+  maxSeats                   Int?
   // Monthly bundled AI calls. 1000 (Single Home), 5000 (Multi-Home). Group
   // tier seeds with a high default (50000) — actual per-contract quota lives
   // on the Subscription once sales wires a custom agreement.
-  bundledCallsPerPeriod Int
-  stripeProductId       String?
-  stripePriceId         String?      @unique
-  isActive              Boolean      @default(true)
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
+  bundledCallsPerPeriod      Int
+  // AI Phase 1 — generative inclusions. Cap on how many summaries can be
+  // generated per billing period. Each summary debits the shared token pool
+  // by SUMMARY_TOKEN_MULTIPLIER call-equivalents (see generative service);
+  // this column adds a hard surface-level cap so a tenant can't burn their
+  // entire `/ai/ask` budget on runaway summarisation. Null = unlimited
+  // (Group tier; actual contract quota lives on Subscription if negotiated).
+  summariesIncludedPerPeriod Int?
+  stripeProductId            String?
+  stripePriceId              String?      @unique
+  isActive                   Boolean      @default(true)
+  createdAt                  DateTime     @default(now())
+  updatedAt                  DateTime     @updatedAt
 
   subscriptions Subscription[]
 
@@ -2031,11 +2045,11 @@ model Plan {
 
 model TopUpPack {
   id              String   @id @default(cuid())
-  code            String   @unique  // 'topup_small' | 'topup_medium' | 'topup_large'
+  code            String   @unique // 'topup_small' | 'topup_medium' | 'topup_large'
   name            String
-  unitAmountMinor Int      // pence: 500 / 1500 / 4000
+  unitAmountMinor Int // pence: 500 / 1500 / 4000
   currency        String   @default("gbp")
-  calls           Int      // 250 / 1000 / 5000
+  calls           Int // 250 / 1000 / 5000
   stripeProductId String?
   stripePriceId   String?  @unique
   isActive        Boolean  @default(true)
@@ -2046,39 +2060,39 @@ model TopUpPack {
 }
 
 model Subscription {
-  id                       String             @id @default(cuid())
-  tenantId                 String             @unique
-  planId                   String
-  status                   SubscriptionStatus
+  id                      String             @id @default(cuid())
+  tenantId                String             @unique
+  planId                  String
+  status                  SubscriptionStatus
   // Stripe identifiers — populated on first checkout completion. customerId is
   // unique; subscriptionId is nullable until the customer actually subscribes.
-  stripeCustomerId         String             @unique
-  stripeSubscriptionId     String?            @unique
-  trialEndsAt              DateTime?
-  currentPeriodStart       DateTime
-  currentPeriodEnd         DateTime
-  cancelAtPeriodEnd        Boolean            @default(false)
+  stripeCustomerId        String             @unique
+  stripeSubscriptionId    String?            @unique
+  trialEndsAt             DateTime?
+  currentPeriodStart      DateTime
+  currentPeriodEnd        DateTime
+  cancelAtPeriodEnd       Boolean            @default(false)
   // Set when the FIRST past-due invoice arrives. Drives the past-due day
   // counter in our cron — Stripe doesn't tell us how many days have elapsed,
   // we compute it. Cleared when payment recovers.
-  pastDueSince             DateTime?
+  pastDueSince            DateTime?
   // Support escalation: a platform_admin can grant full access until this
   // timestamp regardless of Stripe state.
-  manuallyOverriddenUntil  DateTime?
+  manuallyOverriddenUntil DateTime?
   // Per-tenant capacity overrides — null means "inherit from Plan.maxHomes /
   // Plan.maxSeats". Used for Group-tier negotiated contracts and any other
   // bespoke arrangement that doesn't fit a published tier. Enforcement reads
   // `subscription.maxHomesOverride ?? subscription.plan.maxHomes` (same for seats).
-  maxHomesOverride         Int?
-  maxSeatsOverride         Int?
+  maxHomesOverride        Int?
+  maxSeatsOverride        Int?
   // Per-bed metered usage tracking. `bedCountSnapshot` is the count we last
   // pushed to Stripe (sum of Home.capacity across this tenant's active homes);
   // `lastUsageReportedAt` is when. The usage-report scheduler in
   // src/modules/billing/usage-report.scheduler.ts maintains both.
-  bedCountSnapshot         Int?
-  lastUsageReportedAt      DateTime?
-  createdAt                DateTime           @default(now())
-  updatedAt                DateTime           @updatedAt
+  bedCountSnapshot        Int?
+  lastUsageReportedAt     DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   plan   Plan   @relation(fields: [planId], references: [id])
@@ -2114,16 +2128,16 @@ model Invoice {
 }
 
 model PaymentMethod {
-  id                     String   @id @default(cuid())
-  tenantId               String
-  stripePaymentMethodId  String   @unique
-  brand                  String?  // 'visa' | 'mastercard' | 'amex' | …
-  last4                  String?
-  expMonth               Int?
-  expYear                Int?
-  isDefault              Boolean  @default(false)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  tenantId              String
+  stripePaymentMethodId String   @unique
+  brand                 String? // 'visa' | 'mastercard' | 'amex' | …
+  last4                 String?
+  expMonth              Int?
+  expYear               Int?
+  isDefault             Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
@@ -2132,7 +2146,7 @@ model PaymentMethod {
 
 model BillingEvent {
   id              String           @id @default(cuid())
-  tenantId        String?          // nullable: some events (e.g. webhook_received) have no tenant context yet
+  tenantId        String? // nullable: some events (e.g. webhook_received) have no tenant context yet
   kind            BillingEventKind
   // Unique on stripeEventId is the idempotency guard for webhook handlers —
   // a duplicate event.id arriving from Stripe causes the .create() to throw,
@@ -2156,6 +2170,10 @@ enum TokenLedgerEntryKind {
   debit_chat_title
   debit_dashboard_card
   debit_chronology_narrative
+  // AI Phase 1 — generative artifact debit. Each summary costs
+  // SUMMARY_TOKEN_MULTIPLIER call-equivalents (~25× a chat call) because
+  // summarisation prompts run substantially more tokens than /ai/ask.
+  debit_generative_summary
   credit_topup
   credit_period_reset
   credit_grandfather
@@ -2167,18 +2185,18 @@ enum TokenLedgerEntryKind {
 // counter kept in sync with TokenLedgerEntry — sum of negative-delta entries
 // in this allocation should equal `usedCalls`.
 model TokenAllocation {
-  id            String   @id @default(cuid())
-  tenantId      String
-  periodStart   DateTime
-  periodEnd     DateTime
-  bundledCalls  Int      // from Plan.bundledCallsPerPeriod at period start
-  topUpCalls    Int      @default(0)  // sum of all top-ups credited in this period
-  usedCalls     Int      @default(0)
-  resetAt       DateTime
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String
+  periodStart  DateTime
+  periodEnd    DateTime
+  bundledCalls Int // from Plan.bundledCallsPerPeriod at period start
+  topUpCalls   Int      @default(0) // sum of all top-ups credited in this period
+  usedCalls    Int      @default(0)
+  resetAt      DateTime
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   ledger TokenLedgerEntry[]
 
   @@unique([tenantId, periodStart])
@@ -2191,14 +2209,14 @@ model TokenAllocation {
 // `reasonRef` typically holds an AiCallEvent ID (debit) or Stripe Invoice ID
 // (top-up) for traceability.
 model TokenLedgerEntry {
-  id            String               @id @default(cuid())
-  tenantId      String
-  allocationId  String
-  userId        String?
-  kind          TokenLedgerEntryKind
-  delta         Int                  // negative for debits, positive for credits
-  reasonRef     String?
-  createdAt     DateTime             @default(now())
+  id           String               @id @default(cuid())
+  tenantId     String
+  allocationId String
+  userId       String?
+  kind         TokenLedgerEntryKind
+  delta        Int // negative for debits, positive for credits
+  reasonRef    String?
+  createdAt    DateTime             @default(now())
 
   tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   allocation TokenAllocation @relation(fields: [allocationId], references: [id], onDelete: Cascade)
@@ -2225,6 +2243,103 @@ model TenantAiRestriction {
   updatedAt       DateTime @updatedAt
   createdAt       DateTime @default(now())
 
+  tenant    Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  updatedBy TenantUser? @relation("AiRestrictionUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+}
+
+// ─── AI Phase 1 — Generative artifacts (audit-trail primitive) ───────────────
+// Shared by ALL generative AI features (daily-log summarisation, Reg 44/45
+// reports, safeguarding pattern alerts, care-plan drafts). Every artifact:
+//   1. Records the source records it was generated from (sourceRecordIds)
+//   2. Captures the model + prompt version that produced it
+//   3. Tracks human edits as an append-only diff history
+//   4. Locks at commit time and snapshots the committed content
+// This is non-negotiable for Ofsted defensibility — every committed artifact
+// can be traced back to its inputs, its generator, and its human reviewers.
+// See docs/ai-phase-1-daily-log-summarisation.md for full rationale.
+
+enum GenerativeArtifactType {
+  daily_log_summary
+  // Phase 2+: reg_44_45_report, safeguarding_pattern_alert, care_plan_draft
+}
+
+enum GenerativeArtifactStatus {
+  draft // newly generated, not yet committed
+  edited // human has modified the draft
+  committed // finalised; immutable from here
+  superseded // a later regeneration replaced this artifact
+}
+
+model GenerativeArtifact {
+  id       String @id @default(cuid())
+  tenantId String
+
+  artifactType GenerativeArtifactType
+  status       GenerativeArtifactStatus @default(draft)
+
+  // What was summarised. entityType + entityId locate the "thing".
+  // For daily_log_summary: entityType='home', entityId=<homeId>.
+  entityType String
+  entityId   String
+
+  // Source-record IDs the artifact was generated from. JSON array of strings.
+  // For daily_log_summary: Task IDs where category='daily_log' on the target date.
+  // Required for Ofsted-defensible "show me the inputs that produced this output".
+  sourceRecordIds Json
+
+  // Generation provenance.
+  modelId       String // e.g. 'gpt-5.4-mini'
+  promptVersion String // semver-ish, e.g. 'v1.0.0'
+  source        String // 'model' | 'fallback' (mirrors /ai/ask convention)
+
+  // Content. JSON so shape can evolve per artifactType without migrations.
+  draftContent     Json // original AI output, immutable
+  currentContent   Json // current state (after edits), mutable until commit
+  committedContent Json? // snapshot at commit time, null until committed
+
+  // Lifecycle authorship.
+  createdById   String
+  committedById String?
+  committedAt   DateTime?
+
+  // Append-only edit history. Each entry: { atIso, byUserId, before, after }.
+  // Never overwritten — full diff trail for inspection defensibility.
+  editHistory Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  updatedBy   TenantUser? @relation("AiRestrictionUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  createdBy   TenantUser  @relation("GenerativeArtifactCreatedBy", fields: [createdById], references: [id])
+  committedBy TenantUser? @relation("GenerativeArtifactCommittedBy", fields: [committedById], references: [id], onDelete: SetNull)
+
+  dailyLogSummary DailyLogSummary?
+
+  @@index([tenantId, artifactType, createdAt])
+  @@index([tenantId, entityType, entityId])
+  @@index([status])
+}
+
+// Phase 1 specific index table — answers "is there a summary for {home, date}?"
+// without scanning all artifacts. Content lives on GenerativeArtifact; this
+// is a unique-keyed pointer.
+model DailyLogSummary {
+  id          String   @id @default(cuid())
+  tenantId    String
+  homeId      String
+  summaryDate DateTime @db.Date // the date being summarised, NOT when generated
+  artifactId  String   @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant   Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  home     Home               @relation(fields: [homeId], references: [id], onDelete: Cascade)
+  artifact GenerativeArtifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  // One ACTIVE summary per home per date. Regeneration supersedes the old
+  // artifact (its status -> 'superseded') and updates this row to point at the
+  // new artifact via the application layer.
+  @@unique([tenantId, homeId, summaryDate])
+  @@index([tenantId, homeId, summaryDate])
 }

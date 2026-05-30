@@ -101,8 +101,11 @@ async function getCurrentPeriod(tenantId: string): Promise<{
 /**
  * Returns (creating if needed) the TokenAllocation row for the tenant's
  * current period. Idempotent — uses `upsert` keyed on (tenantId, periodStart).
+ *
+ * Exported so the generative quota module can share the same period contract
+ * (otherwise summary cap windows could drift from chat cap windows).
  */
-async function ensureCurrentAllocation(tenantId: string) {
+export async function ensureCurrentAllocation(tenantId: string) {
   const period = await getCurrentPeriod(tenantId);
   return prisma.tokenAllocation.upsert({
     where: {
@@ -415,6 +418,22 @@ export async function getQuotaSnapshotForTenant(args: { tenantId: string }) {
     select: { perRoleCaps: true, perUserCaps: true },
   });
 
+  // AI Phase 1 — surface the summary counter alongside the chat-call counter.
+  // `summariesIncluded` is null for Group tier (unlimited). `summariesUsed`
+  // counts artifacts created in the current period regardless of status —
+  // a regeneration costs the tenant another summary.
+  const subscriptionForSummaries = await prisma.subscription.findUnique({
+    where: { tenantId: args.tenantId },
+    select: { plan: { select: { summariesIncludedPerPeriod: true } } },
+  });
+  const summariesUsed = await prisma.generativeArtifact.count({
+    where: {
+      tenantId: args.tenantId,
+      artifactType: 'daily_log_summary',
+      createdAt: { gte: allocation.periodStart, lt: allocation.periodEnd },
+    },
+  });
+
   // Per-user usage breakdown for the current period.
   const userUsage = await prisma.tokenLedgerEntry.groupBy({
     by: ['userId'],
@@ -475,6 +494,10 @@ export async function getQuotaSnapshotForTenant(args: { tenantId: string }) {
     restrictions: {
       perRoleCaps: (restriction?.perRoleCaps ?? {}) as Prisma.JsonValue,
       perUserCaps: (restriction?.perUserCaps ?? {}) as Prisma.JsonValue,
+    },
+    summaries: {
+      included: subscriptionForSummaries?.plan.summariesIncludedPerPeriod ?? null,
+      used: summariesUsed,
     },
   };
 }

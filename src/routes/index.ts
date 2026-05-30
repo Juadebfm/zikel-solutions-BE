@@ -5,6 +5,7 @@ import meRoutes from '../modules/me/me.routes.js';
 import publicRoutes from '../modules/public/public.routes.js';
 import aiRoutes from '../modules/ai/ai.routes.js';
 import aiConversationsRoutes from '../modules/ai/conversations.routes.js';
+import generativeRoutes from '../modules/generative/generative.routes.js';
 import billingRoutes from '../modules/billing/billing.routes.js';
 import announcementsRoutes from '../modules/announcements/announcements.routes.js';
 import summaryRoutes from '../modules/summary/summary.routes.js';
@@ -76,6 +77,7 @@ const rootRouter: FastifyPluginAsync = async (fastify) => {
       await v1.register(publicRoutes, { prefix: '/public' });
       await v1.register(aiRoutes, { prefix: '/ai' });
       await v1.register(aiConversationsRoutes, { prefix: '/ai/conversations' });
+      await v1.register(generativeRoutes, { prefix: '/generative' });
       await v1.register(billingRoutes, { prefix: '/billing' });
       await v1.register(announcementsRoutes, { prefix: '/announcements' });
       await v1.register(summaryRoutes, { prefix: '/summary' });

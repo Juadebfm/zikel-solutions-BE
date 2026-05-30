@@ -664,6 +664,80 @@ export const AuditLogSchema = {
   },
 } as const;
 
+// AI Phase 1 — generative artifacts. Shared across all generative features
+// (Phase 1 ships daily_log_summary; Phase 2+ will add reg_44_45_report etc.).
+// The route response loose-types the artifact field; this schema is for
+// Swagger docs + FE TypeScript-generation use.
+export const DailyLogSummaryContentSchema = {
+  $id: 'DailyLogSummaryContent',
+  type: 'object',
+  required: [
+    'shiftHighlights',
+    'incidentsOfNote',
+    'safeguardingFlags',
+    'followUpRequired',
+    'freeformSummary',
+    'languageSafetyPassed',
+  ],
+  properties: {
+    shiftHighlights: { type: 'array', items: { type: 'string' } },
+    incidentsOfNote: { type: 'array', items: { type: 'string' } },
+    safeguardingFlags: { type: 'array', items: { type: 'string' } },
+    followUpRequired: { type: 'array', items: { type: 'string' } },
+    freeformSummary: { type: 'string' },
+    languageSafetyPassed: { type: 'boolean' },
+  },
+} as const;
+
+export const GenerativeArtifactSchema = {
+  $id: 'GenerativeArtifact',
+  type: 'object',
+  required: [
+    'id',
+    'tenantId',
+    'artifactType',
+    'status',
+    'entityType',
+    'entityId',
+    'sourceRecordIds',
+    'modelId',
+    'promptVersion',
+    'source',
+    'draftContent',
+    'currentContent',
+    'editHistory',
+    'createdById',
+    'createdAt',
+    'updatedAt',
+  ],
+  properties: {
+    id: { type: 'string' },
+    tenantId: { type: 'string' },
+    artifactType: { type: 'string', enum: ['daily_log_summary'] },
+    status: { type: 'string', enum: ['draft', 'edited', 'committed', 'superseded'] },
+    entityType: { type: 'string' },
+    entityId: { type: 'string' },
+    // For daily_log_summary: array of Task IDs whose category='daily_log' on
+    // the target date — the EXACT inputs the prompt saw. Ofsted-defensible.
+    sourceRecordIds: { type: 'array', items: { type: 'string' } },
+    modelId: { type: 'string' },
+    promptVersion: { type: 'string' },
+    source: { type: 'string', enum: ['model', 'fallback'] },
+    // Content shapes depend on artifactType. For daily_log_summary, see
+    // DailyLogSummaryContent. Other types will plug in here.
+    draftContent: { type: 'object', additionalProperties: true },
+    currentContent: { type: 'object', additionalProperties: true },
+    committedContent: { type: ['object', 'null'], additionalProperties: true },
+    createdById: { type: 'string' },
+    committedById: { type: 'string', nullable: true },
+    committedAt: { type: 'string', format: 'date-time', nullable: true },
+    // Append-only diff trail. Each entry: { atIso, byUserId, before, after }.
+    editHistory: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
 export const ALL_SHARED_SCHEMAS = [
@@ -694,4 +768,6 @@ export const ALL_SHARED_SCHEMAS = [
   WidgetSchema,
   SummaryStatsSchema,
   AuditLogSchema,
+  DailyLogSummaryContentSchema,
+  GenerativeArtifactSchema,
 ];

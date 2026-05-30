@@ -76,6 +76,12 @@ export const Permissions = {
   AI_USE: 'ai:use',
   AI_ADMIN: 'ai:admin', // Manage AI access for staff
 
+  // ── Generative AI artifacts (summaries, reports, drafts) ───────────────────
+  // Authored 2026-05-26 with the daily-log summarisation work. Shared by all
+  // generative features going forward (Reg 44/45, safeguarding patterns, etc.).
+  GENERATIVE_CREATE: 'generative:create', // Trigger a draft generation, edit the draft
+  GENERATIVE_COMMIT: 'generative:commit', // Finalise / lock a draft (Ofsted-defensible "this is what we say happened")
+
   // ── Announcements ──────────────────────────────────────────────────────────
   ANNOUNCEMENTS_READ: 'announcements:read',
   ANNOUNCEMENTS_WRITE: 'announcements:write',
@@ -124,6 +130,10 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
     Permissions.ANNOUNCEMENTS_READ,
     Permissions.VEHICLES_READ,
     Permissions.AI_USE,
+    // Frontline workers can DRAFT summaries (they wrote the logs being
+    // summarised) but cannot COMMIT — commit is the inspection-defensible
+    // moment and lives with Admin/Owner.
+    Permissions.GENERATIVE_CREATE,
   ],
 
   // Viewer: pure observer (auditor, regulator, parent portal, IRO, etc.).
