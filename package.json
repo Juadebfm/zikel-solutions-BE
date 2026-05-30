@@ -30,6 +30,7 @@
     "db:seed:izu-rich": "node scripts/seed-izu-rich-data.mjs",
     "db:archive-probe-accounts": "node scripts/archive-probe-accounts.mjs",
     "grandfather:tenants": "tsx scripts/grandfather-tenants.ts",
+    "refresh:role-permissions": "tsx scripts/refresh-system-role-permissions.ts",
     "typecheck": "tsc --noEmit"
   },
   "prisma": {

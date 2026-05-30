@@ -286,6 +286,14 @@ Response (200):
 - [x] Audit log entries for drafts (`generative_artifact_drafted`) and regenerations (`generative_artifact_regenerated`) in addition to commits — full forensic trail
 - [x] Smoke-test runbook: `docs/ai-phase-1-smoke-runbook.md`
 - [x] FE handoff doc drafted (held until Julius approves): `docs/ai-phase-1-fe-handoff.md`
+- [x] **`scripts/refresh-system-role-permissions.ts`** — one-shot ops script (with `DRY_RUN=1`) to refresh `Role.permissions` on existing tenants when new permission codes are added to the catalogue. **MUST RUN POST-DEPLOY** or every existing tenant will hit 403 PERMISSION_DENIED on every generative call. Surfaced during local smoke test on 2026-05-30 — same problem will hit production until this runs.
+
+### Deploy procedure
+1. Merge PR → Render auto-deploys
+2. Wait for the new build to go green on Render
+3. From local: `npm run refresh:role-permissions` (writes via the production DATABASE_URL in your `.env.local`). Run with `DRY_RUN=1` first to preview.
+4. Smoke runbook against `https://api.zikelsolutions.com`
+5. Send FE handoff if smoke passes
 
 ### Verification
 - [x] `npx tsc --noEmit` clean
