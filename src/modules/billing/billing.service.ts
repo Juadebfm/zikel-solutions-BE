@@ -74,6 +74,8 @@ function mapPlan(plan: Plan) {
     maxHomes: plan.maxHomes,
     maxSeats: plan.maxSeats,
     bundledCallsPerPeriod: plan.bundledCallsPerPeriod,
+    // AI Phase 1 — per-period summary inclusion. Null = unlimited (Group tier).
+    summariesIncludedPerPeriod: plan.summariesIncludedPerPeriod,
     // FE-facing hint for which CTA to render on the pricing card.
     // Sales-led plans have no Stripe Price; they go through POST /billing/contact-sales.
     cta: (plan.stripePriceId ? 'subscribe' : 'contact_sales') as 'subscribe' | 'contact_sales',

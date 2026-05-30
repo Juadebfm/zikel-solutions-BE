@@ -62,6 +62,7 @@ const { mockPrisma, mockStripe } = vi.hoisted(() => {
     tokenLedgerEntry: {
       groupBy: vi.fn(async () => []),
     },
+    generativeArtifact: { count: vi.fn(async () => 0) },
     $disconnect: vi.fn(async () => undefined),
     $on: vi.fn(),
   };

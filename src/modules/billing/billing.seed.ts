@@ -30,6 +30,7 @@ interface PlanSeed {
   maxHomes: number | null;
   maxSeats: number | null;
   bundledCallsPerPeriod: number;
+  summariesIncludedPerPeriod: number | null;
   stripePriceIdEnv: string | undefined;
   /**
    * Sales-led tiers (Group) seed even without a Stripe Price id — there's
@@ -56,6 +57,9 @@ const PLANS: PlanSeed[] = [
     maxHomes: 1,
     maxSeats: 25,
     bundledCallsPerPeriod: 1000,
+    // Generous default — assumes ~3 summaries/day for a single home (per-shift
+    // handover cadence). Tightenable post-launch once we see real usage curves.
+    summariesIncludedPerPeriod: 90,
     stripePriceIdEnv: env.STRIPE_PRICE_ID_SINGLE_HOME,
     salesLed: false,
   },
@@ -68,6 +72,8 @@ const PLANS: PlanSeed[] = [
     maxHomes: 5,
     maxSeats: 75,
     bundledCallsPerPeriod: 5000,
+    // 3 summaries/day × 5 homes × 30 days. Generous; tightenable post-launch.
+    summariesIncludedPerPeriod: 450,
     stripePriceIdEnv: env.STRIPE_PRICE_ID_MULTI_HOME,
     salesLed: false,
   },
@@ -80,6 +86,7 @@ const PLANS: PlanSeed[] = [
     maxHomes: null, // unlimited
     maxSeats: null,
     bundledCallsPerPeriod: 50000, // high default; per-contract Subscription overrides this
+    summariesIncludedPerPeriod: null, // unlimited — actual quota per contract
     stripePriceIdEnv: undefined,
     salesLed: true,
   },
@@ -156,6 +163,7 @@ export async function seedBillingProducts(): Promise<{
         maxHomes: seed.maxHomes,
         maxSeats: seed.maxSeats,
         bundledCallsPerPeriod: seed.bundledCallsPerPeriod,
+        summariesIncludedPerPeriod: seed.summariesIncludedPerPeriod,
         stripePriceId: seed.stripePriceIdEnv ?? null,
         isActive: true,
       },
@@ -166,6 +174,7 @@ export async function seedBillingProducts(): Promise<{
         maxHomes: seed.maxHomes,
         maxSeats: seed.maxSeats,
         bundledCallsPerPeriod: seed.bundledCallsPerPeriod,
+        summariesIncludedPerPeriod: seed.summariesIncludedPerPeriod,
         stripePriceId: seed.stripePriceIdEnv ?? null,
         isActive: true,
       },
