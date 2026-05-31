@@ -131,10 +131,12 @@ if (res.status === 404) {
 
 | Permission | Default roles | What it allows |
 |---|---|---|
-| `generative:create` | Owner, Admin, Manager, Residential Care Worker | Trigger, list, get, lookup, edit |
-| `generative:commit` | Owner, Admin, Manager | Commit (lock) a draft |
+| `generative:create` | Owner, Admin, Residential Care Worker | Trigger, list, get, lookup, edit |
+| `generative:commit` | Owner, Admin | Commit (lock) a draft |
 
 RCW can draft and edit but NOT commit. Commit is the inspection-defensible "this is what we say happened" moment.
+
+> System roles in this tenant: **Owner, Admin, Residential Care Worker, Viewer**. There's no "Manager" tier. If you've seen "Manager" in earlier drafts, that was wrong — Admin is the equivalent.
 
 ## Quota panel additions
 
