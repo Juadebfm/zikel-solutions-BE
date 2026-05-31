@@ -274,8 +274,8 @@ Response (200):
 - [x] 7 quota tests: happy path, pool-exhaustion, surface-cap-hit, Group unlimited, dev/no-sub fallback, debit ledger shape, multiplier value lock
 
 ### OpenAPI + permissions
-- [x] `GENERATIVE_CREATE` permission added (Owner/Admin/Manager/Residential Care Worker)
-- [x] `GENERATIVE_COMMIT` permission added (Owner/Admin/Manager — RCW excluded from commit by design)
+- [x] `GENERATIVE_CREATE` permission added (Owner / Admin / Residential Care Worker)
+- [x] `GENERATIVE_COMMIT` permission added (Owner / Admin — RCW excluded from commit by design; no "Manager" system role exists)
 - [x] Canonical `GenerativeArtifact` + `DailyLogSummaryContent` schemas registered in `src/openapi/shared.schemas.ts`
 - [x] Routes bind to canonical `$ref: 'GenerativeArtifact#'` (no more loose `additionalProperties: true`)
 - [x] Wired into `src/routes/index.ts` under `/api/v1/generative`
@@ -307,8 +307,8 @@ Two new permission codes (add to `src/auth/permissions.ts`):
 
 | Code | Meaning | Default roles |
 |---|---|---|
-| `generative:create` | Trigger draft generation | Owner, Admin, Manager, Residential Care Worker |
-| `generative:commit` | Finalise / lock a draft | Owner, Admin, Manager |
+| `generative:create` | Trigger draft generation | Owner, Admin, Residential Care Worker |
+| `generative:commit` | Finalise / lock a draft | Owner, Admin |
 
 Edits between draft and commit require `generative:create`. Commit is the gated action because it's the inspection-defensible "this is what we say happened" moment.
 

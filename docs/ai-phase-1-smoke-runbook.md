@@ -8,7 +8,7 @@ edit → commit → audit verification → quota counter increment.
 - Be on a tenant with at least one home that has `category: 'daily_log'` tasks
   for a specific date. If you don't have one, create a daily log first via
   `POST /api/v1/daily-logs` for any home + date.
-- Your user has the `generative:create` permission (Owner/Admin/Manager/RCW).
+- Your user has the `generative:create` permission (Owner / Admin / Residential Care Worker).
 - You have a valid `accessToken` from `POST /api/v1/auth/login`.
 - `BASE=https://api.zikelsolutions.com` (or the local tunnel URL).
 
