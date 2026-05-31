@@ -7,9 +7,12 @@ import {
   listTenantAuditForPlatform,
   listPlatformAudit,
   exportTenantAuditForPlatform,
-  type TenantAuditExportRow,
 } from './admin-audit.service.js';
 import { rowsToCsv } from '../../lib/csv.js';
+import {
+  TENANT_AUDIT_CSV_COLUMNS,
+  buildAuditExportFilename,
+} from '../../lib/audit-export.js';
 
 const AuditActionSchema = z.nativeEnum(AuditAction);
 
@@ -30,32 +33,9 @@ const ExportTenantAuditQuerySchema = z.object({
   toDate: z.coerce.date().optional(),
 });
 
-/** CSV column order + headers for the tenant audit export. */
-const TENANT_AUDIT_CSV_COLUMNS: Array<{ key: keyof TenantAuditExportRow; header: string }> = [
-  { key: 'id', header: 'AuditLogId' },
-  { key: 'createdAt', header: 'CreatedAt' },
-  { key: 'tenantId', header: 'TenantId' },
-  { key: 'action', header: 'Action' },
-  { key: 'userId', header: 'UserId' },
-  { key: 'userEmail', header: 'UserEmail' },
-  { key: 'userName', header: 'UserName' },
-  { key: 'impersonatorId', header: 'ImpersonatorId' },
-  { key: 'impersonatorEmail', header: 'ImpersonatorEmail' },
-  { key: 'entityType', header: 'EntityType' },
-  { key: 'entityId', header: 'EntityId' },
-  { key: 'metadata', header: 'Metadata' },
-  { key: 'ipAddress', header: 'IpAddress' },
-  { key: 'userAgent', header: 'UserAgent' },
-];
-
-function buildExportFilename(args: {
-  tenantSlug: string;
-  format: 'csv' | 'json';
-}): string {
-  // ISO without colons so Windows accepts the filename.
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `audit-${args.tenantSlug}-${stamp}.${args.format}`;
-}
+// TENANT_AUDIT_CSV_COLUMNS + buildAuditExportFilename are imported from
+// src/lib/audit-export.ts so the tenant-side export endpoint shares the
+// exact same row shape and filename pattern.
 
 const ListPlatformAuditQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
@@ -202,7 +182,7 @@ const adminAuditRoutes: FastifyPluginAsync = async (fastify) => {
         ...(ua ? { userAgent: ua } : {}),
       });
 
-      const filename = buildExportFilename({
+      const filename = buildAuditExportFilename({
         tenantSlug: result.tenant.slug,
         format: parse.data.format,
       });

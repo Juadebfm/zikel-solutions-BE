@@ -3,6 +3,10 @@ import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { logSensitiveReadAccess } from '../../lib/sensitive-read-audit.js';
 import { requireTenantContext } from '../../lib/tenant-context.js';
+import {
+  TENANT_AUDIT_EXPORT_MAX_ROWS,
+  type TenantAuditExportRow,
+} from '../../lib/audit-export.js';
 import type { ListAuditLogsQuery } from './audit.schema.js';
 
 type AuditActorContext = {
@@ -141,6 +145,150 @@ export async function listAuditLogs(actorUserId: string, query: ListAuditLogsQue
   return {
     data: rows.map(mapAuditLog),
     meta: paginationMeta(total, query.page, query.pageSize),
+  };
+}
+
+/**
+ * Tenant-scoped audit log export. Mirrors the cross-tenant platform export
+ * (src/modules/admin/admin-audit.service.ts:exportTenantAuditForPlatform) but
+ * for the tenant's own Owner/Admin pulling their own data.
+ *
+ * Same row shape, same CSV column set, same 50k cap. The compliance officer
+ * receiving the file should not be able to tell whether the export was pulled
+ * by Zikel staff or by the tenant themselves — that's intentional.
+ *
+ * Chain-of-custody: every export writes a `tenant_audit_log_exported`
+ * AuditLog row visible in the tenant's OWN audit trail. (Platform exports
+ * write to PlatformAuditLog instead.)
+ */
+export async function exportTenantAudit(args: {
+  actorUserId: string;
+  format: 'csv' | 'json';
+  action?: AuditAction;
+  userId?: string;
+  fromDate?: Date;
+  toDate?: Date;
+  ipAddress?: string;
+  userAgent?: string;
+}): Promise<{
+  tenant: { id: string; name: string; slug: string };
+  rows: TenantAuditExportRow[];
+  totalMatching: number;
+  truncated: boolean;
+  filters: {
+    action?: AuditAction;
+    userId?: string;
+    fromDate?: Date;
+    toDate?: Date;
+  };
+}> {
+  const actor = await resolveAuditActorContext(args.actorUserId);
+  if (!isAuditViewer(actor)) {
+    throw httpError(403, 'FORBIDDEN', 'You do not have permission to export audit logs.');
+  }
+  if (!actor.tenantId) {
+    throw httpError(403, 'NO_ACTIVE_TENANT', 'No active tenant context.');
+  }
+
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: actor.tenantId },
+    select: { id: true, name: true, slug: true },
+  });
+  if (!tenant) {
+    throw httpError(404, 'TENANT_NOT_FOUND', 'Tenant not found.');
+  }
+
+  const where: Prisma.AuditLogWhereInput = { tenantId: actor.tenantId };
+  if (args.action) where.action = args.action;
+  if (args.userId) where.userId = args.userId;
+  if (args.fromDate || args.toDate) {
+    where.createdAt = {};
+    if (args.fromDate) where.createdAt.gte = args.fromDate;
+    if (args.toDate) where.createdAt.lte = args.toDate;
+  }
+
+  const [totalMatching, rows] = await Promise.all([
+    prisma.auditLog.count({ where }),
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: TENANT_AUDIT_EXPORT_MAX_ROWS,
+      select: {
+        id: true,
+        tenantId: true,
+        userId: true,
+        impersonatorId: true,
+        action: true,
+        entityType: true,
+        entityId: true,
+        metadata: true,
+        ipAddress: true,
+        userAgent: true,
+        createdAt: true,
+        user: { select: { email: true, firstName: true, lastName: true } },
+        impersonator: { select: { email: true } },
+      },
+    }),
+  ]);
+
+  const flat: TenantAuditExportRow[] = rows.map((r) => ({
+    id: r.id,
+    tenantId: r.tenantId,
+    userId: r.userId,
+    userEmail: r.user?.email ?? null,
+    userName: r.user ? `${r.user.firstName} ${r.user.lastName}`.trim() : null,
+    impersonatorId: r.impersonatorId,
+    impersonatorEmail: r.impersonator?.email ?? null,
+    action: r.action,
+    entityType: r.entityType,
+    entityId: r.entityId,
+    metadata: r.metadata,
+    ipAddress: r.ipAddress,
+    userAgent: r.userAgent,
+    createdAt: r.createdAt,
+  }));
+
+  const truncated = totalMatching > TENANT_AUDIT_EXPORT_MAX_ROWS;
+
+  // Self-audit: every export writes an AuditLog row visible to the tenant.
+  // Fire-and-forget so a transient AuditLog write doesn't fail the export
+  // for the user — the data itself was already gathered and is about to ship.
+  void prisma.auditLog
+    .create({
+      data: {
+        tenantId: actor.tenantId,
+        userId: args.actorUserId,
+        action: AuditAction.record_accessed,
+        entityType: 'tenant_audit_log_export',
+        // entityId left null — the export covers many rows, not one entity.
+        metadata: {
+          event: 'tenant_audit_log_exported',
+          format: args.format,
+          rowsReturned: flat.length,
+          totalMatching,
+          truncated,
+          ...(args.action ? { filterAction: args.action } : {}),
+          ...(args.userId ? { filterUserId: args.userId } : {}),
+          ...(args.fromDate ? { filterFromDate: args.fromDate.toISOString() } : {}),
+          ...(args.toDate ? { filterToDate: args.toDate.toISOString() } : {}),
+        } as Prisma.InputJsonValue,
+        ipAddress: args.ipAddress ?? null,
+        userAgent: args.userAgent ?? null,
+      },
+    })
+    .catch(() => undefined);
+
+  return {
+    tenant,
+    rows: flat,
+    totalMatching,
+    truncated,
+    filters: {
+      ...(args.action ? { action: args.action } : {}),
+      ...(args.userId ? { userId: args.userId } : {}),
+      ...(args.fromDate ? { fromDate: args.fromDate } : {}),
+      ...(args.toDate ? { toDate: args.toDate } : {}),
+    },
   };
 }
 

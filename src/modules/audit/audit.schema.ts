@@ -67,5 +67,53 @@ export const securityAlertsQueryJson = {
   },
 } as const;
 
+export const ExportAuditLogsQuerySchema = z.object({
+  format: z.enum(['csv', 'json']).default('csv'),
+  action: z
+    .enum([
+      'login',
+      'logout',
+      'register',
+      'password_change',
+      'otp_verified',
+      'record_created',
+      'record_accessed',
+      'record_updated',
+      'record_deleted',
+      'permission_changed',
+    ])
+    .optional(),
+  userId: z.string().min(1).optional(),
+  fromDate: z.coerce.date().optional(),
+  toDate: z.coerce.date().optional(),
+});
+
+export const exportAuditLogsQueryJson = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    format: { type: 'string', enum: ['csv', 'json'], default: 'csv' },
+    action: {
+      type: 'string',
+      enum: [
+        'login',
+        'logout',
+        'register',
+        'password_change',
+        'otp_verified',
+        'record_created',
+        'record_accessed',
+        'record_updated',
+        'record_deleted',
+        'permission_changed',
+      ],
+    },
+    userId: { type: 'string' },
+    fromDate: { type: 'string', format: 'date-time' },
+    toDate: { type: 'string', format: 'date-time' },
+  },
+} as const;
+
 export type ListAuditLogsQuery = z.infer<typeof ListAuditLogsQuerySchema>;
 export type SecurityAlertsQuery = z.infer<typeof SecurityAlertsQuerySchema>;
+export type ExportAuditLogsQuery = z.infer<typeof ExportAuditLogsQuerySchema>;
