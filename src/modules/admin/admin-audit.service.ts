@@ -2,6 +2,15 @@ import { AuditAction, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { httpError } from '../../lib/errors.js';
 import { withUnscopedTenant } from '../../lib/request-context.js';
+import {
+  TENANT_AUDIT_EXPORT_MAX_ROWS,
+  type TenantAuditExportRow,
+} from '../../lib/audit-export.js';
+
+// Re-export shared symbols so the existing routes layer (which imports them
+// from this module) keeps compiling without churn. The single source of truth
+// lives in src/lib/audit-export.ts.
+export { TENANT_AUDIT_EXPORT_MAX_ROWS, type TenantAuditExportRow };
 
 // ─── Tenant audit (cross-tenant read by platform staff) ─────────────────────
 
@@ -114,12 +123,6 @@ export async function listTenantAuditForPlatform(args: ListTenantAuditArgs) {
 
 // ─── Export tenant audit (CSV / JSON) ───────────────────────────────────────
 
-/**
- * Hard cap on a single export to keep payloads bounded. Compliance officers
- * who need more should run multiple date-bounded exports.
- */
-export const TENANT_AUDIT_EXPORT_MAX_ROWS = 50_000;
-
 export interface ExportTenantAuditArgs {
   platformUserId: string;
   tenantId: string;
@@ -130,23 +133,6 @@ export interface ExportTenantAuditArgs {
   toDate?: Date;
   ipAddress?: string;
   userAgent?: string;
-}
-
-export interface TenantAuditExportRow {
-  id: string;
-  tenantId: string | null;
-  userId: string | null;
-  userEmail: string | null;
-  userName: string | null;
-  impersonatorId: string | null;
-  impersonatorEmail: string | null;
-  action: AuditAction;
-  entityType: string | null;
-  entityId: string | null;
-  metadata: Prisma.JsonValue | null;
-  ipAddress: string | null;
-  userAgent: string | null;
-  createdAt: Date;
 }
 
 /**
